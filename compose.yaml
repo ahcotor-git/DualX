@@ -1,0 +1,41 @@
+# ============================================================================
+# scds-next 本机开发环境
+#
+# 为什么单独起一个 MySQL，而不是复用 E:\ZAA 那个 zaa-local-mysql-1：
+#   那个容器的 root 口令已不是 .env 里记录的那份（数据卷 2026-10-12 创建，
+#   口令后来被改过），而 zaa_app 账号只对 zaa_dev / zaa_test 有权限，
+#   拿不到建库权限。重置它会中断 ZAA 的运行，代价不成比例。
+#   因此本项目自带一个同版本容器，互不干扰。
+#
+# 「复用本机」体现在：镜像 mysql:8.4 本机已拉取（零下载）、Docker Engine 共用、
+# 与 ZAA 完全相同的镜像版本与 healthcheck 写法。只有数据目录是独立的。
+#
+# 端口刻意避开 3306（已被 zaa-local-mysql-1 占用），用 13306；
+# 仍只绑回环，不暴露到局域网。
+# ============================================================================
+name: scds-local
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: scds-local-mysql
+    environment:
+      MYSQL_DATABASE: scds_next
+      MYSQL_USER: scds_app
+      MYSQL_PASSWORD: ${SCDS_MYSQL_PASSWORD:?Set SCDS_MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${SCDS_MYSQL_ROOT_PASSWORD:?Set SCDS_MYSQL_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:13306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysql -h 127.0.0.1 -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD" "$$MYSQL_DATABASE" -e "SELECT 1" >/dev/null 2>&1
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+volumes:
+  mysql_data:

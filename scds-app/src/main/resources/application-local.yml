@@ -1,0 +1,22 @@
+# ============================================================================
+# local profile —— 本机开发专用（--spring.profiles.active=local 时才加载）
+#
+# 只放两件事，别的一律不进本文件：
+#   1. server.address：开发时只听回环，避免把半成品的 11001 暴露到局域网。
+#   2. 导入 .env：数据库口令等凭据只存在 .env 里（已 gitignore），
+#      仓库里能提交的只有 .env.example。这与 E:\ZAA 的做法一致。
+#
+# ⚠ .env 的位置随工作目录而变，所以两个路径都挂上、且都标 optional：
+#     从仓库根目录跑 → .env
+#     从 scds-app/ 跑 → ../.env
+#   全部 optional 是刻意的：缺 .env 时应回落到 application.yml 里的默认值并
+#   在连库时报错，而不是在配置解析阶段抛一个与真正问题无关的异常。
+# ============================================================================
+server:
+  address: 127.0.0.1
+
+spring:
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]

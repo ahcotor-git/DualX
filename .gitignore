@@ -23,6 +23,10 @@ replayUwb/
 uwb_frames_*.csv
 uwb_qa_*.csv
 
-### Local overrides ###
-application-local.yml
-*-local.yml
+### Local credentials（本机随机凭据，一律不提交；模板见 .env.example） ###
+# 本机覆盖项一律走 .env，不靠 profile 文件承载，所以 application-local.yml
+# 是**要提交**的：它只声明 server.address 与 .env 的导入路径，不含任何凭据；
+# 不提交它，新克隆的仓库连 datasource 的口令都解析不出来。
+.env
+.env.*
+!.env.example
