@@ -1,0 +1,258 @@
+# ============================================================================
+# scds-next —— 边缘网关 HTTP / WebSocket 契约（根文件）
+#
+# 本文件是 OpenAPI 3.1 的**唯一入口**，只做四件事：
+#   ① 把各域的操作挂到具体 URL 上（URL 只在这里出现一次，是唯一权威）；
+#   ② 声明安全方案与全局默认安全要求；
+#   ③ 固化硬约束（端口 / 双通道 / 在线判定 / 阵亡冻结）；
+#   ④ 指向领域模型所在文件。
+#
+# ── 组装约定（改契约前务必先读）────────────────────────────────────────────
+# · ./paths/*.yaml 里的顶层键是 **path item 的锚点名（slug）**，不是 URL，也不是 operationId。
+#   一个 URL 上的所有方法（GET/POST/PUT/DELETE）必须写在**同一个 slug 下**，
+#   因为 OpenAPI 的 `$ref` 只能整体替换一个 path item，不能只替换其中一个方法。
+# · 领域模型全部在 ./schemas/*.yaml，不被本文件重复抄写（避免出现两份真相）。
+#   bundler（如 redocly bundle）会在打包时自动把外部 $ref 内联进 components.schemas。
+# · 新增一个接口 = 「paths/*.yaml 加一个 slug + 本文件加一行 URL 映射」，仅此两步。
+#
+# ── 基础约定 ───────────────────────────────────────────────────────────────
+# · 业务接口前缀 `/api/v1`；WebSocket 前缀 `/ws/v1`。
+# · 端口是硬约束：HTTP 11001 / UWB TCP Server 12001，不随部署形态改变。
+# · 时间一律 RFC 3339（date-time），服务端只发 UTC。
+# · 错误一律 `application/problem+json`（RFC 7807 + code/traceId/errors 扩展）。
+# · 写操作必须是 POST/PUT/PATCH/DELETE —— 显式废除旧系统的「GET 做写操作」。
+# · 幂等：PUT 整体替换、DELETE 幂等、POST 非幂等。
+# ============================================================================
+
+openapi: 3.1.0
+
+info:
+  title: scds-next 边缘网关 API
+  version: 1.0.0-draft
+  summary: 实兵演习系统（马甲 + UWB）边缘网关契约
+  description: |
+    阶段 1 契约草案。覆盖边缘域（auth / exercise / command / situation / device / map / replay），
+    云管域（多租户、License、OTA）不在本文件范围。
+
+    **双通道硬约束**：态势与链路状态必须同时提供 WebSocket 与低频 HTTP Poll 两条通道，
+    且两者返回**同构载荷**。WS 只降低延迟，Poll 负责兜底与恢复；客户端即使 WS 已连接，
+    也不得停掉 Poll。
+
+    **协议层不在本契约内**：马甲串口协议（ASCII 文本 HEX）与 UWB 41B 二进制协议是逐字节冻结的
+    字节级约定，由 `scds-protocol` 模块实现并以其黄金样本回归为准。本契约只暴露「业务意图」级别的
+    接口（如判死、充弹、开始演习），字节编码由服务端完成；响应中的 `downlinkHex` 回显实际下发的
+    字节，供现场排障与协议一致性核查。
+  contact:
+    name: DualX
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+
+servers:
+  - url: http://{host}:11001
+    description: 边缘网关（私有化单机 / 演习现场）
+    variables:
+      host:
+        default: 127.0.0.1
+        description: 边缘网关地址。私有化部署时为现场主机 IP。
+
+tags:
+  - name: auth
+    description: 账号登录与单兵终端登录（JWT 云签、边缘离线验签）
+  - name: exercise
+    description: 想定、编成与演习生命周期（边缘同一时刻仅一场演习）
+  - name: command
+    description: 指挥指令下发（判死/判活/判伤/超范围/充弹/轮询配置）
+  - name: situation
+    description: 实时态势（WebSocket + HTTP Poll 双通道，同构载荷）
+  - name: device
+    description: 马甲台账、UWB 基站、串口/UWB 链路开关与链路状态
+  - name: map
+    description: 底图、楼层点位表、UWB 坐标标定
+  - name: replay
+    description: 复盘、轨迹回放与报表导出
+
+# 除显式声明 `security: []` 的接口（登录类）外，默认要求账号令牌。
+security:
+  - bearerAuth: []
+
+paths:
+
+  # ── auth ────────────────────────────────────────────────────────────────
+  /api/v1/auth/login:
+    $ref: './paths/auth.yaml#/authLogin'
+  /api/v1/auth/refresh:
+    $ref: './paths/auth.yaml#/authRefresh'
+  /api/v1/auth/logout:
+    $ref: './paths/auth.yaml#/authLogout'
+  /api/v1/auth/me:
+    $ref: './paths/auth.yaml#/authMe'
+  /api/v1/auth/device/login:
+    $ref: './paths/auth.yaml#/authDeviceLogin'
+  /api/v1/auth/device/me:
+    $ref: './paths/auth.yaml#/authDeviceMe'
+
+  # ── exercise ────────────────────────────────────────────────────────────
+  /api/v1/plans:
+    $ref: './paths/exercise.yaml#/plans'
+  /api/v1/plans/template:
+    $ref: './paths/exercise.yaml#/planTemplate'
+  /api/v1/plans/import:
+    $ref: './paths/exercise.yaml#/planImport'
+  /api/v1/plans/{planId}:
+    $ref: './paths/exercise.yaml#/planById'
+  /api/v1/plans/{planId}/roster:
+    $ref: './paths/exercise.yaml#/planRoster'
+  # 「进行中的演习」是**单例资源**：边缘同一时刻只允许一场演习，
+  # 因此不带 exerciseId —— GET 读 / POST 起 / DELETE 停，语义与资源一一对应。
+  /api/v1/exercise/current:
+    $ref: './paths/exercise.yaml#/exerciseCurrent'
+  /api/v1/exercise/current/logs:
+    $ref: './paths/exercise.yaml#/exerciseCurrentLogs'
+
+  # ── command ─────────────────────────────────────────────────────────────
+  /api/v1/command/reload-all:
+    $ref: './paths/command.yaml#/reloadAll'
+  /api/v1/command/vests/{vestNum}/kill:
+    $ref: './paths/command.yaml#/vestKill'
+  /api/v1/command/vests/{vestNum}/revive:
+    $ref: './paths/command.yaml#/vestRevive'
+  /api/v1/command/vests/{vestNum}/injure:
+    $ref: './paths/command.yaml#/vestInjure'
+  /api/v1/command/vests/{vestNum}/out-of-range:
+    $ref: './paths/command.yaml#/vestOutOfRange'
+  /api/v1/command/vests/{vestNum}/reload:
+    $ref: './paths/command.yaml#/vestReload'
+  /api/v1/command/vests/{vestNum}/config:
+    $ref: './paths/command.yaml#/vestConfig'
+  /api/v1/command/vests/{vestNum}/move:
+    $ref: './paths/command.yaml#/vestMove'
+
+  # ── situation ───────────────────────────────────────────────────────────
+  /api/v1/situation:
+    $ref: './paths/situation.yaml#/situation'
+  /api/v1/situation/vests/{vestNum}:
+    $ref: './paths/situation.yaml#/situationVest'
+  /api/v1/situation/teams/summary:
+    $ref: './paths/situation.yaml#/situationTeamSummary'
+  /api/v1/situation/hits:
+    $ref: './paths/situation.yaml#/situationHits'
+  /ws/v1/situation:
+    $ref: './paths/situation.yaml#/wsSituation'
+
+  # ── device ──────────────────────────────────────────────────────────────
+  /api/v1/devices/vests:
+    $ref: './paths/device.yaml#/vests'
+  /api/v1/devices/vests/{vestNum}:
+    $ref: './paths/device.yaml#/vestById'
+  /api/v1/devices/vests/{vestNum}/link:
+    $ref: './paths/device.yaml#/vestLink'
+  /api/v1/devices/anchors:
+    $ref: './paths/device.yaml#/anchors'
+  /api/v1/devices/anchors/{anchorId}:
+    $ref: './paths/device.yaml#/anchorById'
+  /api/v1/devices/links:
+    $ref: './paths/device.yaml#/links'
+  /api/v1/devices/links/serial-ports:
+    $ref: './paths/device.yaml#/serialPorts'
+  /api/v1/devices/links/serial:
+    $ref: './paths/device.yaml#/linkSerial'
+  /api/v1/devices/links/uwb:
+    $ref: './paths/device.yaml#/linkUwb'
+  /ws/v1/devices/links:
+    $ref: './paths/device.yaml#/wsLinks'
+
+  # ── map ─────────────────────────────────────────────────────────────────
+  /api/v1/maps:
+    $ref: './paths/map.yaml#/maps'
+  /api/v1/maps/{mapId}:
+    $ref: './paths/map.yaml#/mapById'
+  /api/v1/maps/{mapId}/image:
+    $ref: './paths/map.yaml#/mapImage'
+  /api/v1/maps/{mapId}/floors/{floorNum}/points:
+    $ref: './paths/map.yaml#/mapFloorPoints'
+  /api/v1/maps/{mapId}/uwb-meta:
+    $ref: './paths/map.yaml#/mapUwbMeta'
+  /api/v1/maps/{mapId}/uwb-calibration:
+    $ref: './paths/map.yaml#/mapUwbCalibration'
+
+  # ── replay ──────────────────────────────────────────────────────────────
+  /api/v1/replays:
+    $ref: './paths/replay.yaml#/replays'
+  /api/v1/replays/{replayId}:
+    $ref: './paths/replay.yaml#/replayById'
+  /api/v1/replays/{replayId}/timeline:
+    $ref: './paths/replay.yaml#/replayTimeline'
+  /api/v1/replays/{replayId}/statistics:
+    $ref: './paths/replay.yaml#/replayStatistics'
+  /api/v1/replays/{replayId}/exports:
+    $ref: './paths/replay.yaml#/replayExports'
+  /api/v1/replays/{replayId}/exports/{taskId}:
+    $ref: './paths/replay.yaml#/replayExportById'
+  /api/v1/replays/{replayId}/exports/{taskId}/download:
+    $ref: './paths/replay.yaml#/replayExportDownload'
+
+components:
+
+  securitySchemes:
+    # 云管签发、边缘离线验签。私有化无外网时依然可用（只依赖公钥）。
+    # accessToken 短有效期（建议 30min），refreshToken 长有效期且可撤销。
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    # 单兵终端（马甲 App）专用：可见字段被裁剪到「自身 + 所属队伍」。
+    # 与账号令牌同走 Authorization: Bearer，但签发者与受众不同，服务端按 aud 区分。
+    deviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+# 领域模型所在文件（不含本文件，本文件不定义模型）。
+x-scds-schema-files:
+  - ./schemas/common.yaml
+  - ./schemas/situation.yaml
+  - ./schemas/domain.yaml
+
+# ============================================================================
+# 硬约束（违反即事故）—— 写进契约，代码评审与测试用例共同以此为判据
+# ============================================================================
+x-scds-invariants:
+
+  ports:
+    http: 11001
+    uwbTcpServer: 12001
+    note: 与部署形态无关，CLOUD / PRIVATE 均相同。
+
+  dualChannel:
+    channels: [WEBSOCKET, HTTP_POLL]
+    rule: |
+      态势与链路状态必须同时提供两条通道，且返回**同构载荷**（同一 Schema）。
+      WebSocket 已连接时，客户端仍必须保持低频 HTTP Poll：
+        · 态势常规轮询 2s，WS 已连时兜底轮询不超过 10s；
+        · 原因：WS 可能静默半开，Poll 是唯一能独立把客户端从任意 revision 恢复到当前态的通道。
+    recovery: |
+      客户端持有本地最大 revision；Poll / WS 均以 `sinceRevision` 补齐；
+      若返回 409 `SITUATION_REVISION_TOO_OLD`，必须丢弃本地缓存改为全量拉取。
+
+  vestOnline:
+    rule: 距最后一次心跳 <= 5000ms 判为在线，超过即离线（心跳=在线，超时 5000ms）。
+    note: 在线判定只依赖心跳时间戳，与链路是否打开无关。
+
+  deadFreeze:
+    rule: 阵亡单元必须冻结在**最后有效坐标**且绝对静止。
+    implications:
+      - 后续上报的坐标（含 UWB 解算结果）一律丢弃，不得覆盖冻结坐标；
+      - 态势增量中该单元的 position / motion 不再变化（motion = FROZEN）；
+      - 判活（revive）后解除冻结。
+    rejectedAlternative: |
+      不做「阵亡后仍更新坐标但不显示」——那会让复盘轨迹与现场实况不符。
+
+  uwbAnchorMapping:
+    rule: 41B 帧的 ranges[i] 与基站 bs(i+1) 一一对应，字节偏移 7 + 4*i（小端 int32）。
+    note: 该映射由协议冻结；保存标定前必须做几何自洽校验（bs1~bs4 为矩形四角）。
+
+  protocolLayers:
+    serial: ASCII 文本 HEX，帧头 FF0X / 帧尾 AFFA，1 字节累加和；变长 11~18B。
+    uwb: 二进制定长 41B，帧头 AA 29 / 帧尾 55，字节累加和位于第 40 字节。
+    note: 两套协议编码与方向都不同，绝不可共用同一个 Framer。

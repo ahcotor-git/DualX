@@ -1,0 +1,490 @@
+# ============================================================================
+# map —— 底图 / 楼层点位 / UWB 标定
+#
+# 合并了旧系统的 `/map`（室外+室内）与 `/api/uwb/calib/*`（标定），
+# 因为「标定参数」本质上是某个底图的属性，放在地图域内语义更内聚。
+# 旧系统把底图文件写在本机 `%USERPROFILE%\.scds\mapImg`，多实例部署会失效，
+# 新契约统一走「上传 → 服务端存储 → 签名 URL 访问」。
+# ============================================================================
+
+maps:
+  get:
+    tags: [map]
+    operationId: listMaps
+    summary: 底图列表
+    parameters:
+      - name: type
+        in: query
+        schema:
+          $ref: '../schemas/domain.yaml#/MapType'
+      - name: page
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          default: 1
+      - name: size
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 200
+          default: 20
+    responses:
+      '200':
+        description: 分页结果
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items, meta]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '../schemas/domain.yaml#/MapDetail'
+                meta:
+                  $ref: '../schemas/common.yaml#/PageMeta'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  post:
+    tags: [map]
+    operationId: createMap
+    summary: 新建底图
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/MapUpsertRequest'
+    responses:
+      '201':
+        description: 已创建
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/MapDetail'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+mapById:
+  get:
+    tags: [map]
+    operationId: getMap
+    summary: 底图详情
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: 底图
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/MapDetail'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        description: 不存在（`MAP_NOT_FOUND`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  put:
+    tags: [map]
+    operationId: updateMap
+    summary: 修改底图
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/MapUpsertRequest'
+    responses:
+      '200':
+        description: 已更新
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/MapDetail'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  delete:
+    tags: [map]
+    operationId: deleteMap
+    summary: 删除底图
+    description: 已被想定引用时返回 409，不做级联删除。
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '204':
+        description: 已删除
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        $ref: '../schemas/common.yaml#/Conflict'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+mapImage:
+  post:
+    tags: [map]
+    operationId: uploadMapImage
+    summary: 上传底图图片
+    description: 支持 PNG/JPEG/WebP。上传成功后服务端回填 imageWidth/imageHeight。
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file]
+            properties:
+              file:
+                type: string
+                format: binary
+    responses:
+      '200':
+        description: 已更新
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/MapDetail'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  get:
+    tags: [map]
+    operationId: getMapImage
+    summary: 下载底图图片
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: 图片二进制
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        description: 底图或图片不存在（`MAP_NOT_FOUND` / `MAP_IMAGE_MISSING`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+mapFloorPoints:
+  get:
+    tags: [map]
+    operationId: listFloorPoints
+    summary: 楼层点位表
+    description: 点位号与协议 A `ff03` 长版（15B）上报的 `posNum` 对应，用于无 UWB 时的粗定位。
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: floorNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    responses:
+      '200':
+        description: 点位列表
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [points]
+              properties:
+                points:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      posNum:
+                        type: integer
+                        format: int32
+                      xPct:
+                        type: number
+                        format: double
+                      yPct:
+                        type: number
+                        format: double
+                      label:
+                        type: [string, 'null']
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  put:
+    tags: [map]
+    operationId: replaceFloorPoints
+    summary: 整体替换楼层点位表
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: floorNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/FloorPointsRequest'
+    responses:
+      '200':
+        description: 替换后的点位
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/FloorPointsRequest'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+mapUwbMeta:
+  get:
+    tags: [map]
+    operationId: getUwbMeta
+    summary: 获取 UWB 坐标标定参数（旧 uwb_meta.json）
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: 标定参数
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/UwbMeta'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        description: 底图不存在或尚未标定（`MAP_NOT_FOUND` / `MAP_UWB_META_INCOMPLETE`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  put:
+    tags: [map]
+    operationId: putUwbMeta
+    summary: 保存 UWB 坐标标定参数
+    description: |
+      **基站与测距数组的对应关系是硬约束**：`bs(i+1)` ↔ 41B 帧的 `ranges[i]`（i=0..7），
+      字节偏移 `7 + 4*i`（小端 int32）。错位会导致解算结果整体偏移，服务端保存前会做一致性校验。
+      bs1~bs4 必填（矩形四角），bs1↔bs2 提供长度基准、bs1↔bs3 提供宽度基准。
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/UwbMeta'
+    responses:
+      '200':
+        description: 已保存
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/UwbMeta'
+      '400':
+        description: 基站缺项或几何不自洽（`MAP_UWB_META_INCOMPLETE`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+mapUwbCalibration:
+  post:
+    tags: [map]
+    operationId: startUwbCalibration
+    summary: 触发 UWB 中心基准校准
+    description: 采集 N 帧测距后反推标定系数（对应 scds-solver 的 calibSampleFrames，默认 200）。异步执行，用 GET 查进度。
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/UwbCalibrationRequest'
+    responses:
+      '202':
+        description: 已受理
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/UwbCalibrationStatus'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        description: 已有校准在进行（`MAP_CALIBRATION_IN_PROGRESS`），或 UWB 链路未开启
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  get:
+    tags: [map]
+    operationId: getUwbCalibration
+    summary: 查询 UWB 校准状态
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: 校准状态
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/UwbCalibrationStatus'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  delete:
+    tags: [map]
+    operationId: clearUwbCalibration
+    summary: 清除 UWB 校准结果
+    parameters:
+      - name: mapId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '204':
+        description: 已清除
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'

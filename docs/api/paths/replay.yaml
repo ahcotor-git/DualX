@@ -1,0 +1,313 @@
+# ============================================================================
+# replay —— 复盘 / 轨迹回放 / 导出
+#
+# 数据来源：停演时（DELETE /api/v1/exercise/current）把本场态势落库为一条 replay。
+# 与实时态势的区别：复盘是**只读、定长、可随机访问**的，因此用 cursor 分片拉轨迹，
+# 而不是像态势那样用 revision 做增量。原因是回放常常要跳着看，单调增量模型不适合。
+#
+# 轨迹时间轴一律用「相对演习开始的毫秒偏移 t」，不写绝对时间：
+# 客户端做插值、变速播放、进度条定位都只依赖整型 t，跨时区也不会错位。
+# ============================================================================
+
+replays:
+  get:
+    tags: [replay]
+    operationId: listReplays
+    summary: 复盘列表
+    description: 按结束时间倒序。支持按想定名模糊搜索。
+    parameters:
+      - name: keyword
+        in: query
+        description: 想定名模糊匹配
+        schema:
+          type: string
+          maxLength: 64
+      - name: from
+        in: query
+        description: 结束时间下界（含）
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        description: 结束时间上界（含）
+        schema:
+          type: string
+          format: date-time
+      - name: page
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          default: 1
+      - name: size
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 200
+          default: 20
+    responses:
+      '200':
+        description: 分页结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/ReplayPage'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+replayById:
+  get:
+    tags: [replay]
+    operationId: getReplay
+    summary: 复盘概览
+    description: 返回场次元信息（想定、起止时间、参演人数、命中数）。不含轨迹，轨迹走 timeline。
+    parameters:
+      - name: replayId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: 复盘概览
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/Replay'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        description: 不存在（`REPLAY_NOT_FOUND`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+replayTimeline:
+  get:
+    tags: [replay]
+    operationId: getReplayTimeline
+    summary: 轨迹分片拉取
+    description: |
+      按 `cursor` 分片拉取，响应里的 `nextCursor` 为 null 表示已到末尾。
+      客户端应边拉边播，不要一次性拉全量（一场演习的采样点可达数十万条）。
+
+      `vestNums` 可只取关注的人员；不传则返回全体。
+      `stride` 允许服务端按步长抽稀，用于低性能终端的全局预览。
+    parameters:
+      - name: replayId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: cursor
+        in: query
+        description: 上一片返回的 nextCursor；首次不传
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: 单片采样点上限
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 20000
+          default: 5000
+      - name: vestNums
+        in: query
+        description: 只返回这些马甲的轨迹，多个用逗号分隔
+        schema:
+          type: array
+          items:
+            type: integer
+            format: int32
+          maxItems: 200
+        style: form
+        explode: false
+      - name: stride
+        in: query
+        description: 抽稀步长，1 表示不抽稀
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 60
+          default: 1
+    responses:
+      '200':
+        description: 轨迹分片
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/TimelineChunk'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+replayStatistics:
+  get:
+    tags: [replay]
+    operationId: getReplayStatistics
+    summary: 复盘统计
+    description: 队伍战损、命中排行、命中部位分布、存活人数曲线。对应旧系统复盘页的统计面板。
+    parameters:
+      - name: replayId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: timelineBuckets
+        in: query
+        description: 存活曲线采样段数
+        schema:
+          type: integer
+          format: int32
+          minimum: 10
+          maximum: 500
+          default: 120
+    responses:
+      '200':
+        description: 统计结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/ReplayStatistics'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+replayExports:
+  post:
+    tags: [replay]
+    operationId: exportReplay
+    summary: 发起复盘导出（异步）
+    description: |
+      生成 xlsx/csv 报表。数据量大，因此走异步任务：
+      返回 202 + AsyncTask，客户端用 getExportTask 轮询进度。
+      同一复盘同一格式的并发导出会被合并（重复调用返回同一个 taskId）。
+    parameters:
+      - name: replayId
+        in: path
+        required: true
+        schema:
+          type: string
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/ExportRequest'
+    responses:
+      '202':
+        description: 已受理
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/common.yaml#/AsyncTask'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        description: 导出失败过且未重置（`REPLAY_EXPORT_FAILED`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+replayExportById:
+  get:
+    tags: [replay]
+    operationId: getExportTask
+    summary: 查询导出任务进度
+    parameters:
+      - name: replayId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: 任务状态
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/common.yaml#/AsyncTask'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+replayExportDownload:
+  get:
+    tags: [replay]
+    operationId: downloadExport
+    summary: 下载导出文件
+    description: 仅当任务 state=SUCCEEDED 时可下载；文件有有效期（见 AsyncTask.expireAt），过期后需重新导出。
+    parameters:
+      - name: replayId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: 文件二进制
+        content:
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+            schema:
+              type: string
+              format: binary
+          text/csv:
+            schema:
+              type: string
+              format: binary
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        description: 任务未完成或文件已过期（`REPLAY_EXPORT_FAILED`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'

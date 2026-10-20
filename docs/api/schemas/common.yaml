@@ -1,0 +1,351 @@
+# ============================================================================
+# 通用组件：错误模型 / 分页 / 枚举 / 坐标 / 异步任务
+#
+# 所有枚举的取值与 code 必须与 scds-protocol 的 Java 枚举逐字一致，
+# 见 e:\DualX\scds-next\scds-protocol\src\main\java\com\dualx\protocol\
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# 错误模型：RFC 7807 (application/problem+json)，在标准字段上扩展 code / traceId / errors
+# （scds-app 已开启 spring.mvc.problemdetails.enabled=true）
+# ---------------------------------------------------------------------------
+Problem:
+  type: object
+  required: [status, code, traceId]
+  properties:
+    type:
+      type: string
+      example: about:blank
+    title:
+      type: string
+      description: 人类可读的错误摘要
+      example: 演习已在进行中
+    status:
+      type: integer
+      format: int32
+      example: 409
+    code:
+      type: string
+      description: |
+        稳定业务错误码，前端据此分支处理，不得依赖 title 文案。约定：
+        - `AUTH_*`     认证与令牌（AUTH_BAD_CREDENTIALS / AUTH_TOKEN_EXPIRED / AUTH_TOKEN_INVALID / AUTH_DEVICE_NOT_BOUND）
+        - `EXERCISE_*` 演习（EXERCISE_ALREADY_RUNNING / EXERCISE_NOT_RUNNING / EXERCISE_PLAN_NOT_FOUND / EXERCISE_ROSTER_EMPTY）
+        - `COMMAND_*`  指挥（COMMAND_VEST_OFFLINE / COMMAND_VEST_DEAD / COMMAND_INVALID_WEAPON_SLOT / COMMAND_QUEUE_FULL）
+        - `DEVICE_*`   设备与链路（DEVICE_VEST_NOT_FOUND / DEVICE_VEST_NUM_CONFLICT / DEVICE_LINK_ALREADY_OPEN / DEVICE_LINK_SERIAL_BUSY / DEVICE_ANCHOR_NOT_CALIBRATED）
+        - `MAP_*`      地图（MAP_NOT_FOUND / MAP_IMAGE_MISSING / MAP_UWB_META_INCOMPLETE / MAP_CALIBRATION_IN_PROGRESS）
+        - `REPLAY_*`   复盘（REPLAY_NOT_FOUND / REPLAY_EXPORT_FAILED）
+        - `SITUATION_*` 态势（SITUATION_REVISION_TOO_OLD）
+        - `VALIDATION_FAILED` 字段级校验失败（详情见 errors）
+      example: EXERCISE_ALREADY_RUNNING
+    detail:
+      type: string
+    instance:
+      type: string
+    traceId:
+      type: string
+      description: 服务端日志追踪号，排障时必须带上
+    errors:
+      type: array
+      description: 字段级校验错误，仅在 code=VALIDATION_FAILED 时出现
+      items:
+        type: object
+        required: [field, message]
+        properties:
+          field:
+            type: string
+            example: planId
+          message:
+            type: string
+            example: 不能为空
+
+# ---------------------------------------------------------------------------
+# 可复用响应
+# ---------------------------------------------------------------------------
+BadRequest:
+  description: 请求参数不合法或业务前置条件不满足
+  content:
+    application/problem+json:
+      schema:
+        $ref: '#/Problem'
+Unauthorized:
+  description: 未认证 / 令牌失效
+  content:
+    application/problem+json:
+      schema:
+        $ref: '#/Problem'
+Forbidden:
+  description: 已认证但无权访问该资源
+  content:
+    application/problem+json:
+      schema:
+        $ref: '#/Problem'
+NotFound:
+  description: 资源不存在
+  content:
+    application/problem+json:
+      schema:
+        $ref: '#/Problem'
+Conflict:
+  description: 与当前资源状态冲突（如重复编号、演习已在运行）
+  content:
+    application/problem+json:
+      schema:
+        $ref: '#/Problem'
+TooManyRequests:
+  description: 触发限流
+  content:
+    application/problem+json:
+      schema:
+        $ref: '#/Problem'
+InternalError:
+  description: 服务端内部错误
+  content:
+    application/problem+json:
+      schema:
+        $ref: '#/Problem'
+
+# ---------------------------------------------------------------------------
+# 分页
+# ---------------------------------------------------------------------------
+PageMeta:
+  type: object
+  required: [page, size, total]
+  properties:
+    page:
+      type: integer
+      format: int32
+      minimum: 1
+    size:
+      type: integer
+      format: int32
+      minimum: 1
+      maximum: 200
+    total:
+      type: integer
+      format: int64
+
+# ---------------------------------------------------------------------------
+# 通用查询参数
+# ---------------------------------------------------------------------------
+PageParam:
+  name: page
+  in: query
+  description: 页码，从 1 开始
+  schema:
+    type: integer
+    format: int32
+    minimum: 1
+    default: 1
+SizeParam:
+  name: size
+  in: query
+  description: 每页条数
+  schema:
+    type: integer
+    format: int32
+    minimum: 1
+    maximum: 200
+    default: 20
+
+# ---------------------------------------------------------------------------
+# 领域枚举（取值 = Java 枚举名；x-codes = 协议字节码，前端不得自行映射）
+# ---------------------------------------------------------------------------
+Team:
+  type: string
+  description: 队伍。协议字节码见 x-codes（对应 scds-protocol 的 `Team`）
+  enum: [RED, BLUE, ORANGE, YELLOW]
+  x-codes:
+    RED: 1
+    BLUE: 2
+    ORANGE: 3
+    YELLOW: 4
+
+VestStatus:
+  type: string
+  description: 马甲状态（对应 scds-protocol 的 `VestStatus`）
+  enum: [OFFLINE, LIVE, DIE]
+  x-codes:
+    OFFLINE: 0
+    LIVE: 1
+    DIE: 2
+
+HitPart:
+  type: string
+  description: 击中部位（对应 scds-protocol 的 `HitPart`）
+  enum: [UNKNOWN, HEAD, CHEST, LEFT_HAND, RIGHT_HAND, ABDOMEN, BACK, LEFT_LEG, RIGHT_LEG]
+  x-codes:
+    UNKNOWN: 0
+    HEAD: 1
+    CHEST: 2
+    LEFT_HAND: 3
+    RIGHT_HAND: 4
+    ABDOMEN: 5
+    BACK: 6
+    LEFT_LEG: 7
+    RIGHT_LEG: 8
+
+LogType:
+  type: string
+  description: 演习日志类型（对应 scds-protocol 的 `LogType`）
+  enum: [START_BATTLE, SHOT, DIE, LIVE, INJURE, RELOAD]
+  x-codes:
+    START_BATTLE: 0
+    SHOT: 1
+    DIE: 2
+    LIVE: 3
+    INJURE: 4
+    RELOAD: 5
+
+WeaponKind:
+  type: string
+  description: |
+    重武器/载具类型（对应 scds-protocol 的 `WeaponKind`）。命中记录里「开枪者编号」> 1800 时才有值；
+    <= 1800 视为单兵，武器字段为 null。
+  enum: [HOWITZER_35, ROCKET_80, ROCKET_120, IFV, ASSAULT_VEHICLE, APC, HJ73, MORTAR, FIRE_POINT, MINE, EXPLOSIVE, GRENADE]
+  x-numRanges:
+    HOWITZER_35: [1801, 2000]
+    ROCKET_80: [2201, 2400]
+    ROCKET_120: [2401, 2600]
+    IFV: [3001, 3200]
+    ASSAULT_VEHICLE: [3201, 3400]
+    APC: [3801, 4000]
+    HJ73: [4201, 4400]
+    MORTAR: [4401, 4600]
+    FIRE_POINT: [4601, 4800]
+    MINE: [65533, 65533]
+    EXPLOSIVE: [65534, 65534]
+    GRENADE: [65535, 65535]
+
+# ---------------------------------------------------------------------------
+# 坐标
+# ---------------------------------------------------------------------------
+GeoPoint:
+  type: object
+  description: |
+    统一坐标载体。**两套坐标同时下发，前端不得自行换算**：
+    - 室外：`lng`/`lat` 为百度 BD-09（= 原始值 / 1000000），`wgs84Lng`/`wgs84Lat` 为 WGS-84；
+    - 室内：`xPct`/`yPct` 为底图归一化坐标（0~1，原点左上），配合 `floorNum` 定位楼层。
+    室内 Y 轴映射规则由服务端完成，前端不得做 `1 - y` 之类的翻转。
+  properties:
+    coordinateSystem:
+      type: string
+      enum: [INDOOR, OUTDOOR]
+    xPct:
+      type: [number, 'null']
+      format: double
+      minimum: 0
+      maximum: 1
+      description: 室内横坐标（归一化）
+    yPct:
+      type: [number, 'null']
+      format: double
+      minimum: 0
+      maximum: 1
+      description: 室内纵坐标（归一化）
+    floorNum:
+      type: [integer, 'null']
+      format: int32
+      description: 楼层号，来自 ff03 长版（15B）
+    posNum:
+      type: [integer, 'null']
+      format: int32
+      description: 楼层内点位号，来自 ff03 长版（15B）
+    lng:
+      type: [number, 'null']
+      format: double
+      description: BD-09 经度
+    lat:
+      type: [number, 'null']
+      format: double
+      description: BD-09 纬度
+    wgs84Lng:
+      type: [number, 'null']
+      format: double
+    wgs84Lat:
+      type: [number, 'null']
+      format: double
+
+MotionState:
+  type: string
+  description: |
+    运动状态。**硬约束**：人员阵亡后服务端必须把坐标冻结在最后有效位置且绝对静止，
+    此时 `motion=FROZEN` 且 `position` 不再随新上报变化（离线不会解除冻结）。
+  enum: [MOVING, STATIONARY, FROZEN]
+
+# ---------------------------------------------------------------------------
+# 链路状态
+# ---------------------------------------------------------------------------
+LinkKind:
+  type: string
+  enum: [SERIAL_VEST, UWB_TCP_SERVER, UWB_SERIAL]
+
+LinkState:
+  type: string
+  enum: [CLOSED, OPENING, OPEN, ERROR]
+
+LinkStatus:
+  type: object
+  required: [kind, state]
+  properties:
+    kind:
+      $ref: '#/LinkKind'
+    state:
+      $ref: '#/LinkState'
+    target:
+      type: [string, 'null']
+      description: '串口名（如 COM7）或监听地址（如 0.0.0.0:12001）'
+    baudRate:
+      type: [integer, 'null']
+      format: int32
+    fdCount:
+      type: [integer, 'null']
+      format: int32
+      description: UWB TCP Server 当前接入的连接数
+    lastFrameAt:
+      type: [string, 'null']
+      format: date-time
+      description: 最近一次收到合法帧的时间
+    framesTotal:
+      type: integer
+      format: int64
+      description: 本次开启以来收到的合法帧总数
+    droppedTotal:
+      type: integer
+      format: int64
+      description: 本次开启以来丢弃的坏帧总数（校验失败 / 长度非法）
+    crcErrorTotal:
+      type: integer
+      format: int64
+    errorMessage:
+      type: [string, 'null']
+
+# ---------------------------------------------------------------------------
+# 异步任务（导出等）
+# ---------------------------------------------------------------------------
+AsyncTaskState:
+  type: string
+  enum: [PENDING, RUNNING, SUCCEEDED, FAILED]
+
+AsyncTask:
+  type: object
+  required: [taskId, state]
+  properties:
+    taskId:
+      type: string
+    state:
+      $ref: '#/AsyncTaskState'
+    progressPct:
+      type: integer
+      format: int32
+      minimum: 0
+      maximum: 100
+    fileName:
+      type: [string, 'null']
+    downloadUrl:
+      type: [string, 'null']
+      description: state=SUCCEEDED 时有效，为一次性签名 URL
+    expireAt:
+      type: [string, 'null']
+      format: date-time
+    errorMessage:
+      type: [string, 'null']

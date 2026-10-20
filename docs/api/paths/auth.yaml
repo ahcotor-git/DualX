@@ -1,0 +1,141 @@
+# ============================================================================
+# auth —— 账号与设备认证
+# 认证模型：云管签发 JWT（access + refresh），边缘网关用公钥**离线验签**，
+# 因此私有化离线部署也能独立运行；马甲 App 走独立的设备令牌。
+# ============================================================================
+
+authLogin:
+  post:
+    tags: [auth]
+    operationId: login
+    summary: 账号登录
+    description: 发放 access/refresh 令牌。失败统一返回 `AUTH_BAD_CREDENTIALS`，不区分账号不存在与密码错误。
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/LoginRequest'
+    responses:
+      '200':
+        description: 登录成功
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/TokenPair'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '429':
+        $ref: '../schemas/common.yaml#/TooManyRequests'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+authRefresh:
+  post:
+    tags: [auth]
+    operationId: refreshToken
+    summary: 刷新令牌
+    description: 用 refreshToken 换新的 accessToken（滚动刷新）。refreshToken 失效时返回 `AUTH_TOKEN_EXPIRED`。
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/RefreshRequest'
+    responses:
+      '200':
+        description: 刷新成功
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/TokenPair'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+authLogout:
+  post:
+    tags: [auth]
+    operationId: logout
+    summary: 退出登录
+    description: 使当前 refreshToken 失效（accessToken 因无状态不可撤销，由短有效期兜底）。
+    responses:
+      '204':
+        description: 已退出
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+
+authMe:
+  get:
+    tags: [auth]
+    operationId: getCurrentUser
+    summary: 获取当前登录用户
+    responses:
+      '200':
+        description: 当前用户
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/User'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+
+authDeviceLogin:
+  post:
+    tags: [auth]
+    operationId: deviceLogin
+    summary: 单兵终端（马甲 App）登录
+    description: |
+      用「马甲编号 + 绑定密钥」换取设备令牌，替代旧系统 `/app/login`。
+      服务端校验该马甲已在设备台账中登记且未被顶替；重复登录会使旧令牌失效（单端在线）。
+    security: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/DeviceLoginRequest'
+    responses:
+      '200':
+        description: 登录成功
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/DeviceTokenPair'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        description: 未绑定 / 密钥错误（`AUTH_DEVICE_NOT_BOUND`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+authDeviceMe:
+  get:
+    tags: [auth]
+    operationId: getDeviceSelf
+    summary: 单兵终端获取自身信息与实时状态
+    description: 替代旧系统 `/app/me`。返回自身实时态，模型与态势域完全一致，前端可复用同一套渲染。
+    security:
+      - deviceToken: []
+    responses:
+      '200':
+        description: 自身信息
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/DeviceSelf'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'

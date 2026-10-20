@@ -1,0 +1,33 @@
+{
+    "generatedAt":  "2026-10-20 12:49:48",
+    "note":  "Synthetic frames: ff06/ff07/ff0a never appear in 170 historical logs. Checksums per PROTOCOL.md 1.3.",
+    "ff06":  {
+                 "checksumOk":  true,
+                 "hex":  "ff06000001000004240000021242affa",
+                 "expect":  {
+                                "width":  1060,
+                                "vestNum":  1,
+                                "height":  530
+                            },
+                 "bytes":  16
+             },
+    "ff07":  {
+                 "checksumOk":  true,
+                 "hex":  "ff07000003010e05dcf9affa",
+                 "expect":  {
+                                "vestNum":  3,
+                                "angle":  270,
+                                "distance":  1500
+                            },
+                 "bytes":  12
+             },
+    "ff0a":  {
+                 "checksumOk":  true,
+                 "hex":  "ff0a0000028986001234567890123404affa",
+                 "expect":  {
+                                "vestNum":  2,
+                                "simNo":  "89860012345678901234"
+                            },
+                 "bytes":  18
+             }
+}

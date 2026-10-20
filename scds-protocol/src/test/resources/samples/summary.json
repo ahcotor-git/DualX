@@ -1,0 +1,30 @@
+{
+    "generatedAt":  "2026-10-20 12:41:04",
+    "logFilesScanned":  170,
+    "logFilesWithFrames":  41,
+    "frameTypes":  [
+                       {
+                           "type":  "ff03",
+                           "uniqueFrames":  99,
+                           "checksumOk":  82
+                       },
+                       {
+                           "type":  "ff04",
+                           "uniqueFrames":  3000,
+                           "checksumOk":  3000
+                       },
+                       {
+                           "type":  "ff05",
+                           "uniqueFrames":  3,
+                           "checksumOk":  3
+                       }
+                   ],
+    "uwbUniqueFrames":  3000,
+    "uwbValidated":  3000,
+    "stickySampleCount":  300,
+    "missingTypes":  [
+                         "ff06",
+                         "ff07",
+                         "ff0a"
+                     ]
+}

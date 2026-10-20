@@ -1,0 +1,324 @@
+# ============================================================================
+# command —— 指挥指令（全部为「写操作」，一律 POST/PUT，不再像旧系统那样用 GET 触发）
+#
+# 每条指令的响应都带 downlinkHex（下发指令的十六进制原文），便于逐字节核对与排障。
+# 指令进入发送队列即算受理：HTTP 200 + accepted=false 表示「已受理但未入队」
+# （马甲离线 / 队列满），前端应提示而不是报错。
+# ============================================================================
+
+vestKill:
+  post:
+    tags: [command]
+    operationId: killVest
+    summary: 判死
+    description: 下发 8B 判死帧（`00 09 FF <num:2BE> <sum> AF FA`）。硬约束：阵亡后坐标冻结在最后有效位置且绝对静止。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65532
+    responses:
+      '200':
+        description: 受理结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/CommandAck'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        description: 马甲不在当前编成中（`DEVICE_VEST_NOT_FOUND`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '409':
+        description: 当前无演习进行中（`EXERCISE_NOT_RUNNING`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+vestRevive:
+  post:
+    tags: [command]
+    operationId: reviveVest
+    summary: 判活 / 复活
+    description: 下发 8B 判活帧（`00 08 FF <num:2BE> <sum> AF FA`）。解除冻结，坐标恢复跟随上报。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65532
+    responses:
+      '200':
+        description: 受理结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/CommandAck'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        $ref: '../schemas/common.yaml#/Conflict'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+vestInjure:
+  post:
+    tags: [command]
+    operationId: injureVest
+    summary: 判伤
+    description: 下发 8B 判伤帧（`00 A1 FF <num:2BE> <sum> AF FA`）。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65532
+    responses:
+      '200':
+        description: 受理结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/CommandAck'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        $ref: '../schemas/common.yaml#/Conflict'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+vestOutOfRange:
+  post:
+    tags: [command]
+    operationId: outOfRangeVest
+    summary: 超范围预警
+    description: 下发 8B 超范围帧（`00 0D FF <num:2BE> <sum> AF FA`），用于提示单兵脱离演习区域。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65532
+    responses:
+      '200':
+        description: 受理结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/CommandAck'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        $ref: '../schemas/common.yaml#/Conflict'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+vestReload:
+  post:
+    tags: [command]
+    operationId: reloadVest
+    summary: 单兵充弹
+    description: 下发 11B 单兵充弹帧（`01 14 FF <num:2BE> <ammo:2BE> <weapon> <sum> AF FA`）。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65532
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/ReloadRequest'
+    responses:
+      '200':
+        description: 受理结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/CommandAck'
+      '400':
+        description: 弹药数或武器槽位非法（`COMMAND_INVALID_WEAPON_SLOT`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        $ref: '../schemas/common.yaml#/Conflict'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+reloadAll:
+  post:
+    tags: [command]
+    operationId: reloadAllVests
+    summary: 全体充弹
+    description: 下发 11B 全体充弹帧（`01 14 FF FF FF <ammo:2BE> <weapon> <sum> AF FA`）。
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/ReloadRequest'
+    responses:
+      '200':
+        description: 受理结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/CommandAck'
+      '400':
+        description: 弹药数或武器槽位非法（`COMMAND_INVALID_WEAPON_SLOT`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '409':
+        $ref: '../schemas/common.yaml#/Conflict'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+vestConfig:
+  put:
+    tags: [command]
+    operationId: setVestConfig
+    summary: 修改马甲运行参数（队伍 / HP / 弹药 / 轮询模式）
+    description: |
+      对应 14B 轮询配置帧（`02 00 <num:2BE> <mode> <hp> <ammo1:2BE> <ammo2:2BE> <team> <sum> AF FA`）。
+      该帧在下一次轮询（默认 200ms）时下发，因此本接口是**覆盖配置**语义，不是即时生效的单次指令。
+      未传的字段保持原值。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65532
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/VestConfigRequest'
+    responses:
+      '200':
+        description: 受理结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/CommandAck'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        $ref: '../schemas/common.yaml#/Conflict'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+vestMove:
+  post:
+    tags: [command]
+    operationId: moveVest
+    summary: 手动置位（联调专用）
+    description: |
+      替代旧系统 `/vest/manual-move`。仅供联调与演示：直接把马甲坐标置为指定楼层/点位。
+      **正式演习中服务端应拒绝该请求**（返回 403），避免人为污染态势。
+    x-internal: true
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65532
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/MoveVestRequest'
+    responses:
+      '200':
+        description: 受理结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/CommandAck'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        description: 正式演习中禁止手动置位
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'

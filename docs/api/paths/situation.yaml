@@ -1,0 +1,206 @@
+# ============================================================================
+# situation —— 实时态势
+#
+# 双通道硬约束的落地方式：
+#   服务端维护单调递增的 revision，任何态势变化都 +1。
+#   · HTTP Poll：GET /api/v1/situation?sinceRevision=N → 增量；不带参数 → 全量快照
+#   · WebSocket：连接建立时推一帧，之后每次变化推一帧增量
+#   两者**返回同一个 SituationEnvelope**，客户端一套解析逻辑。
+#
+#   「WS 连上也不能停 Poll」之所以成立，靠的就是这条同构约定：
+#   Poll 永远能独立地把客户端从任意 revision 恢复到当前态，WS 只负责把延迟从秒级降到毫秒级。
+# ============================================================================
+
+situation:
+  get:
+    tags: [situation]
+    operationId: getSituation
+    summary: 拉取态势（全量快照 或 增量）
+    description: |
+      不带 `sinceRevision` → 返回全量快照（`full=true`，`units` 为当前所有参演单元）。
+      带 `sinceRevision=N` → 返回 revision 大于 N 的变化（`full=false`，`changes` / `removedVestNums`）。
+      若 N 已超出服务端保留窗口，返回 409 / `SITUATION_REVISION_TOO_OLD`，客户端应丢弃本地缓存改为全量拉取。
+      **建议轮询频率 2s**；WS 已连接时也不得低于 10s 一次的兜底轮询。
+    parameters:
+      - name: sinceRevision
+        in: query
+        description: 客户端已持有的 revision（服务端返回严格大于它的变化）
+        schema:
+          type: integer
+          format: int64
+      - name: includeSnapshotOnFirst
+        in: query
+        description: 无演习进行中时是否仍返回一帧空快照（默认 true，避免客户端拿不到 lastRevision）
+        schema:
+          type: boolean
+          default: true
+      - name: hitsLimit
+        in: query
+        description: 单次响应最多携带的命中事件数，防止一次补太多
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 500
+          default: 200
+    responses:
+      '200':
+        description: 态势信封
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/situation.yaml#/SituationEnvelope'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '409':
+        description: revision 过旧（`SITUATION_REVISION_TOO_OLD`），需改为全量拉取
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+situationVest:
+  get:
+    tags: [situation]
+    operationId: getVestState
+    summary: 查询单个马甲的实时状态
+    description: 等价于在全量快照里取一条。单兵终端（设备令牌）调用时，服务端会按授权范围裁剪可见字段。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65532
+    responses:
+      '200':
+        description: 单元状态
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/situation.yaml#/UnitState'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+situationTeamSummary:
+  get:
+    tags: [situation]
+    operationId: getTeamSummary
+    summary: 各队伍存活/阵亡汇总
+    responses:
+      '200':
+        description: 队伍汇总
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '../schemas/situation.yaml#/TeamSummary'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+situationHits:
+  get:
+    tags: [situation]
+    operationId: listHits
+    summary: 命中流水（增量）
+    description: 与态势增量里的 `hits` 同源，用于「命中记录」面板单独补拉。
+    parameters:
+      - name: sinceSeq
+        in: query
+        description: 只返回 seq 大于该值的命中事件
+        schema:
+          type: integer
+          format: int64
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 500
+          default: 200
+    responses:
+      '200':
+        description: 命中事件列表
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '../schemas/situation.yaml#/HitEvent'
+                latestSeq:
+                  type: integer
+                  format: int64
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+wsSituation:
+  get:
+    tags: [situation]
+    operationId: watchSituation
+    summary: 实时态势推送（WebSocket）
+    description: |
+      升级为 WebSocket。连接建立后服务端立即推一帧 `SituationEnvelope`：
+      · 带 `sinceRevision` → 增量补齐（可能多帧，直到追上当前 revision）；
+      · 不带 → 全量快照（`full=true`）。
+      之后每次态势变化推一帧增量。
+
+      客户端上行可发：
+      · `{"action":"PING"}` → 服务端回 `{"action":"PONG"}`（保活，服务端 30s 无上行会主动断开）；
+      · `{"action":"RESYNC","sinceRevision":N}` → 服务端按 N 重新补齐。
+
+      **硬约束**：本通道不得替代 HTTP Poll。客户端必须持续低频轮询 `/api/v1/situation`。
+    parameters:
+      - name: sinceRevision
+        in: query
+        schema:
+          type: integer
+          format: int64
+    responses:
+      '101':
+        description: 协议升级成功
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '409':
+        description: revision 过旧（`SITUATION_REVISION_TOO_OLD`），请不带 sinceRevision 重连
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+    x-websocket:
+      url: ws://{host}:11001/ws/v1/situation
+      subprotocol: scds.situation.v1
+      serverToClient:
+        schema:
+          $ref: '../schemas/situation.yaml#/SituationEnvelope'
+        description: 与 HTTP Poll 完全同构的载荷
+      clientToServer:
+        schema:
+          type: object
+          required: [action]
+          properties:
+            action:
+              type: string
+              enum: [PING, RESYNC]
+            sinceRevision:
+              type: integer
+              format: int64

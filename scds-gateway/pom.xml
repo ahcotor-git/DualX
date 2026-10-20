@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.dualx</groupId>
+        <artifactId>scds-next</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>scds-gateway</artifactId>
+    <name>scds-gateway</name>
+    <description>
+        硬件网关（边缘侧唯一权威解析点）：马甲串口链路（jSerialComm）+ UWB TCP Server 12001（Netty）。
+        阶段 1 仅骨架，链路实现见阶段 2。
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.dualx</groupId>
+            <artifactId>scds-protocol</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.dualx</groupId>
+            <artifactId>scds-solver</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fazecast</groupId>
+            <artifactId>jSerialComm</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

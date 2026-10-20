@@ -1,0 +1,817 @@
+# ============================================================================
+# 领域模型：auth / exercise / command / device / map / replay
+# 态势域模型见 situation.yaml
+# ============================================================================
+
+# ===========================================================================
+# auth
+# ===========================================================================
+LoginRequest:
+  type: object
+  required: [username, password]
+  properties:
+    username:
+      type: string
+      minLength: 1
+      maxLength: 64
+    password:
+      type: string
+      format: password
+      minLength: 1
+
+TokenPair:
+  type: object
+  required: [accessToken, expiresIn]
+  properties:
+    accessToken:
+      type: string
+      description: JWT。载荷含 sub/roles/tenantId；边缘网关用云管公钥离线验签
+    refreshToken:
+      type: [string, 'null']
+    expiresIn:
+      type: integer
+      format: int32
+      description: accessToken 剩余有效秒数
+    user:
+      $ref: '#/User'
+
+RefreshRequest:
+  type: object
+  required: [refreshToken]
+  properties:
+    refreshToken:
+      type: string
+
+User:
+  type: object
+  required: [userId, username, roles]
+  properties:
+    userId:
+      type: string
+    username:
+      type: string
+    displayName:
+      type: [string, 'null']
+    roles:
+      type: array
+      description: 角色编码，见 `Role`
+      items:
+        $ref: '#/Role'
+    permissions:
+      type: array
+      description: 细粒度权限点，前端据此显隐按钮（服务端仍需二次校验）
+      items:
+        type: string
+      example: ['exercise:start', 'command:kill', 'device:link:open']
+    lastLoginAt:
+      type: [string, 'null']
+      format: date-time
+
+Role:
+  type: string
+  description: |
+    角色（云管侧定义，边缘侧只做校验）：
+    - `ADMIN`    系统管理员：设备、地图、账号、链路全部权限
+    - `DIRECTOR` 演习导演：开演/停演/指挥/看态势/复盘
+    - `OPERATOR` 操作员：只能看态势与执行授权内的指挥指令
+    - `VIEWER`   观察员：只读
+  enum: [ADMIN, DIRECTOR, OPERATOR, VIEWER]
+
+DeviceLoginRequest:
+  type: object
+  description: |
+    马甲 App（单兵终端）登录。不以账号密码认证，而是「设备号 + 绑定密钥」，
+    绑定关系由指挥台在 device 域预先建立。
+  required: [vestNum, secret]
+  properties:
+    vestNum:
+      type: integer
+      format: int32
+    secret:
+      type: string
+      description: 设备绑定密钥（或 SIM 号，二选一由部署配置决定）
+      example: '89860012345678901234'
+
+DeviceTokenPair:
+  type: object
+  required: [deviceToken, expiresIn]
+  properties:
+    deviceToken:
+      type: string
+    expiresIn:
+      type: integer
+      format: int32
+
+DeviceSelf:
+  type: object
+  required: [vestNum]
+  properties:
+    vestNum:
+      type: integer
+      format: int32
+    name:
+      type: [string, 'null']
+    team:
+      $ref: './common.yaml#/Team'
+    state:
+      allOf:
+        - $ref: './situation.yaml#/UnitState'
+      description: 自身实时状态（与态势域同一模型，避免两套结构）
+
+# ===========================================================================
+# exercise：想定（plan） + 当前演习（current） + 编成（roster）
+# ===========================================================================
+Plan:
+  type: object
+  required: [planId, name, createdAt]
+  properties:
+    planId:
+      type: string
+    name:
+      type: string
+    mapId:
+      type: [string, 'null']
+      description: 绑定的底图（室内 UWB 或室外 GPS）
+    battleMode:
+      type: string
+      enum: [TRAIN, BATTLE]
+      description: 训练 / 正式演习（下发行指令 `0x06` 的 battleMode 参数，TRAIN=0 / BATTLE=1）
+    remark:
+      type: [string, 'null']
+    rosterCount:
+      type: integer
+      format: int32
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+PlanUpsertRequest:
+  type: object
+  required: [name]
+  properties:
+    name:
+      type: string
+      minLength: 1
+      maxLength: 128
+    mapId:
+      type: [string, 'null']
+    battleMode:
+      type: string
+      enum: [TRAIN, BATTLE]
+      default: TRAIN
+    remark:
+      type: [string, 'null']
+
+PlanPage:
+  type: object
+  required: [items, meta]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/Plan'
+    meta:
+      $ref: './common.yaml#/PageMeta'
+
+Roster:
+  type: object
+  required: [planId, entries]
+  properties:
+    planId:
+      type: string
+    entries:
+      type: array
+      items:
+        $ref: '#/RosterEntry'
+
+RosterEntry:
+  type: object
+  required: [vestNum, team]
+  properties:
+    vestNum:
+      type: integer
+      format: int32
+      description: '引用设备台账里的马甲编号；不存在则该条无效（导入时会报 VALIDATION_FAILED）'
+    name:
+      type: [string, 'null']
+    team:
+      $ref: './common.yaml#/Team'
+    hp:
+      type: integer
+      format: int32
+      default: 100
+    ammo1:
+      type: integer
+      format: int32
+      default: 30
+    ammo2:
+      type: integer
+      format: int32
+      default: 30
+    mode:
+      type: string
+      enum: [AUTO, MANUAL]
+      default: AUTO
+      description: 轮询模式（下行 14B 轮询配置帧的 mode 参数）
+
+Exercise:
+  type: object
+  required: [exerciseId, planId, startedAt, running]
+  properties:
+    exerciseId:
+      type: string
+    planId:
+      type: string
+    planName:
+      type: string
+    mapId:
+      type: [string, 'null']
+    battleMode:
+      type: string
+      enum: [TRAIN, BATTLE]
+    running:
+      type: boolean
+    startedAt:
+      type: string
+      format: date-time
+    endedAt:
+      type: [string, 'null']
+      format: date-time
+    elapsedSeconds:
+      type: integer
+      format: int64
+    rosterCount:
+      type: integer
+      format: int32
+    onlineCount:
+      type: integer
+      format: int32
+      description: 心跳在 5000ms 窗口内的马甲数
+
+StartExerciseRequest:
+  type: object
+  required: [planId]
+  properties:
+    planId:
+      type: string
+    battleMode:
+      type: string
+      enum: [TRAIN, BATTLE]
+      description: 不传则沿用想定里的 battleMode
+
+# ===========================================================================
+# command：指挥指令
+# ===========================================================================
+VestConfigRequest:
+  type: object
+  description: 一次性下发马甲运行参数（对应 14B 轮询配置帧），下轮轮询即生效
+  properties:
+    mode:
+      type: string
+      enum: [AUTO, MANUAL]
+    hp:
+      type: integer
+      format: int32
+      minimum: 0
+      maximum: 255
+    ammo1:
+      type: integer
+      format: int32
+      minimum: 0
+      maximum: 65535
+    ammo2:
+      type: integer
+      format: int32
+      minimum: 0
+      maximum: 65535
+    team:
+      $ref: './common.yaml#/Team'
+
+ReloadRequest:
+  type: object
+  description: 充弹（全体充弹与单兵充弹共用）
+  required: [ammo, weapon]
+  properties:
+    ammo:
+      type: integer
+      format: int32
+      minimum: 0
+      maximum: 65535
+    weapon:
+      type: string
+      enum: [PRIMARY, SECONDARY]
+      description: 主武器 / 副武器槽位
+
+MoveVestRequest:
+  type: object
+  description: 联调用手动置位（对应旧 `/vest/manual-move`），正式演习禁用
+  properties:
+    floorNum:
+      type: integer
+      format: int32
+    posNum:
+      type: integer
+      format: int32
+
+CommandAck:
+  type: object
+  required: [vestNum, command, accepted]
+  properties:
+    vestNum:
+      type: integer
+      format: int32
+    command:
+      type: string
+      example: DIE
+    accepted:
+      type: boolean
+      description: |
+        false 表示指令未入队（如马甲离线、队列满）。契约约定：HTTP 200 + accepted=false
+        仍属「成功受理」语义，前端应提示「已下发但设备未确认」。
+    queuedAt:
+      type: string
+      format: date-time
+    downlinkHex:
+      type: string
+      description: 下发指令的十六进制原文（逐字节可核对）
+      example: '0009ff00043aaffa'
+
+# ===========================================================================
+# device：设备台账与链路
+# ===========================================================================
+VestDevice:
+  type: object
+  required: [vestNum]
+  properties:
+    vestNum:
+      type: integer
+      format: int32
+      minimum: 1
+      maximum: 65532
+    name:
+      type: [string, 'null']
+    team:
+      $ref: './common.yaml#/Team'
+    simNo:
+      type: [string, 'null']
+      description: SIM 号，来自 ff0a（18B）上报
+    model:
+      type: [string, 'null']
+    firmwareVersion:
+      type: [string, 'null']
+    bound:
+      type: boolean
+      description: 是否已与某个单兵终端 App 绑定
+    lastSeenAt:
+      type: [string, 'null']
+      format: date-time
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+VestDeviceUpsertRequest:
+  type: object
+  required: [vestNum]
+  properties:
+    vestNum:
+      type: integer
+      format: int32
+      minimum: 1
+      maximum: 65532
+    name:
+      type: [string, 'null']
+      maxLength: 64
+    team:
+      $ref: './common.yaml#/Team'
+    model:
+      type: [string, 'null']
+    remark:
+      type: [string, 'null']
+
+VestDevicePage:
+  type: object
+  required: [items, meta]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/VestDevice'
+    meta:
+      $ref: './common.yaml#/PageMeta'
+
+Anchor:
+  type: object
+  required: [anchorId]
+  properties:
+    anchorId:
+      type: integer
+      format: int32
+      minimum: 1
+      maximum: 8
+      description: '基线编号 1..8，直接对应 41B 帧的 ranges[anchorId-1]'
+    name:
+      type: [string, 'null']
+    xPx:
+      type: [number, 'null']
+      format: double
+      minimum: 0
+      maximum: 1
+    yPx:
+      type: [number, 'null']
+      format: double
+      minimum: 0
+      maximum: 1
+    enabled:
+      type: boolean
+      default: true
+      description: bs5~bs8 允许关闭；bs1~bs4 为矩形四角，必开
+
+AnchorUpsertRequest:
+  type: object
+  properties:
+    name:
+      type: [string, 'null']
+    xPx:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 1
+    yPx:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 1
+    enabled:
+      type: boolean
+
+LinkOpenSerialRequest:
+  type: object
+  required: [portName]
+  properties:
+    portName:
+      type: string
+      example: COM7
+    baudRate:
+      type: integer
+      format: int32
+      default: 115200
+    flowControlRtsCts:
+      type: boolean
+      default: false
+
+LinkOpenUwbRequest:
+  type: object
+  description: |
+    UWB 接入方式二选一。TCP_SERVER 时服务端监听（**端口硬约束 12001**，禁止改动）；
+    SERIAL 时占用串口。
+  required: [dataSource]
+  properties:
+    dataSource:
+      type: string
+      enum: [TCP_SERVER, SERIAL]
+    host:
+      type: string
+      default: 0.0.0.0
+      description: 仅 TCP_SERVER 有效
+    port:
+      type: integer
+      format: int32
+      default: 12001
+      description: 仅 TCP_SERVER 有效。硬约束默认 12001
+    serialPortName:
+      type: [string, 'null']
+      description: 仅 SERIAL 有效
+
+# ===========================================================================
+# map：底图、楼层点位、UWB 标定
+# ===========================================================================
+MapType:
+  type: string
+  description: 'INDOOR=室内底图（配 UWB 标定）；OUTDOOR=室外（用 GPS 经纬度，无底图亦可）'
+  enum: [INDOOR, OUTDOOR]
+
+MapDetail:
+  type: object
+  required: [mapId, name, type]
+  properties:
+    mapId:
+      type: string
+    name:
+      type: string
+    type:
+      $ref: '#/MapType'
+    imageUrl:
+      type: [string, 'null']
+      description: 底图签名访问 URL
+    imageWidth:
+      type: [integer, 'null']
+      format: int32
+    imageHeight:
+      type: [integer, 'null']
+      format: int32
+    floorCount:
+      type: integer
+      format: int32
+    calibrated:
+      type: boolean
+      description: UWB 标定（uwb-meta）是否齐备：bs1~bs4 与长宽基准必须全部有值
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+MapUpsertRequest:
+  type: object
+  required: [name, type]
+  properties:
+    name:
+      type: string
+      minLength: 1
+      maxLength: 128
+    type:
+      $ref: '#/MapType'
+
+FloorPointsRequest:
+  type: object
+  description: 楼层点位表。点位号 `posNum` 与 ff03 长版（15B）上报的 posNum 对应
+  required: [points]
+  properties:
+    points:
+      type: array
+      items:
+        type: object
+        required: [posNum, xPct, yPct]
+        properties:
+          posNum:
+            type: integer
+            format: int32
+          xPct:
+            type: number
+            format: double
+            minimum: 0
+            maximum: 1
+          yPct:
+            type: number
+            format: double
+            minimum: 0
+            maximum: 1
+          label:
+            type: [string, 'null']
+
+UwbAnchorPoint:
+  type: object
+  required: [xPx, yPx]
+  properties:
+    xPx:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 1
+    yPx:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 1
+
+UwbMeta:
+  type: object
+  description: |
+    UWB 解算坐标系参数（旧系统 `uwb_meta.json`）。
+    **基站编号与 41B 帧测距数组固定一一对应**：`bs(i+1)` ↔ `ranges[i]`，不可错位。
+    bs1~bs4 为矩形四角，必须给全：`bs1↔bs2` 提供长度基准、`bs1↔bs3` 提供宽度基准；
+    bs5~bs8 可选。缺任一项时 `calibrated=false`，服务端拒绝启用 UWB 定位。
+  required: [anchors, realLengthCm, realWidthCm]
+  properties:
+    anchors:
+      type: object
+      required: [bs1, bs2, bs3, bs4]
+      additionalProperties: false
+      properties:
+        bs1:
+          $ref: '#/UwbAnchorPoint'
+        bs2:
+          $ref: '#/UwbAnchorPoint'
+        bs3:
+          $ref: '#/UwbAnchorPoint'
+        bs4:
+          $ref: '#/UwbAnchorPoint'
+        bs5:
+          oneOf:
+            - $ref: '#/UwbAnchorPoint'
+            - type: 'null'
+        bs6:
+          oneOf:
+            - $ref: '#/UwbAnchorPoint'
+            - type: 'null'
+        bs7:
+          oneOf:
+            - $ref: '#/UwbAnchorPoint'
+            - type: 'null'
+        bs8:
+          oneOf:
+            - $ref: '#/UwbAnchorPoint'
+            - type: 'null'
+    realLengthCm:
+      type: number
+      format: double
+      description: bs1↔bs2 现场实测长度（厘米）
+    realWidthCm:
+      type: number
+      format: double
+      description: bs1↔bs3 现场实测宽度（厘米）
+
+UwbCalibrationRequest:
+  type: object
+  properties:
+    sampleFrames:
+      type: integer
+      format: int32
+      default: 200
+      description: 采样帧数（默认 200，见 scds-solver 的 calibSampleFrames）
+    bs1ToBs2Cm:
+      type: number
+      format: double
+      description: 现场卷尺实测长度（厘米），用于反推标定系数
+    bs1ToBs3Cm:
+      type: number
+      format: double
+      description: 现场卷尺实测宽度（厘米）
+
+UwbCalibrationStatus:
+  type: object
+  required: [state]
+  properties:
+    state:
+      type: string
+      enum: [IDLE, RUNNING, SUCCEEDED, FAILED]
+    progressPct:
+      type: integer
+      format: int32
+      minimum: 0
+      maximum: 100
+    sampledFrames:
+      type: integer
+      format: int32
+    appliedAt:
+      type: [string, 'null']
+      format: date-time
+    message:
+      type: [string, 'null']
+
+# ===========================================================================
+# replay：复盘
+# ===========================================================================
+Replay:
+  type: object
+  required: [replayId, planName, startedAt]
+  properties:
+    replayId:
+      type: string
+    planId:
+      type: [string, 'null']
+    planName:
+      type: string
+    mapId:
+      type: [string, 'null']
+    battleMode:
+      type: string
+      enum: [TRAIN, BATTLE]
+    startedAt:
+      type: string
+      format: date-time
+    endedAt:
+      type: [string, 'null']
+      format: date-time
+    durationSeconds:
+      type: integer
+      format: int64
+    participantCount:
+      type: integer
+      format: int32
+    hitCount:
+      type: integer
+      format: int32
+    deadCount:
+      type: integer
+      format: int32
+
+ReplayPage:
+  type: object
+  required: [items, meta]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/Replay'
+    meta:
+      $ref: './common.yaml#/PageMeta'
+
+TrackSample:
+  type: object
+  required: [t, vestNum]
+  properties:
+    t:
+      type: integer
+      format: int64
+      description: 相对演习开始的毫秒偏移（不写绝对时间，便于客户端插值与压缩）
+    vestNum:
+      type: integer
+      format: int32
+    xPct:
+      type: [number, 'null']
+      format: double
+    yPct:
+      type: [number, 'null']
+      format: double
+    lng:
+      type: [number, 'null']
+      format: double
+    lat:
+      type: [number, 'null']
+      format: double
+    hp:
+      type: [integer, 'null']
+      format: int32
+    status:
+      $ref: './common.yaml#/VestStatus'
+
+TimelineChunk:
+  type: object
+  description: 轨迹回放分片。客户端按 `nextCursor` 连续拉取，不要一次要全量
+  required: [samples]
+  properties:
+    samples:
+      type: array
+      items:
+        $ref: '#/TrackSample'
+    nextCursor:
+      type: [string, 'null']
+      description: 为 null 表示已到末尾
+
+ReplayStatistics:
+  type: object
+  required: [replayId]
+  properties:
+    replayId:
+      type: string
+    teams:
+      type: array
+      items:
+        $ref: './situation.yaml#/TeamSummary'
+    topShooters:
+      type: array
+      items:
+        type: object
+        properties:
+          vestNum:
+            type: integer
+            format: int32
+          name:
+            type: [string, 'null']
+          hitsDealt:
+            type: integer
+            format: int32
+          kills:
+            type: integer
+            format: int32
+    hitPartDistribution:
+      type: array
+      description: 命中部位分布
+      items:
+        type: object
+        properties:
+          hitPart:
+            $ref: './common.yaml#/HitPart'
+          count:
+            type: integer
+            format: int32
+    timeline:
+      type: array
+      description: 时间轴上的存活人数曲线
+      items:
+        type: object
+        properties:
+          t:
+            type: integer
+            format: int64
+          liveByTeam:
+            type: object
+            additionalProperties:
+              type: integer
+              format: int32
+
+ExportRequest:
+  type: object
+  required: [format]
+  properties:
+    format:
+      type: string
+      enum: [XLSX, CSV]

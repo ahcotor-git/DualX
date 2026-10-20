@@ -1,0 +1,227 @@
+# ============================================================================
+# 态势域模型 —— 服务器推送的**唯一**载荷定义
+#
+# 硬约束：WebSocket 与 HTTP Poll 必须**同构**，同一份 SituationEnvelope。
+# 这是「WS 连上也不能停 Poll」得以成立的前提。
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# 单个参演单元（马甲 / 武器 / 载具）的实时状态
+# ---------------------------------------------------------------------------
+UnitState:
+  type: object
+  required: [vestNum, status, revision]
+  properties:
+    vestNum:
+      type: integer
+      format: int32
+      minimum: 1
+      maximum: 65532
+      description: 马甲编号（协议 uint16）
+    name:
+      type: [string, 'null']
+    team:
+      $ref: './common.yaml#/Team'
+    combatRole:
+      type: string
+      enum: [SOLDIER, WEAPON, VEHICLE, HAZARD]
+      description: |
+        由编号区间推导：<= 1800 为 SOLDIER；1801~4800 为 WEAPON / VEHICLE；
+        65533/65534/65535 为 HAZARD（地雷/爆炸物/手雷）。
+    weaponKind:
+      oneOf:
+        - $ref: './common.yaml#/WeaponKind'
+        - type: 'null'
+    status:
+      allOf:
+        - $ref: './common.yaml#/VestStatus'
+      description: 在线判定为心跳驱动：距最后一次心跳 <= 5000ms 视为在线；超时即 OFFLINE
+    hp:
+      type: integer
+      format: int32
+      minimum: 0
+      maximum: 255
+    ammo1:
+      type: integer
+      format: int32
+      description: 主武器弹药
+    ammo2:
+      type: integer
+      format: int32
+      description: 副武器弹药
+    position:
+      allOf:
+        - $ref: './common.yaml#/GeoPoint'
+      description: '离线/未定位时为 null。阵亡后必须冻结在最后有效位置'
+    motion:
+      $ref: './common.yaml#/MotionState'
+    signalQuality:
+      type: [integer, 'null']
+      format: int32
+      description: UWB 解算时的可用基站数（0~8）；< 2 时坐标不可信
+    positionSource:
+      type: string
+      enum: [UWB, GPS, MANUAL, NONE]
+    lastHeartbeatAt:
+      type: [string, 'null']
+      format: date-time
+    deadAt:
+      type: [string, 'null']
+      format: date-time
+      description: 阵亡时刻，用于复盘回放
+    revision:
+      type: integer
+      format: int64
+      description: 该单元最后一次变化的全局 revision
+
+# ---------------------------------------------------------------------------
+# 命中事件
+# ---------------------------------------------------------------------------
+HitEvent:
+  type: object
+  required: [seq, at]
+  properties:
+    seq:
+      type: integer
+      format: int64
+      description: 全局单调递增的命中序号，用于去重与增量拉取
+    at:
+      type: string
+      format: date-time
+    hitVestNum:
+      type: integer
+      format: int32
+      description: 被击中者（ff05 字段一）
+    shooterNum:
+      type: integer
+      format: int32
+      description: 开枪者编号（ff05 字段二）。<= 1800 为单兵，否则为武器/载具/危险物
+    shooterIsSoldier:
+      type: boolean
+    shooterWeaponKind:
+      oneOf:
+        - $ref: './common.yaml#/WeaponKind'
+        - type: 'null'
+    hitPart:
+      $ref: './common.yaml#/HitPart'
+    lethal:
+      type: boolean
+      description: 本次命中是否导致阵亡（服务端判定结果，前端不再自行计算）
+    position:
+      allOf:
+        - $ref: './common.yaml#/GeoPoint'
+      description: 被击中者当时的坐标
+
+# ---------------------------------------------------------------------------
+# 队伍汇总
+# ---------------------------------------------------------------------------
+TeamSummary:
+  type: object
+  required: [team]
+  properties:
+    team:
+      $ref: './common.yaml#/Team'
+    total:
+      type: integer
+      format: int32
+    live:
+      type: integer
+      format: int32
+    dead:
+      type: integer
+      format: int32
+    offline:
+      type: integer
+      format: int32
+    hitsDealt:
+      type: integer
+      format: int32
+
+# ---------------------------------------------------------------------------
+# 态势信封（WS 帧体 与 HTTP Poll 响应体完全一致）
+# ---------------------------------------------------------------------------
+SituationEnvelope:
+  type: object
+  required: [revision, full, running, serverTime]
+  properties:
+    revision:
+      type: integer
+      format: int64
+      description: |
+        全局单调递增的态势版本号。客户端必须保存它，并在重连/轮询时用 `sinceRevision` 续传。
+        服务端若发现 `sinceRevision` 过旧（超出服务端保留窗口），返回 `code=SITUATION_REVISION_TOO_OLD`，
+        客户端应改为不带 `sinceRevision` 重新拉取全量。
+    full:
+      type: boolean
+      description: true=全量快照（`units` 有效）；false=增量（`changes` / `removedVestNums` 有效）
+    running:
+      type: boolean
+      description: 当前是否有演习进行中。false 时 `units` 为空数组
+    exerciseId:
+      type: [string, 'null']
+    serverTime:
+      type: string
+      format: date-time
+    units:
+      type: array
+      description: 全量快照。仅 full=true 时出现
+      items:
+        $ref: '#/UnitState'
+    changes:
+      type: array
+      description: 增量变化。仅 full=false 时出现
+      items:
+        $ref: '#/UnitState'
+    removedVestNums:
+      type: array
+      description: 本增量中退场（从编成中移除）的马甲编号
+      items:
+        type: integer
+        format: int32
+    hits:
+      type: array
+      description: 本增量/快照覆盖区间内新增的命中事件
+      items:
+        $ref: '#/HitEvent'
+    teamSummary:
+      type: array
+      items:
+        $ref: '#/TeamSummary'
+
+# ---------------------------------------------------------------------------
+# 演习日志流水（指挥台右侧滚动日志）
+# ---------------------------------------------------------------------------
+ExerciseLogEntry:
+  type: object
+  required: [seq, type, at]
+  properties:
+    seq:
+      type: integer
+      format: int64
+    at:
+      type: string
+      format: date-time
+    type:
+      $ref: './common.yaml#/LogType'
+    vestNum:
+      type: [integer, 'null']
+      format: int32
+    operator:
+      type: [string, 'null']
+      description: 手动下发的操作者账号；协议自动产生的为 null
+    detail:
+      type: [string, 'null']
+    downlinkHex:
+      type: [string, 'null']
+      description: 对应下发指令的十六进制原文，逐字节可核对（排障用）
+
+ExerciseLogPage:
+  type: object
+  required: [items, meta]
+  properties:
+    items:
+      type: array
+      items:
+        $ref: '#/ExerciseLogEntry'
+    meta:
+      $ref: './common.yaml#/PageMeta'

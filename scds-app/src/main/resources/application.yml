@@ -1,0 +1,44 @@
+# ============================================================================
+# scds-next 基础配置（阶段 1：骨架）
+# 端口为硬约束，任何改动都属于事故级变更。
+# ============================================================================
+server:
+  port: 11001
+
+spring:
+  application:
+    name: scds-next
+  profiles:
+    # 部署形态由 deployment-mode 驱动：CLOUD（云管多租户）/ PRIVATE（私有化单机）
+    active: ${SCDS_DEPLOYMENT_MODE:private}
+  mvc:
+    problemdetails:
+      enabled: true
+
+scds:
+  # CLOUD | PRIVATE —— 全系统唯一的形态开关，禁止在代码里散落分支判断
+  deployment-mode: ${SCDS_DEPLOYMENT_MODE:private}
+
+  # ===== 协议 A：马甲串口链路 =====
+  serial:
+    port-name: COM7
+    baud-rate: 115200
+    flow-control-rts-cts: false
+    polling-interval-ms: 200
+    polling-timeout-ms: 200
+
+  # ===== 协议 B：UWB =====
+  uwb:
+    data-source: TCP_SERVER          # SERIAL | TCP_SERVER
+    tcp-server-host: 0.0.0.0
+    tcp-server-port: 12001
+    tcp-read-timeout-ms: 20000
+    tcp-idle-warn-min: 3
+    # UWB 连续坐标生效后，旧的 ff06 室内点位帧必须被丢弃
+    uwb-mode: enabled
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

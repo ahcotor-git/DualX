@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.dualx</groupId>
+        <artifactId>scds-next</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>scds-protocol</artifactId>
+    <name>scds-protocol</name>
+    <description>
+        协议层（承重墙）：协议A 马甲串口文本 HEX 帧 + 协议B UWB 41B 二进制帧 + 下行指令编码。
+        逐字节冻结，对齐 PROTOCOL.md；主代码零第三方依赖（仅 JDK），便于独立跑黄金样本回归。
+    </description>
+
+    <dependencies>
+        <!-- ============================================================
+             主代码：零第三方依赖。不要在此处添加任何 compile 依赖。
+             ============================================================ -->
+
+        <!-- 仅测试期依赖 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,464 @@
+# ============================================================================
+# device —— 设备台账与硬件链路
+#
+# 与旧系统的关键差别：马甲不再「每次演习重新配置」，而是**全局台账**（本域），
+# 演习只做「编排引用」（exercise/roster）。这样云管侧才能统一管理设备资产。
+#
+# 链路开关替代旧系统 `/serialPort/open`、`/serialPort/uwb/open` 等 GET 写操作接口，
+# 统一为 POST，并把「主串口 / 室内虚拟串口」合并为单一马甲串口链路（C 端只做实兵演习）。
+# ============================================================================
+
+vests:
+  get:
+    tags: [device]
+    operationId: listVests
+    summary: 马甲台账列表
+    parameters:
+      - name: keyword
+        in: query
+        description: 按编号或姓名模糊搜索
+        schema:
+          type: string
+      - name: team
+        in: query
+        schema:
+          $ref: '../schemas/common.yaml#/Team'
+      - name: status
+        in: query
+        schema:
+          $ref: '../schemas/common.yaml#/VestStatus'
+      - name: bound
+        in: query
+        description: 是否已绑定单兵终端
+        schema:
+          type: boolean
+      - name: page
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          default: 1
+      - name: size
+        in: query
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 200
+          default: 20
+    responses:
+      '200':
+        description: 分页结果
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/VestDevicePage'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  post:
+    tags: [device]
+    operationId: createVest
+    summary: 登记马甲
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/VestDeviceUpsertRequest'
+    responses:
+      '201':
+        description: 已登记
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/VestDevice'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '409':
+        description: 编号已存在（`DEVICE_VEST_NUM_CONFLICT`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+vestById:
+  get:
+    tags: [device]
+    operationId: getVest
+    summary: 马甲详情
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    responses:
+      '200':
+        description: 马甲
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/VestDevice'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  put:
+    tags: [device]
+    operationId: updateVest
+    summary: 修改马甲
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/VestDeviceUpsertRequest'
+    responses:
+      '200':
+        description: 已更新
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/VestDevice'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  delete:
+    tags: [device]
+    operationId: deleteVest
+    summary: 注销马甲
+    description: 逻辑删除。演习进行中禁止注销。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    responses:
+      '204':
+        description: 已注销
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        description: 演习进行中（`EXERCISE_ALREADY_RUNNING`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+vestLink:
+  get:
+    tags: [device]
+    operationId: getVestLink
+    summary: 单个马甲的链路状态
+    description: 在线判定：距最后一次心跳 <= 5000ms 为在线。此处的 `state` 是**设备侧**视角，与态势域的 VestStatus 一致。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    responses:
+      '200':
+        description: 链路状态
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                vestNum:
+                  type: integer
+                  format: int32
+                online:
+                  type: boolean
+                lastHeartbeatAt:
+                  type: [string, 'null']
+                  format: date-time
+                lastFrameType:
+                  type: [string, 'null']
+                  description: 最近一次收到的上行帧类型（ff03/ff04/ff05/ff07/ff0a）
+                framesTotal:
+                  type: integer
+                  format: int64
+                droppedTotal:
+                  type: integer
+                  format: int64
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+anchors:
+  get:
+    tags: [device]
+    operationId: listAnchors
+    summary: UWB 基站台账（bs1~bs8）
+    description: '返回基线编号与像素坐标。解算坐标参数（realLengthCm/realWidthCm）在地图域的 uwb-meta 里维护。'
+    responses:
+      '200':
+        description: 基站列表
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '../schemas/domain.yaml#/Anchor'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+anchorById:
+  put:
+    tags: [device]
+    operationId: upsertAnchor
+    summary: 配置 UWB 基站
+    parameters:
+      - name: anchorId
+        in: path
+        required: true
+        description: 基线编号 1..8，直接对应 41B 帧 ranges[anchorId-1]
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 8
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/AnchorUpsertRequest'
+    responses:
+      '200':
+        description: 已保存
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/Anchor'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+links:
+  get:
+    tags: [device]
+    operationId: getLinks
+    summary: 全部链路状态
+    responses:
+      '200':
+        description: 链路状态列表
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '../schemas/common.yaml#/LinkStatus'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+serialPorts:
+  get:
+    tags: [device]
+    operationId: listSerialPorts
+    summary: 本机可用串口列表
+    responses:
+      '200':
+        description: 串口列表
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  portName:
+                    type: string
+                    example: COM7
+                  description:
+                    type: [string, 'null']
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+linkSerial:
+  post:
+    tags: [device]
+    operationId: openVestSerial
+    summary: 开启马甲串口链路
+    description: '替代旧 `/serialPort/open`（含室内虚拟串口）。协议 A 为 ASCII 文本 HEX，默认 115200 波特率。'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/LinkOpenSerialRequest'
+    responses:
+      '200':
+        description: 链路状态
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/common.yaml#/LinkStatus'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '409':
+        description: 链路已开启（`DEVICE_LINK_ALREADY_OPEN`）或端口被占用（`DEVICE_LINK_SERIAL_BUSY`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  delete:
+    tags: [device]
+    operationId: closeVestSerial
+    summary: 关闭马甲串口链路
+    responses:
+      '200':
+        description: 链路状态
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/common.yaml#/LinkStatus'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+linkUwb:
+  post:
+    tags: [device]
+    operationId: openUwbLink
+    summary: 开启 UWB 链路
+    description: |
+      二选一：TCP_SERVER（本机监听，**端口硬约束 12001**）或 SERIAL。
+      UWB 生效后，协议 A 的旧室内定位帧 ff06 必须被丢弃（避免与连续坐标互相污染）。
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/LinkOpenUwbRequest'
+    responses:
+      '200':
+        description: 链路状态
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/common.yaml#/LinkStatus'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '409':
+        description: 端口被占用 / 链路已开启（`DEVICE_LINK_SERIAL_BUSY` / `DEVICE_LINK_ALREADY_OPEN`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  delete:
+    tags: [device]
+    operationId: closeUwbLink
+    summary: 关闭 UWB 链路
+    responses:
+      '200':
+        description: 链路状态
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/common.yaml#/LinkStatus'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+wsLinks:
+  get:
+    tags: [device]
+    operationId: watchLinks
+    summary: 链路状态推送（WebSocket）
+    description: |
+      替代旧系统 `/socket/in` 与 `/socket/out` 两个端点。链路状态变化（开关、异常、接入数变化）时推一帧 `LinkStatus`。
+      **同样遵循双通道约定**：本通道不替代 `GET /api/v1/devices/links`，客户端仍需低频轮询兜底。
+    responses:
+      '101':
+        description: 协议升级成功
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+    x-websocket:
+      url: ws://{host}:11001/ws/v1/devices/links
+      subprotocol: scds.links.v1
+      serverToClient:
+        schema:
+          $ref: '../schemas/common.yaml#/LinkStatus'
+      clientToServer:
+        schema:
+          type: object
+          properties:
+            action:
+              type: string
+              enum: [PING]
