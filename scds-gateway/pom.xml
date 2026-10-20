@@ -26,6 +26,13 @@
             <groupId>com.dualx</groupId>
             <artifactId>scds-solver</artifactId>
         </dependency>
+        <!-- 领域内核 + 硬件端口：网关实现 com.dualx.core.port 下的适配器接口，
+             只依赖本模块即可拿到 LinkConfig / LinkStatus 等链路类型，
+             无需依赖 scds-core，从而不被 Flyway/JDBC 污染。 -->
+        <dependency>
+            <groupId>com.dualx</groupId>
+            <artifactId>scds-domain</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.fazecast</groupId>
             <artifactId>jSerialComm</artifactId>

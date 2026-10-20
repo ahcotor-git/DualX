@@ -1,6 +1,4 @@
-package com.dualx.api.dto.common;
-
-import com.dualx.core.domain.LinkKind;
+package com.dualx.core.domain;
 
 import java.time.Instant;
 
@@ -10,7 +8,11 @@ import java.time.Instant;
  * <p>HTTP {@code GET /api/v1/devices/links} 与 WebSocket {@code /ws/v1/devices/links}
  * 返回**同一个类型**，这是双通道「同构载荷」约定的落地方式。</p>
  *
- * @param kind          链路种类，复用仓储层 {@code LinkKind}
+ * <p>描述的是进程内运行态，落库即失真，因此完全不落库，由运行中的链路对象实时提供。
+ * 放在领域内核而非 api 层，是因为它与 {@link LinkConfig} 同属「硬件端口」契约，
+ * 需要被 api 与 gateway 两侧共同引用。</p>
+ *
+ * @param kind          链路种类，复用 {@link LinkKind}
  * @param state         开关状态
  * @param target        串口名（如 COM7）或监听地址（如 0.0.0.0:12001）
  * @param baudRate      串口波特率，非串口为 null

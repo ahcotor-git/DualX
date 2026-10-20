@@ -26,6 +26,11 @@
             <groupId>com.dualx</groupId>
             <artifactId>scds-solver</artifactId>
         </dependency>
+        <!-- 领域内核 + 硬件端口：与 gateway 共用同一份领域模型，两者互不依赖 -->
+        <dependency>
+            <groupId>com.dualx</groupId>
+            <artifactId>scds-domain</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>

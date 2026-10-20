@@ -1,16 +1,16 @@
 package com.dualx.api.device;
 
-import com.dualx.api.dto.common.LinkStatus;
 import com.dualx.api.dto.device.Anchor;
 import com.dualx.api.dto.device.AnchorUpsertRequest;
 import com.dualx.api.dto.device.LinkOpenSerialRequest;
 import com.dualx.api.dto.device.LinkOpenUwbRequest;
-import com.dualx.api.dto.device.SerialPortInfo;
 import com.dualx.api.dto.device.VestDevice;
 import com.dualx.api.dto.device.VestDevicePage;
 import com.dualx.api.dto.device.VestDeviceUpsertRequest;
 import com.dualx.api.dto.device.VestLinkStatus;
 import com.dualx.api.error.NotImplementedException;
+import com.dualx.core.domain.LinkStatus;
+import com.dualx.core.port.SerialPortInfo;
 import com.dualx.protocol.Team;
 import com.dualx.protocol.VestStatus;
 import jakarta.validation.Valid;

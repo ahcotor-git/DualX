@@ -1,4 +1,4 @@
-package com.dualx.api.dto.common;
+package com.dualx.core.domain;
 
 /**
  * 链路开关状态（契约 common.yaml → {@code LinkState}）。

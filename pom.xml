@@ -35,6 +35,7 @@
     <modules>
         <module>scds-protocol</module>
         <module>scds-solver</module>
+        <module>scds-domain</module>
         <module>scds-gateway</module>
         <module>scds-core</module>
         <module>scds-api</module>
@@ -52,6 +53,11 @@
             <dependency>
                 <groupId>com.dualx</groupId>
                 <artifactId>scds-solver</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.dualx</groupId>
+                <artifactId>scds-domain</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.dualx</groupId>
+        <artifactId>scds-next</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>scds-domain</artifactId>
+    <name>scds-domain</name>
+    <description>
+        领域内核 + 硬件端口（Ports &amp; Adapters 的中立层）：
+        业务领域模型（com.dualx.core.domain）+ 硬件端口接口（com.dualx.core.port）。
+        scds-core 与 scds-gateway 都依赖本模块、彼此互不依赖，从而既无循环依赖，
+        也不会把 Flyway/JDBC 拖进网关、把 Netty/串口库拖进业务核心。
+
+        包名沿用 com.dualx.core.domain（Maven 模块名与 Java 包名解耦），
+        因此业务侧与接口侧的全部 import 均无需改动。
+        主代码只依赖 scds-protocol，零第三方依赖。
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.dualx</groupId>
+            <artifactId>scds-protocol</artifactId>
+        </dependency>
+
+        <!-- 仅测试期依赖 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
