@@ -655,22 +655,18 @@ public class ScdsUwbProperties {
                 ? String.format(java.util.Locale.ROOT, "tcp=%s:%d soTimeoutMs=%d idleWarnMin=%d",
                         tcpServerHost, tcpServerPort, tcpReadTimeoutMs, tcpIdleWarnMin)
                 : "serial=gnu.io.RXTX";
-        // P6-2 增强诊断：启动期 TCP Server 是否已经绑定监听（GlobalTcpUwbHolder.hasInstance），
-        //   便于一眼判断「到底是 yml 没读到 TCP_SERVER（= SERIAL / noListening ）还是读到了但没启动监听」
-        boolean tcpListeningNow;
-        try {
-            Class<?> holderCls = Class.forName("com.dualx.gateway.uwb.GlobalTcpUwbHolder");
-            Object holder = holderCls.getField("INSTANCE").get(null);
-            tcpListeningNow = (Boolean) holderCls.getMethod("hasInstance").invoke(holder);
-        }
-        catch (Throwable ignore) { tcpListeningNow = false; }
+        // 旧系统的 P6-2 诊断项 tcpListeningNow 已移除：它靠反射 com.dualx.gateway.uwb.GlobalTcpUwbHolder
+        //   取监听状态，而该类在本架构中不存在，反射必然失败 → 恒定输出 false，反而误导现场排障
+        //   （明明在监听却显示 false）。新架构下「链路是否真在监听」由中性端口
+        //   com.dualx.core.port.DeviceLinkAdmin#snapshot() 返回的 LinkStatus.state 提供，
+        //   待网关实现后按需接回，不再用反射探测。
         return String.format(java.util.Locale.ROOT,
-                "[VERSION-BANNER] build=%s dataSrc=%s tcpListeningNow=%s modeEn=%s uwbEn=%s %s solver=ALL_FRESH_HUBER_LM frameIdDedup=true getterPure=true "
+                "[VERSION-BANNER] build=%s dataSrc=%s modeEn=%s uwbEn=%s %s solver=ALL_FRESH_HUBER_LM frameIdDedup=true getterPure=true "
                         + "median=%d sigmaFrames=%d sigmaM=[%.3f,%.3f] rangeExpiryMs=%d huberK=%.2f "
                         + "rmsMaxM=%.2f gdopMax=%.2f iterations=%d okMinBs=%d twoPriorSigmaM=%.2f "
                         + "ema=%s alphaAt50ms=%.4f stepCmAt50ms=%.1f entryGate=%s/%.1fcm "
                         + "reacquireFrames=%d reacquireRmsM=%.2f lostMs=%d csv=%s calibration=MAP_SCOPED_ONCE",
-                buildVersion, dataSource, tcpListeningNow, isMode(), isMode(), tcpInfo,
+                buildVersion, dataSource, isMode(), isMode(), tcpInfo,
                 getMedianWindowFrames(),getHuberSigmaFrames(),getRangeSigmaMinM(),getRangeSigmaMaxM(),
                 getRangeWindowMaxAgeMs(),getHuberK(),getResidualMaxMeters(),getSolverMaxGdop(),getSolverMaxIterations(),
                 getUsedMinCountStatus(),getTwoAnchorPriorSigmaM(),isEmaEnabled(),getEffectiveEmaAlpha(),getEmaStepLimitCm(),

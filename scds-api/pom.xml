@@ -30,6 +30,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-websocket</artifactId>
         </dependency>
+        <!-- 本模块的 Controller 直接使用 @Valid / @Validated / @Min 等约束注解，
+             显式声明此依赖，不依赖经由 scds-core 的传递依赖。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
 
         <!-- MockMvc / JsonPath / JUnit 5：骨架期冒烟测试用（test scope，不参与打包） -->
         <dependency>

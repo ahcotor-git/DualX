@@ -2,9 +2,10 @@
 # scds-next 基础配置
 # 端口为硬约束，任何改动都属于事故级变更。
 #
-# 本机开发环境的连接方式（与 E:\ZAA 完全一致，不多引一个依赖、不多装一个服务）：
-#   数据库不是新装的 MySQL，而是复用本机已在跑的 Docker 容器 zaa-local-mysql-1
-#   （mysql:8.4，监听 127.0.0.1:3306），在其中单独建 scds_next 库与 scds_app 账号。
+# 本机开发环境的数据来源（完整理由见 compose.yaml）：
+#   本项目自带容器 scds-local-mysql（mysql:8.4，监听 127.0.0.1:13306），库 scds_next、
+#   账号 scds_app；镜像版本与 healthcheck 与 E:\ZAA 保持一致，仅数据目录独立。
+#   刻意不复用 zaa-local-mysql-1：其 root 口令已与 .env 记录不符，重置会中断 ZAA 运行。
 #   凭据一律走 .env（已 gitignore），由 application-local.yml 导入，不写进本文件。
 # ============================================================================
 server:
@@ -14,19 +15,34 @@ spring:
   application:
     name: scds-next
   profiles:
-    # 部署形态由 deployment-mode 驱动：CLOUD（云管多租户）/ PRIVATE（私有化单机）
+    # 部署形态由 deployment-mode 驱动：CLOUD（云端独立实例）/ PRIVATE（私有化单机）
     # 本机开发时用命令行覆盖：--spring.profiles.active=local
     active: ${SCDS_DEPLOYMENT_MODE:private}
   mvc:
     problemdetails:
       enabled: true
 
+  # ===== JSON 契约 =====
+  # 契约承诺「时间一律 RFC 3339、服务端只发 UTC」。下面三项在 Boot 里本就是默认值，
+  # 但默认值不等于契约——显式钉死，避免升版本或引依赖时被静默改形。
+  # adjust-dates-to-context-time-zone=false 与 connectionTimeZone=SERVER 是一对：
+  # 缺了它，驱动会按 JVM 时区平移 java.time 类型，「全库 UTC」的前提即被破坏。
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      adjust-dates-to-context-time-zone: false
+    time-zone: UTC
+
   # ===== 存续层 =====
   # 刻意不用 ORM：整套 schema 由 Flyway 显式管理，读写走 JdbcClient。
   # connectionTimeZone: SERVER 表示「驱动不做时区换算，原样收发」——这是全库
   # 统一存 UTC 的前提（见 V1 文件头第 2 条），缺了它驱动会按 JVM 时区平移时间。
   datasource:
-    url: ${SCDS_JDBC_URL:jdbc:mysql://127.0.0.1:13306/scds_next}
+    # rewriteBatchedStatements=true：缺了它 Connector/J 不会把 batch 改写成多值 INSERT，
+    # 每行仍各走一次往返，t_track_sample 的「真批量」写入等于白做。
+    # 该改写不影响自增主键——轨迹批量写入不取 generated keys。
+    url: ${SCDS_JDBC_URL:jdbc:mysql://127.0.0.1:13306/scds_next?rewriteBatchedStatements=true}
     username: ${SCDS_MYSQL_USER:scds_app}
     password: ${SCDS_MYSQL_PASSWORD}
     hikari:
@@ -63,3 +79,10 @@ management:
     web:
       exposure:
         include: health,info,metrics
+
+# ===== 日志 =====
+# TraceIdFilter 把 traceId 写入 MDC（键名 traceId）。Boot 默认 pattern 不含 %X{traceId}，
+# 不显式加就等于「生成了追踪号却从不打印」——报障时无法把日志与 Problem.traceId 对上。
+logging:
+  pattern:
+    level: "%5p [%X{traceId:-}]"

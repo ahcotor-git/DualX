@@ -32,7 +32,7 @@ info:
   summary: 实兵演习系统（马甲 + UWB）边缘网关契约
   description: |
     阶段 1 契约草案。覆盖边缘域（auth / exercise / command / situation / device / map / replay），
-    云管域（多租户、License、OTA）不在本文件范围。
+    云管域（License、OTA）不在本文件范围。
 
     **双通道硬约束**：态势与链路状态必须同时提供 WebSocket 与低频 HTTP Poll 两条通道，
     且两者返回**同构载荷**。WS 只降低延迟，Poll 负责兜底与恢复；客户端即使 WS 已连接，

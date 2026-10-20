@@ -14,7 +14,7 @@
     <name>scds-app</name>
     <description>
         启动装配：唯一可执行 fat jar。通过 Spring Profile 切换部署形态
-        CLOUD（云管多租户）/ PRIVATE（私有化单机），由 deployment-mode 驱动。
+        CLOUD（云端独立实例）/ PRIVATE（私有化单机），由 deployment-mode 驱动。
     </description>
 
     <dependencies>
