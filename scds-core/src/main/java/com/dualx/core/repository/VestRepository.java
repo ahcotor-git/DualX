@@ -4,12 +4,16 @@ import com.dualx.core.domain.Vest;
 import com.dualx.core.support.PageRequest;
 import com.dualx.core.support.SqlTime;
 import com.dualx.protocol.Team;
+import com.dualx.protocol.VestStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.core.simple.JdbcClient.StatementSpec;
 import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -45,6 +49,87 @@ public class VestRepository {
                 .param("offset", request.offset())
                 .query(VestRepository::map)
                 .list();
+    }
+
+    /**
+     * 台账列表的过滤条件。
+     *
+     * @param keyword     编号或姓名的模糊匹配，null 表示不过滤
+     * @param status      契约 {@code VestStatus}；三个取值的口径见 {@link #search}
+     * @param onlineSince 「在线」判定的下界，{@code status} 非空时调用方必须给出
+     */
+    public record VestFilter(String keyword, Team team, Boolean bound, VestStatus status, Instant onlineSince) {
+    }
+
+    /**
+     * 按条件分页查询，恒以 {@code vest_num} 升序（台账的稳定顺序就是编号顺序）。
+     *
+     * <p><b>{@code status} 的口径</b>：它是运行态，而 {@code t_vest} 只存台账。本表唯一的
+     * 运行痕迹是 {@code last_seen_at}（最后一次合法帧时刻），因此按契约
+     * {@code x-scds-invariants.vestOnline}（距今 {@code <= 5000ms} 为在线）把它当在线判定的
+     * 唯一依据：{@code LIVE} 取在线、{@code OFFLINE} 取非在线。{@code DIE}（阵亡）属演习
+     * 运行态，落在 {@code t_exercise_unit.final_status}，台账层没有这个数据源——用「离线」
+     * 冒充「阵亡」会把两种完全不同的现场状况混成一种，故显式返回空集。</p>
+     */
+    public List<Vest> search(VestFilter filter, PageRequest request) {
+        return bind(jdbc.sql("SELECT " + COLUMNS + " FROM t_vest" + filterClause(filter)
+                        + " ORDER BY vest_num LIMIT :limit OFFSET :offset"), filter)
+                .param("limit", request.size())
+                .param("offset", request.offset())
+                .query(VestRepository::map)
+                .list();
+    }
+
+    public long count(VestFilter filter) {
+        return bind(jdbc.sql("SELECT COUNT(*) FROM t_vest" + filterClause(filter)), filter)
+                .query(Long.class)
+                .single();
+    }
+
+    /** search / count 共用同一份条件，避免两处的口径各自漂移。 */
+    private static String filterClause(VestFilter filter) {
+        List<String> conditions = new ArrayList<>();
+        if (filter.keyword() != null) {
+            conditions.add("(CAST(vest_num AS CHAR) LIKE :keyword ESCAPE '\\\\'"
+                    + " OR name LIKE :keyword ESCAPE '\\\\')");
+        }
+        if (filter.team() != null) {
+            conditions.add("team = :team");
+        }
+        if (filter.bound() != null) {
+            conditions.add("bound = :bound");
+        }
+        if (filter.status() == VestStatus.LIVE) {
+            conditions.add("last_seen_at IS NOT NULL AND last_seen_at > :onlineSince");
+        } else if (filter.status() == VestStatus.OFFLINE) {
+            conditions.add("(last_seen_at IS NULL OR last_seen_at <= :onlineSince)");
+        } else if (filter.status() == VestStatus.DIE) {
+            conditions.add("1 = 0");
+        }
+        return conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions);
+    }
+
+    private static StatementSpec bind(StatementSpec spec, VestFilter filter) {
+        StatementSpec bound = spec;
+        if (filter.keyword() != null) {
+            bound = bound.param("keyword", likePattern(filter.keyword()));
+        }
+        if (filter.team() != null) {
+            bound = bound.param("team", filter.team().name());
+        }
+        if (filter.bound() != null) {
+            bound = bound.param("bound", filter.bound() ? 1 : 0);
+        }
+        if (filter.onlineSince() != null) {
+            bound = bound.param("onlineSince", SqlTime.toDb(filter.onlineSince()));
+        }
+        return bound;
+    }
+
+    /** keyword 来自用户输入，须转义 LIKE 通配符，否则输入一个 {@code %} 就会命中全表。 */
+    private static String likePattern(String keyword) {
+        String escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        return "%" + escaped + "%";
     }
 
     public long count() {

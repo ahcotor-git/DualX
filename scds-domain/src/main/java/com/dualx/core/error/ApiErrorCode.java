@@ -45,6 +45,15 @@ public enum ApiErrorCode {
     // ===== DEVICE_* 设备与链路 =====
     DEVICE_VEST_NOT_FOUND,
     DEVICE_VEST_NUM_CONFLICT,
+    /**
+     * 首次绑定（{@code POST .../binding}）打到已绑定的马甲。
+     *
+     * <p>与 {@link #DEVICE_VEST_NOT_BOUND} 成对：契约刻意让 POST/PUT 分工不重叠，
+     * 客户端才能区分「首次绑定」与「换绑」，而不是让两者静默互相顶替（决策 04 D03-4）。</p>
+     */
+    DEVICE_VEST_ALREADY_BOUND,
+    /** 换绑（{@code PUT .../binding}）打到未绑定的马甲；首次绑定请用 POST。 */
+    DEVICE_VEST_NOT_BOUND,
     DEVICE_LINK_ALREADY_OPEN,
     DEVICE_LINK_SERIAL_BUSY,
     DEVICE_ANCHOR_NOT_CALIBRATED,
