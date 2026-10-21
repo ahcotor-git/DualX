@@ -236,14 +236,18 @@ public class ApiExceptionHandler {
                     HttpStatus.UNAUTHORIZED;
             case AUTH_FORBIDDEN -> HttpStatus.FORBIDDEN;
             case VALIDATION_FAILED -> HttpStatus.BAD_REQUEST;
+            // 上传超限与格式不符已由「框架状态解析」那条分支覆盖（{@code MaxUploadSizeExceededException}
+            // 与 {@code HttpMediaTypeNotSupportedException} 都是 ErrorResponse）；这两行是给**服务层**
+            // 抛出的同名码用的——图片头嗅探否掉一个文件时，没有框架异常可依托。
+            case PAYLOAD_TOO_LARGE -> HttpStatus.PAYLOAD_TOO_LARGE;
+            case UNSUPPORTED_MEDIA_TYPE -> HttpStatus.UNSUPPORTED_MEDIA_TYPE;
             case RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
             case INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
             case NOT_IMPLEMENTED -> HttpStatus.NOT_IMPLEMENTED;
 
             // ── 台账域（M2 LEDGER）──────────────────────────────────────────────
             // 逐项按契约登记，不按前缀猜：同一前缀里既有 404（马甲不存在）又有 409（编号冲突）。
-            // 尚未落服务的码（COMMAND_*、REPLAY_*、MAP_IMAGE_MISSING、
-            // MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
+            // 尚未落服务的码（COMMAND_*、REPLAY_*、MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
             // 落地那一刻再补进这张表，而不是现在替它们猜一个看着合理的状态。
             case DEVICE_VEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND,
@@ -255,9 +259,14 @@ public class ApiExceptionHandler {
             // 楼层点位与 UWB 标定：getUwbMeta 的「还没标定」是 404 MAP_NOT_CALIBRATED
             // （与 MAP_NOT_FOUND 分码，现场动作不同）；putUwbMeta 的校验失败是 400，
             // 契约把这两处原写成同一个码，本次按「一码一状态」拆开。
-            case MAP_NOT_FOUND, MAP_NOT_CALIBRATED -> HttpStatus.NOT_FOUND;
+            case MAP_NOT_FOUND, MAP_NOT_CALIBRATED, MAP_IMAGE_MISSING -> HttpStatus.NOT_FOUND;
             case MAP_UWB_META_INCOMPLETE -> HttpStatus.BAD_REQUEST;
             case MAP_IN_USE -> HttpStatus.CONFLICT;
+
+            // ── 受保护文件（M2 MAP-BASE，D09-②）────────────────────────────────
+            // 签名错与已过期共用一个码、一个状态：客户端处置动作相同（回详情接口取新 URL）。
+            // 与 AUTH_TOKEN_INVALID 的 401 分属两个信任域，文件签名失效不该要求重新登录。
+            case FILE_URL_INVALID -> HttpStatus.FORBIDDEN;
 
             default -> HttpStatus.INTERNAL_SERVER_ERROR;
         };

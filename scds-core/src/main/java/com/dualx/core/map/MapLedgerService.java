@@ -5,16 +5,21 @@ import com.dualx.core.domain.MapFloor;
 import com.dualx.core.domain.MapType;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.port.FileStore;
 import com.dualx.core.repository.BaseMapRepository;
 import com.dualx.core.repository.ExerciseRepository;
 import com.dualx.core.repository.MapFloorRepository;
 import com.dualx.core.repository.PlanRepository;
+import com.dualx.core.storage.FileStorageProperties;
+import com.dualx.core.storage.ImageHeaders;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
 import com.dualx.core.support.UuidV7;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,19 +35,24 @@ import java.util.UUID;
  * {@code floorCount} / {@code calibrated} 也不是单表能算出来的。控制器一律调本类，
  * 不碰仓储（评审 R22 的同一取向）。</p>
  *
- * <p><b>已落地</b>：底图台账 CRUD、楼层点位表读写（单楼层语义）与 {@code uwb_meta} 读写
- * （含保存前的结构性与边界性校验）。抛出的四张码
- * （{@code MAP_NOT_FOUND} / {@code MAP_IN_USE} / {@code MAP_NOT_CALIBRATED} /
- * {@code MAP_UWB_META_INCOMPLETE}）都已登记到 {@code ApiExceptionHandler} 的「一码一状态」表。</p>
+ * <p><b>已落地</b>：底图台账 CRUD、楼层点位表读写（单楼层语义）、{@code uwb_meta} 读写
+ * （含保存前的结构性与边界性校验）与底图图片的落盘 / 读取 / 换图删旧（含真实图片头
+ * 校验与宽高回填）。抛出的七张码（{@code MAP_NOT_FOUND} / {@code MAP_IN_USE} /
+ * {@code MAP_NOT_CALIBRATED} / {@code MAP_UWB_META_INCOMPLETE} / {@code MAP_IMAGE_MISSING} /
+ * {@code PAYLOAD_TOO_LARGE} / {@code UNSUPPORTED_MEDIA_TYPE}）都已登记到
+ * {@code ApiExceptionHandler} 的「一码一状态」表。</p>
  *
- * <p><b>不在本类</b>：底图图片的上传 / 下载 / 签名 URL 与「换图即删旧文件」属图片段落
- * （需 {@code FileStore} + {@code FileUrlSigner} 与图片头校验）；UWB 校准三端点需
- * {@code scds-gateway} 的采样端口与校准状态存储，本仓库尚不具备，仍为 501。
- * 因此 {@link #delete} 当前只删行、不删盘上的图片文件——留下的是孤立文件而非错误数据，
- * 图片段落落地时在此处补一次 {@code FileStore.delete(imagePath)} 即可。记为已知缺口。</p>
+ * <p><b>不在本类</b>：UWB 校准三端点需 {@code scds-gateway} 的采样端口与校准状态存储，
+ * 本仓库尚不具备，仍为 501。</p>
+ *
+ * <p><b>已知缺口</b>：落盘与更新行之间进程被杀（或提交阶段连接断开）会留下一个没人引用的
+ * 图片文件——占磁盘但不影响任何读取路径。库行才是唯一真相，故本类宁可留孤立文件，
+ * 也不做「先删文件再改行」：那种顺序一旦中途失败，现场看到的是「图在库里、点开却打不开」。</p>
  */
 @Service
 public class MapLedgerService {
+
+    private static final Logger log = LoggerFactory.getLogger(MapLedgerService.class);
 
     /** {@code uwb_meta} 是冻结的扁平 JSON（见 {@code BaseMap}），四角与两个长宽基准缺一不可。 */
     private static final List<String> REQUIRED_CORNERS = List.of("bs1", "bs2", "bs3", "bs4");
@@ -62,12 +72,25 @@ public class MapLedgerService {
     private final PlanRepository plans;
     private final ExerciseRepository exercises;
 
+    /**
+     * 底图图片的落盘与读取。
+     *
+     * <p>文件位置由本层决定而不是控制器：{@code t_map.image_path} 是相对路径（D09-①），
+     * 「相对哪儿」与「怎么解析」都属存储端口的实现细节，接口层只该拿到一条能签名的相对路径。</p>
+     */
+    private final FileStore store;
+
+    /** 图片上限（D09-⑥）取自配置而非硬编码：现场更换底图规格时不该改代码。 */
+    private final FileStorageProperties files;
+
     public MapLedgerService(BaseMapRepository maps, MapFloorRepository floors, PlanRepository plans,
-                            ExerciseRepository exercises) {
+                            ExerciseRepository exercises, FileStore store, FileStorageProperties files) {
         this.maps = maps;
         this.floors = floors;
         this.plans = plans;
         this.exercises = exercises;
+        this.store = store;
+        this.files = files;
     }
 
     /**
@@ -124,7 +147,7 @@ public class MapLedgerService {
      */
     @Transactional
     public void delete(UUID mapId) {
-        require(mapId);
+        BaseMap current = require(mapId);
         if (plans.existsByMapId(mapId)) {
             throw new BusinessException(ApiErrorCode.MAP_IN_USE, "底图已被想定引用，不能删除：" + mapId);
         }
@@ -133,6 +156,87 @@ public class MapLedgerService {
         }
         floors.deleteByMapId(mapId);
         maps.deleteById(mapId);
+        discard(current.imagePath(), mapId);
+    }
+
+    // ── 底图图片（契约 uploadMapImage / getMapImage）─────────────────────────
+
+    /**
+     * 上传或替换底图图片（契约 {@code uploadMapImage}）。
+     *
+     * <p><b>宽高由服务端解析图片头得出</b>，不收客户端给的数值：{@link #saveUwbMeta} 的越界校验
+     * 靠这两个值比对基站像素坐标，信客户端填的数就等于让标定校验可被绕过。</p>
+     *
+     * <p><b>落盘与改行的顺序</b>：先写新文件、再改 {@code image_path}、最后删旧文件。中途失败
+     * 只留一个没人引用的新文件（占磁盘），不会出现「库里指着新图、新图不存在」或「旧图已删、
+     * 行还没改」这两种点开图打不开的状态。换图不保留旧文件（D09-②）。</p>
+     *
+     * @throws BusinessException {@code UNSUPPORTED_MEDIA_TYPE} 不是白名单图片或读不出宽高；
+     *                           {@code PAYLOAD_TOO_LARGE} 超过 {@code scds.files.max-image-bytes}
+     */
+    @Transactional
+    public MapView uploadImage(UUID mapId, byte[] content) {
+        BaseMap current = require(mapId);
+        ImageHeaders.ImageSize size = ImageHeaders.sniff(content)
+                .orElseThrow(() -> new BusinessException(ApiErrorCode.UNSUPPORTED_MEDIA_TYPE,
+                        "不是白名单内的图片（仅收 PNG / JPEG / WebP）：" + mapId));
+        if (content.length > files.maxImageBytes()) {
+            throw new BusinessException(ApiErrorCode.PAYLOAD_TOO_LARGE,
+                    "底图超过上限 " + files.maxImageBytes() + " 字节，实际 " + content.length + " 字节");
+        }
+        // 文件名取新 uuid 而不是沿用旧名：换图换扩展名（png → jpg）时旧名会把格式带错，
+        // 也让「先写新、后删旧」成为可能。
+        String relativePath = "maps/" + mapId + "/" + UuidV7.generate() + size.format().extension();
+        store.put(relativePath, content);
+        maps.update(new BaseMap(current.id(), current.name(), current.mapType(), relativePath,
+                size.width(), size.height(), current.remark(), current.uwbMeta(),
+                current.createdAt(), current.updatedAt()));
+        discard(current.imagePath(), mapId);
+        return get(mapId);
+    }
+
+    /**
+     * 读取底图图片（契约 {@code getMapImage}）。
+     *
+     * <p>行里没有 {@code image_path}（还没上传过）与文件已不在磁盘（手工清理、跨机搬迁漏拷）
+     * 折叠成同一个 404 {@link ApiErrorCode#MAP_IMAGE_MISSING}：对现场都是「这张图现在取不到底图，
+     * 去重新上传」，拆成 404/500 只会让前端多一条无从处置的分支。</p>
+     */
+    public MapImage readImage(UUID mapId) {
+        BaseMap map = require(mapId);
+        String path = map.imagePath();
+        byte[] content = path == null ? null : store.read(path).orElse(null);
+        if (content == null) {
+            throw new BusinessException(ApiErrorCode.MAP_IMAGE_MISSING, "底图图片不存在：" + mapId);
+        }
+        // 按真实字节判定格式，不信扩展名：响应头要据此写 Content-Type，而文件是能被手工替换的。
+        ImageHeaders.ImageFormat format = ImageHeaders.sniff(content)
+                .map(ImageHeaders.ImageSize::format)
+                .orElseThrow(() -> new IllegalStateException("底图文件头无法识别，疑似被外部改动：" + path));
+        return new MapImage(content, format);
+    }
+
+    /** 底图图片的读取结果：字节 + 真实格式（格式决定响应的 {@code Content-Type}）。 */
+    public record MapImage(byte[] content, ImageHeaders.ImageFormat format) {
+    }
+
+    /**
+     * 删掉不再被任何行引用的旧图片文件。
+     *
+     * <p>失败只记 WARN 不抛出：库行已是唯一真相（见类注释的「已知缺口」），删不掉只是留一个
+     * 占磁盘的孤立文件，不值得让一次成功的换图 / 删除请求因为「旧文件删不掉」而整体失败。</p>
+     */
+    private void discard(String relativePath, UUID mapId) {
+        if (relativePath == null) {
+            return;
+        }
+        try {
+            if (!store.delete(relativePath)) {
+                log.warn("旧底图文件本就不存在，跳过删除：mapId={} path={}", mapId, relativePath);
+            }
+        } catch (RuntimeException e) {
+            log.warn("旧底图文件删除失败，已留作孤立文件：mapId={} path={}", mapId, relativePath, e);
+        }
     }
 
     // ── 楼层点位表（契约 listFloorPoints / replaceFloorPoints）──────────────────

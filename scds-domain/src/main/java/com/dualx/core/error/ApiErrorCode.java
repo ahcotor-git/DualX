@@ -89,6 +89,19 @@ public enum ApiErrorCode {
     // ===== SITUATION_* 态势 =====
     SITUATION_REVISION_TOO_OLD,
 
+    // ===== FILE_* 受保护文件 =====
+    /**
+     * 文件访问签名不成立：签名错、参数被改动，或已过期（HTTP 403，契约 {@code paths/files.yaml}）。
+     *
+     * <p>刻意**不拆分**「签名错」与「已过期」：客户端对两者的处置完全相同（回详情接口取新 URL），
+     * 拆开只会让探测者能区分「路径存在但签名不对」与「签名对但过期了」。</p>
+     *
+     * <p>与 {@link #AUTH_TOKEN_INVALID} 分属两个信任域：文件签名走独立 HMAC 密钥（D09-⑤），
+     * 轮换它不该让任何人重新登录。文件本身不存在则另走 {@link #MAP_IMAGE_MISSING}（404），
+     * 两者状态码不同，前端不必靠文案区分。</p>
+     */
+    FILE_URL_INVALID,
+
     // ===== 框架级兜底 =====
     /** 字段级校验失败，详情见 {@code Problem.errors}。 */
     VALIDATION_FAILED,
