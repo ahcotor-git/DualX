@@ -1,10 +1,14 @@
-package com.dualx.api.error;
+package com.dualx.core.error;
 
 /**
  * 稳定业务错误码（契约 docs/api/schemas/common.yaml → {@code Problem.code}）。
  *
  * <p>前端据此分支处理，**不得依赖 title 文案**。前缀分类与原值均与契约逐字一致；
  * 新增错误码必须先在 openapi 的 {@code Problem.code} 描述里登记，再回到这里补枚举。</p>
+ *
+ * <p>放在 scds-domain 而非 scds-api：core 的业务规则要先于接口层知道「失败属于哪一类」
+ * （口令错、令牌过期、限流……），而 core 不能反向依赖 api。枚举下沉后，core 抛
+ * {@link BusinessException}、api 只负责码到 HTTP 状态的一层映射，取值只有这一份定义。</p>
  *
  * <p>末尾四个（{@link #VALIDATION_FAILED} / {@link #RATE_LIMITED} / {@link #INTERNAL_ERROR}
  * / {@link #NOT_IMPLEMENTED}）不在 {@code *_} 业务前缀内，属框架级兜底：

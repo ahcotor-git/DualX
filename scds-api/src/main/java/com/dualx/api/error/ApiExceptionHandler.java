@@ -1,10 +1,13 @@
 package com.dualx.api.error;
 
 import com.dualx.api.support.TraceIdFilter;
+import com.dualx.core.error.ApiErrorCode;
+import com.dualx.core.error.BusinessException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -70,6 +73,30 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.BAD_REQUEST, ApiErrorCode.VALIDATION_FAILED, "请求参数校验未通过", request, null);
     }
 
+    /**
+     * 业务失败：core 抛 {@link BusinessException}，此处把 {@link ApiErrorCode} 折成 HTTP 状态。
+     *
+     * <p>{@code Retry-After} 只在限流时出现，且必须是**整秒**——契约与 RFC 7231 都只要秒粒度，
+     * 写小数会让客户端解析失败。</p>
+     */
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<ApiProblem> handleBusiness(BusinessException ex, HttpServletRequest request) {
+        HttpStatus status = statusOf(ex.code());
+        if (status == HttpStatus.INTERNAL_SERVER_ERROR) {
+            log.error("业务异常使用了尚未登记 HTTP 状态的错误码：{}，请先在本类补映射", ex.code());
+        } else {
+            log.debug("业务失败：{} {} → {} {}", request.getMethod(), request.getRequestURI(),
+                    status.value(), ex.code());
+        }
+        ApiProblem body = problemBody(status, ex.code(), ex.getMessage(), request, null);
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON);
+        if (ex.retryAfter() != null) {
+            builder.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.retryAfter().toSeconds()));
+        }
+        return builder.body(body);
+    }
+
     /** 兜底：未预期异常一律 500，且必须带 traceId 才能排障。 */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiProblem> handleUnexpected(Exception ex, HttpServletRequest request) {
@@ -77,13 +104,37 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, ApiErrorCode.INTERNAL_ERROR, "服务端内部错误", request, null);
     }
 
+    /**
+     * 错误码 → HTTP 状态。
+     *
+     * <p>刻意不做「按前缀猜」：{@code EXERCISE_*} 里既有 404（计划不存在）又有 409（已在运行），
+     * 猜错的代价是前端按状态分支时静默走错路。未登记的码落到 500 并在上面那条分支打 ERROR——
+     * 响亮地失败，比返回一个看着合理的 400 更容易在联调期被抓到。</p>
+     */
+    private static HttpStatus statusOf(ApiErrorCode code) {
+        return switch (code) {
+            case AUTH_BAD_CREDENTIALS, AUTH_TOKEN_EXPIRED, AUTH_TOKEN_INVALID, AUTH_DEVICE_NOT_BOUND ->
+                    HttpStatus.UNAUTHORIZED;
+            case AUTH_FORBIDDEN -> HttpStatus.FORBIDDEN;
+            case VALIDATION_FAILED -> HttpStatus.BAD_REQUEST;
+            case RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
+            case INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
+            case NOT_IMPLEMENTED -> HttpStatus.NOT_IMPLEMENTED;
+            default -> HttpStatus.INTERNAL_SERVER_ERROR;
+        };
+    }
+
     private ResponseEntity<ApiProblem> problem(HttpStatus status, ApiErrorCode code, String title,
                                                HttpServletRequest request, List<ApiProblem.FieldError> errors) {
-        Object traceId = request.getAttribute(TraceIdFilter.TRACE_ID_ATTRIBUTE);
-        ApiProblem body = new ApiProblem(ApiProblem.TYPE_ABOUT_BLANK, title, status.value(), code,
-                null, request.getRequestURI(), traceId == null ? null : traceId.toString(), errors);
         return ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(body);
+                .body(problemBody(status, code, title, request, errors));
+    }
+
+    private ApiProblem problemBody(HttpStatus status, ApiErrorCode code, String title,
+                                   HttpServletRequest request, List<ApiProblem.FieldError> errors) {
+        Object traceId = request.getAttribute(TraceIdFilter.TRACE_ID_ATTRIBUTE);
+        return new ApiProblem(ApiProblem.TYPE_ABOUT_BLANK, title, status.value(), code,
+                null, request.getRequestURI(), traceId == null ? null : traceId.toString(), errors);
     }
 }

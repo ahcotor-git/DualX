@@ -1,8 +1,8 @@
 package com.dualx.api.security;
 
-import com.dualx.api.error.ApiErrorCode;
 import com.dualx.api.error.ApiProblem;
 import com.dualx.api.support.TraceIdFilter;
+import com.dualx.core.error.ApiErrorCode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;

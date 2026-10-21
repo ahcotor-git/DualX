@@ -1,5 +1,6 @@
 package com.dualx.api.error;
 
+import com.dualx.core.error.ApiErrorCode;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
