@@ -1,8 +1,8 @@
 # ============================================================================
 # auth —— 账号与设备认证
-# 账号可由云侧签发 accessToken，或由具备签发能力的 PRIVATE 实例自签自验。
-# refreshToken 由维护本地刷新记录的实例签发；设备令牌挂钩本地绑定与 SID。
-# 离线验签要求本地公钥且 jwks-uri 为空；完整能力边界见 ../../design/03-auth.md。
+# 账号access/refresh和设备令牌均由本地业务实例签发；云端仅Nginx/FRPS公网入口。
+# refreshToken、账号身份、设备绑定与SID归本地同库，不需要云端账号同步或第二个认证baseUrl。
+# 本地PEM验签且jwks-uri必须为空；最新部署边界见 ../../architecture.md 第0节。
 # ============================================================================
 
 authLogin:
@@ -10,7 +10,9 @@ authLogin:
     tags: [auth]
     operationId: login
     summary: 账号登录
-    description: 发放 access/refresh 令牌。失败统一返回 `AUTH_BAD_CREDENTIALS`，不区分账号不存在与密码错误。
+    description: |
+      本地业务实例验证账号并发放 access/refresh 令牌；公网入口只转发同一接口。
+      失败统一返回 `AUTH_BAD_CREDENTIALS`，不区分账号不存在与密码错误。
     security: []
     requestBody:
       required: true
@@ -40,7 +42,8 @@ authRefresh:
     operationId: refreshToken
     summary: 刷新令牌
     description: |
-      用 refreshToken 换新的 access/refresh 令牌对（滚动刷新）。
+      在本地同一业务实例用 refreshToken 换新的 access/refresh 令牌对（滚动刷新），
+      不调用云端签发或同步服务；LAN访问不依赖FRPC或外网。
       到期返回 `AUTH_TOKEN_EXPIRED`；未知、篡改或已撤销返回 `AUTH_TOKEN_INVALID`。
       已撤销令牌重放将撤销该账号全部 refreshToken。
     security: []
@@ -81,6 +84,7 @@ authMe:
     tags: [auth]
     operationId: getCurrentUser
     summary: 获取当前登录用户
+    description: 从本地账号库读取当前用户，身份源与登录一致，不从云端或未登记JWT字段拼装User。
     responses:
       '200':
         description: 当前用户

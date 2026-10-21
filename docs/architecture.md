@@ -2,6 +2,37 @@
 
 > 核查日期：2026-10-21。已实现和目标架构分开记录；源代码基线 `da02622`。
 > 需求见 [requirements.md](requirements.md)，风险见 [review.md](review.md)。
+> 2026-10-21最新部署决定：全部业务本地部署，云端仅Nginx/FRPS公网入口，
+> 本地FRPC主动建立隧道。本文部署与鉴权边界取代旧云管、云签和双签发候选设计。
+> 旧基线计数是历史记录，不代表本次架构变更已完成生产验收。
+
+## 0. 本地部署拓扑（已确认）
+
+```mermaid
+flowchart LR
+    REMOTE[远程Android / Windows] -->|HTTPS / WSS 443| NGINX[云端Nginx TLS入口]
+    NGINX -->|云端回环代理端口| FRPS[云端FRPS]
+    FRPS <-->|本地主动连接 加密隧道| FRPC[本地FRPC]
+    FRPC -->|11001 本机或受限内网| APP[本地scds-next 单业务进程]
+    LAN[现场Android / Windows] -->|可信LAN 11001或本地HTTPS入口| APP
+    APP --> DB[(本地MySQL)]
+    APP --> FILES[本地文件资产]
+    HARDWARE[马甲串口 / 本地UWB 12001] --> APP
+```
+
+- 开发机验证后迁入Mini PC/现场主机；每客户独立实例、数据库、密钥、文件和代理资源。
+- 云端不部署scds-next、数据库、文件业务、账号管理或JWT签发；云端TLS证书不是业务JWT密钥。
+- 账号access/refresh和deviceToken都由同一个本地业务实例签发，本地PEM验签。
+  issuer、三种aud、设备sid、TTL、token_hash刷新及全端logout规则保持不变。
+- auth/me读本地账号库，与登录共享身份源；不增加云端账号同步、JWT身份快照或第二个认证baseUrl。
+- FRPC只是可选公网接入适配，不参与业务状态、账号授权或硬件事件；断隧道不停止本地服务。
+- 外网中断时LAN客户端仍能本地登录、刷新和开展已实现业务；远程客户端不可达，
+  不能把“本地可用”宣传成“远程断网可用”，也不自动保证未实现业务闭环。
+- 本地HTTP固定11001、硬件UWB固定12001。云端443及隧道端口不改变契约业务端口。
+- 只穿透HTTP/WS业务入口，不穿透MySQL、串口或未认证UWB TCP，不公开运维指标。
+
+FRPC/Nginx样例与资源隔离要求见[部署说明](../deploy/README.md)。
+域名、证书、FRPS监听/代理端口及凭据由部署阶段另行分配，不复用ZAA的站点或秘密。
 
 ## 1. 技术与依赖基线
 
@@ -125,7 +156,9 @@ refresh：hash定位、账号行锁、token锁定读，避免MySQL REPEATABLE RE
 API层通过SecurityConfig的aud授权、RsaTokenSigner与本地decoder适配JWT。
 重要缺口：expired映射、必需claims、指标子路由、Boot MVC错误优先级、只验签路由行为。
 AccountSession包含库Account（内有passwordHash），接线时只能显式映射User安全字段，
-不能把这个核心内部载体直接JSON返回。详见 [鉴权设计](design/03-auth.md)。
+不能把这个核心内部载体直接JSON返回。旧[鉴权设计](design/03-auth.md)中的云端签发
+及双用途issuer拆分不再适用；当前部署模型以本文第0节及环境手册为准，
+复用本地AuthService和TokenSigner。
 
 ## 6. 演习自愈方案
 
@@ -149,10 +182,17 @@ Runner结束先于ApplicationReadyEvent，但不阻止端口提前收请求；�
 
 ## 8. 配置与部署边界
 
-`SCDS_PROFILE` 决定Spring配置环境，`SCDS_DEPLOYMENT_MODE`登记PRIVATE/CLOUD形态，
-`SCDS_JWT_SIGNING`决定签发能力，三者不能互相推导。
+`SCDS_PROFILE`决定Spring配置环境；本地业务部署显式启用`SCDS_JWT_SIGNING=true`。
+`SCDS_DEPLOYMENT_MODE`是无消费者的历史兼容登记，保留PRIVATE默认值，
+不再代表需要实现CLOUD业务节点，也不控制是否启用FRPC。
+签发开关仍保持显式配置；false仅用于受控只验签测试/工具，不是现场完整业务部署。
+远端JWKS不再属于目标能力，非空配置必须在本地绑定阶段失败，防止验签意外依赖外网。
+业务JWT私钥、账号、绑定、数据库和文件只保存在本地；云端只保管TLS及FRPS入口配置。
+FRPC原生运行时转发本机回环11001；如需要LAN直连，应用绑定经批准的LAN地址或网卡，
+防火墙仅允许现场网段。容器FRPC的127.0.0.1不等于宿主机，不能盲抄ZAA容器localIP。
 当前 deployment-mode 无消费者、硬件能力开关未实现、UWB参数尚无Spring绑定bean。
-本仓库只有开发MySQL compose，没有应用Dockerfile、生产Compose、服务管理或部署脚本。
+本仓库只有开发MySQL compose；deploy目录提供FRPC/Nginx配置样例，
+不是已部署服务，尚无应用Dockerfile、生产Compose或服务管理安装脚本。
 HTTP graceful 不管理串口、WS与TCP资源；完整生命周期需显式实现。
 
 ## 9. 分阶段实施与完成定义

@@ -301,8 +301,8 @@ class SecurityJwtValidationIT {
     }
 
     @Test
-    void jwksUsesSameValidationWithoutFetchingAtConstruction() throws Exception {
-        // Loopback-only test key server; no production service or external network is involved.
+    void localDeploymentRejectsJwksWithoutFetching() throws Exception {
+        // A loopback tripwire proves that rejected configuration never fetches keys.
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         AtomicInteger requests = new AtomicInteger();
         byte[] keys = new JWKSet(new RSAKey.Builder((RSAPublicKey) KEY.getPublic()).build())
@@ -320,25 +320,12 @@ class SecurityJwtValidationIT {
         server.start();
         try {
             String uri = "http://127.0.0.1:" + server.getAddress().getPort() + "/jwks";
-            AuthJwtProperties properties = new AuthJwtProperties(ISSUER, false,
-                    null, null, null, null, uri, null, null, null, null);
-            JwtDecoder decoder = new JwtDecoderConfig().jwtDecoder(properties);
+            assertThatThrownBy(() -> new AuthJwtProperties(ISSUER, false,
+                    null, null, null, null, uri, null, null, null, null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Local deployment requires PEM keys; remote JWKS is not supported.")
+                    .hasMessageNotContaining(uri);
             assertThat(requests).hasValue(0);
-            Map<String, Object> valid = claims("scds-edge");
-            assertThat(decoder.decode(sign(valid, KEY)).getSubject()).isEqualTo(valid.get("sub"));
-            assertThat(requests.get()).isPositive();
-
-            Map<String, Object> expired = claims("scds-edge");
-            expire(expired);
-            expectDecoderError(decoder, sign(expired, KEY), "AUTH_TOKEN_EXPIRED");
-            Map<String, Object> invalid = claims("scds-edge");
-            invalid.remove("exp");
-            String invalidEncoded = sign(invalid, KEY);
-            assertThatThrownBy(() -> decoder.decode(invalidEncoded)).isInstanceOf(BadJwtException.class);
-            String wrongSignature = sign(expired, WRONG_KEY);
-            assertThatThrownBy(() -> decoder.decode(wrongSignature))
-                    .isInstanceOf(BadJwtException.class)
-                    .isNotInstanceOf(JwtValidationException.class);
         } finally {
             server.stop(0);
         }

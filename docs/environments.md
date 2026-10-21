@@ -2,6 +2,8 @@
 
 > 核查日期：2026-10-21。开发环境已实测；生产部分为部署要求与候选流程，尚未发布验证。
 > 源代码入口：`e:\DualX\scds-next`。当前状态见 [snapshot.md](../snapshot.md)。
+> 最新部署决定：本地承载全部业务，云端仅Nginx/FRPS入口，本地FRPC主动穿透。
+> 本文部署规范优先于旧云签/云端账号同步设计；历史环境事实不代表本次已部署远端。
 
 ## 1. 当前环境事实
 
@@ -113,17 +115,17 @@ curl.exe -i http://127.0.0.1:11001/api/v1/exercise/current
 | 配置 | 作用 | 注意事项 |
 |---|---|---|
 | SCDS_PROFILE | Spring环境 | local只供本机；生产无默认Profile或外部文件自动导入 |
-| SCDS_DEPLOYMENT_MODE | PRIVATE/CLOUD部署登记 | 当前没有业务消费者 |
+| SCDS_DEPLOYMENT_MODE | 历史兼容登记，保留PRIVATE | 当前没有业务消费者；不启用云端业务，不控制FRPC |
 | SCDS_MYSQL_USER/PASSWORD | 应用库身份 | 不使用root；生产单独账号、库及权限 |
 | SCDS_JDBC_URL | 连接串覆盖 | 必须含rewriteBatchedStatements=true；不要将生产库提供给IT |
 | SCDS_MYSQL_ROOT_PASSWORD | 开发容器初始化/运维 | 应用不使用，已建卷改env不改密码 |
 | SCDS_ADMIN_USERNAME/PASSWORD | 首次建管理员 | 明文只在受保护部署配置；应用BCrypt，不写迁移seed |
 | SCDS_ADMIN_DISPLAY_NAME | 初始显示名 | 可选，空时回退用户名 |
-| SCDS_JWT_SIGNING | 当前全部三类令牌的签发能力 | false不读私钥；设备独立签发策略待裁定 |
+| SCDS_JWT_SIGNING | 本地全部三类令牌的签发能力 | 现场业务设true；false保留测试/工具用途，不是完整部署 |
 | SCDS_JWT_ISSUER | JWT实例issuer | 签发/验签双方一致；当前允许非URL实例标识 |
 | SCDS_JWT_PUBLIC_KEY[_FILE] | 单把本地验签PEM | X.509 PUBLIC KEY；优先内联后文件，生产推荐绝对文件路径 |
 | SCDS_JWT_PRIVATE_KEY[_FILE] | 签发私钥 | 未加密PKCS#8 PRIVATE KEY；生产每客户不同、不可入库 |
-| SCDS_JWKS_URI | 远端JWKS路径 | 非空会切到远端验签，无本地兜底；离线现场必须留空 |
+| SCDS_JWKS_URI | 旧配置兼容键，必须为空 | 本地PEM验签；非空配置绑定失败，不访问云端密钥 |
 
 PEM文件避免将多行内容塞进 `.env`。Spring将其按properties导入，
 反斜杠/转义/注释字符与Docker env语义不完全相同；hex口令及路径正斜杠较易跨工具一致。
@@ -139,25 +141,35 @@ ttl、串口、UWB等还可通过Spring参数设置，但硬约束端口不得�
 **当前禁止按生产成品交付**。缺应用部署脚本、业务闭环、设备接入、
 安全回归、客户端与容量/恢复验证。下列内容是下一阶段部署规范，不是已存在自动化。
 
-候选正式业务承载节点为Mini PC/现场主机，ECS作为公网入口；
-当前开发仍在本机，无本次远程节点连通性、容器或云配置核验。
-PRIVATE为离线/现场独立业务实例，CLOUD为客户独立云实例，不引tenant_id。
+正式业务承载形态已确认为Mini PC/现场本地主机，开发阶段先在本机验证。
+本地承载Java API/WS、AuthService、设备绑定/SID、MySQL、文件资产及串口/UWB，
+云端仅Nginx TLS入口和FRPS，不运行scds-next或数据库、账号服务。
+本地FRPC主动建立隧道，无需公网直接连接现场主机；LAN与公网访问同一业务实例。
+不再实现独立CLOUD业务实例，不引tenant_id，不新增云边账号同步或双issuer。
+本次没有远程节点连通性、现有FRPS、证书或公网可用性核验。
 
 | 准入项 | 生产要求 |
 |---|---|
 | 系统 | 经硬件驱动验证的OS + Java21；Windows COM或Linux串口权限必须实测 |
 | 进程 | 同客户同库单业务进程，受服务管理器托管；禁止两实例同时启动收尾 |
-| 服务地址 | 显式指定绑定地址与防火墙，内部11001不变；不得误用local导致只监听回环 |
+| 服务地址 | 原生同机FRPC可用回环；LAN直连另绑定受限网卡/地址并限制现场网段，11001不变 |
 | 数据库 | 受支持且经过Flyway升级验证的MySQL8.4补丁/镜像digest，独立客户库 |
 | DB网络 | 仅内网/容器网或回环；不得暴露13306到公网 |
-| JWT | 每客户独立PEM，最小文件权限，公钥分发/issuer一致，禁用公开dev-keys |
+| JWT | 本地每客户独立PEM和issuer，signing=true，云端不持业务私钥，禁用公开dev-keys |
 | TLS | 公网入口HTTPS/WSS，后端11001内网；JWT签名不是传输加密 |
 | UWB | 12001仅可信现场硬件网段，不能直接公网暴露未认证原始TCP |
-| 代理 | 可信代理白名单，覆盖外来XFF/Forwarded；不得直接信任客户端头 |
+| 代理 | FRPC仅转发业务HTTP/WS；FRPS代理端口仅云端回环；Nginx覆盖外来XFF/Forwarded |
 | 文件 | 指定底图/导出持久目录或对象存储，上传大小/类型/路径/下载授权均测试 |
 | 观测 | health、日志traceId、DB池、队列、WS背压、链路坏帧、心跳失败；指标仅ADMIN |
 | 备份 | DB + 文件资产 + 恢复所需安全配置；离线加密保存私钥，恢复演练，不只“备份成功” |
 | 发布 | 制品hash、commit、迁移清单、配置校验、回滚方案与现场验收记录 |
+
+公网与本地使用同一套路径和账号，不另配云端认证baseUrl。
+断外网后现场客户端通过LAN仍可登录/刷新，远程用户不可达；断DB仍属业务故障。
+JWT不会给HTTP请求加密：公网必须HTTPS/WSS；不可信LAN也须本地TLS入口。
+应用默认不信任Forwarded头，公网源IP限流先由云端Nginx承担；
+如要在本地使用真实客户端IP，须另行实现并验证严格可信代理链，不直接开启全信任。
+FRPC/Nginx配置样例、独立代理资源及WS验证见[部署说明](../deploy/README.md)。
 
 ### 6.1 外部配置示意
 
@@ -177,6 +189,8 @@ Windows使用实际绝对位置，例如 `file:E:/ScdsConfig/application.propert
 server.address=127.0.0.1
 scds.deployment-mode=PRIVATE
 scds.auth.jwt.signing-enabled=true
+scds.auth.jwt.issuer=scds-customer-local
+scds.auth.jwt.jwks-uri=
 scds.auth.jwt.public-key-file=/etc/scds/keys/jwt-public.pem
 scds.auth.jwt.private-key-file=/etc/scds/keys/jwt-private.pem
 spring.datasource.url=jdbc:mysql://127.0.0.1:13306/scds_next?rewriteBatchedStatements=true
@@ -184,7 +198,7 @@ spring.datasource.username=scds_app
 # spring.datasource.password 由受保护配置/部署环境提供
 ```
 
-示例的回环地址只适合反向代理/同机接入；直连LAN现场要换为经批准的监听地址，
+示例的回环地址适合同机原生FRPC接入；直连LAN现场要换为经批准的监听地址，
 但不改端口。不能将这一示例原封不动视为任何客户的真实生产配置。
 
 ### 6.2 密钥

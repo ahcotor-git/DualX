@@ -10,6 +10,8 @@
 # ============================================================================
 server:
   port: 11001
+  # 公网入口由Nginx/FRP转发；未建立可信代理链前不信任客户端转发头。
+  forward-headers-strategy: none
   # 停机必须优雅：串口链路要在进程退出前释放，UWB 接收缓冲要在退出前 flush。
   # 直接强杀会让下一次启动抢不到 COM 口（Windows 上尤其明显）。
   shutdown: graceful
@@ -22,9 +24,8 @@ spring:
     timeout-per-shutdown-phase: 20s
   profiles:
     # ⚠ 这里只表达「运行环境」这一个维度（local / 现场部署 profile）。
-    #   它与下面 scds.deployment-mode 的「部署形态」（CLOUD / PRIVATE）是**两个正交维度**，
-    #   刻意用两个不同的变量驱动。用同一个变量既当 profile 名又当业务开关时，
-    #   本机开发会出现「profile=local 而形态仍是 private」这类错配，且没人能一眼看出。
+    #   全部业务现在本地部署，云端仅Nginx/FRPS；FRPC不由profile推导。
+    #   deployment-mode只保留历史兼容登记，不代表存在云端业务进程。
     #
     # 刻意不给默认值：默认值若是 local，会连带把 server.address 锁到 127.0.0.1，
     # 生产上漏配就等于 11001 无法从外部访问——这种"静默默认"比漏配直接报错危险得多。
@@ -65,26 +66,21 @@ spring:
     locations: classpath:db/migration
 
 scds:
-  # CLOUD | PRIVATE —— 部署**形态**（不是运行环境，也不是能力开关）。
-  # 与「能力开关」刻意分开：签不签发令牌（scds.auth.jwt.signing-enabled）、
-  # 装不装硬件链路（scds.edge.hardware-enabled）各自由能力开关决定，
-  # 禁止在代码里用 deployment-mode 反推能力——PRIVATE 也可以只验签不签发，
-  # CLOUD 也可以在某客户的边缘实例上打开签发（离线演练）。
-  # ⚠ 当前尚无消费者：能力开关落地（设计 03）时才接线，此处先作为运维约定登记。
+  # 历史兼容登记，当前无消费者。业务只部署本地，不再计划CLOUD业务节点。
+  # 账号/设备统一由本地签发；是否开启可选FRPC不由此字段或profile推导。
   deployment-mode: ${SCDS_DEPLOYMENT_MODE:PRIVATE}
 
-  # ===== 鉴权（完整设计见 docs/design/03-auth.md）=====
+  # ===== 本地鉴权（最新部署边界见 docs/architecture.md 第0节）=====
   # 两条铁律：
   #   1. 验签只用本地公钥，**启动过程绝不联网**——因此禁用 Boot 的
   #      spring.security.oauth2.resourceserver.jwt.* 自动装配（issuer-uri 形态会在
   #      启动期做一次 OIDC 发现，现场无外网表现为「服务起不来」）。
-  #   2. 环境（deployment-mode）与能力（signing-enabled）正交，禁止互相反推。
+  #   2. 现场实例显式启用本地签发；false仅保留受控测试/工具用途。
   auth:
     jwt:
       issuer: ${SCDS_JWT_ISSUER:scds-edge}
-      # 本进程是否具备签发账号 accessToken 的能力。false 时 login/refresh/logout
-      # 三个端点**不注册**（404）——而不是注册后返回 501，因为 501 在本项目里
-      # 专指「骨架期占位」，混用会让客户端分不清「没实现」与「这台机器不签发」。
+      # 本地统一签发账号access/refresh和deviceToken。现场业务应为true。
+      # false保留测试/工具用途；当前控制器尚未接线，不宣称已实现关闭能力的404。
       signing-enabled: ${SCDS_JWT_SIGNING:true}
       # 验签公钥：内联 PEM 或文件二选一。内联形态在 .env/.properties 里要把换行写成 \n，
       # 现场更推荐用 public-key-file，省掉转义与「换行被吃掉」这类难查问题。
@@ -93,11 +89,11 @@ scds:
       # 签名私钥：仅 signing-enabled=true 时需要。**绝不内置默认私钥**——那等于所有客户共用一把钥匙。
       private-key: ${SCDS_JWT_PRIVATE_KEY:}
       private-key-file: ${SCDS_JWT_PRIVATE_KEY_FILE:}
-      # 云管 JWKS 端点。留空 = 永不联网，只用本地公钥（PRIVATE 单机的常态）。
+      # 历史配置键，必须为空；非空在AuthJwtProperties绑定时失败，不访问远端。
       jwks-uri: ${SCDS_JWKS_URI:}
       jwks-refresh-ms: 3600000
       # 有效期三档：access 覆盖一次指挥台作业，refresh 覆盖一次集训周期，
-      # device 覆盖单日演习（设备令牌不该跨天存活，丢了重登即可）。
+      # device从签发起有效12小时，不按日历午夜截断；会话SID另行校验。
       access-token-ttl: 30m
       refresh-token-ttl: 14d
       device-token-ttl: 12h
@@ -106,7 +102,7 @@ scds:
   # 迁移文件刻意不种任何账号：写死口令等于所有客户共用一把钥匙，写死散列则无法换口令。
   # 这里由部署侧提供口令明文，应用在启动时用 BCrypt 落成散列，**建号成功后建议从 .env
   # 删掉 SCDS_ADMIN_PASSWORD**——此后进程不再读它，口令只以散列形式存在于库中。
-  # 两项任一为空则跳过建号（CLOUD 形态下账号由云管下发，边缘本就不该自建）。
+  # 两项任一为空则跳过建号；云端只做代理，不下发账号，本地首次部署显式配置。
   admin:
     username: ${SCDS_ADMIN_USERNAME:}
     password: ${SCDS_ADMIN_PASSWORD:}

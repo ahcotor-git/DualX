@@ -32,7 +32,8 @@ info:
   summary: 实兵演习系统（马甲 + UWB）边缘网关契约
   description: |
     阶段 1 契约草案。覆盖边缘域（auth / exercise / command / situation / device / map / replay），
-    云管域（License、OTA）不在本文件范围。
+    所有业务部署本地，云端仅Nginx/FRPS反向代理，本地FRPC提供可选公网接入。
+    云管域（License、OTA）不建设，账号、设备和刷新均由本地业务实例管理。
 
     **双通道硬约束**：态势与链路状态必须同时提供 WebSocket 与低频 HTTP Poll 两条通道，
     且两者返回**同构载荷**。WS 只降低延迟，Poll 负责兜底与恢复；客户端即使 WS 已连接，
@@ -55,10 +56,16 @@ servers:
       host:
         default: 127.0.0.1
         description: 边缘网关地址。私有化部署时为现场主机 IP。
+  - url: https://{publicHost}
+    description: 可选公网HTTPS/WSS入口，经云端Nginx和FRP转发同一本地11001服务；域名待分配
+    variables:
+      publicHost:
+        default: scds.example.invalid
+        description: 经批准的客户公网域名，示例不是已部署站点。
 
 tags:
   - name: auth
-    description: 账号登录与单兵终端登录（JWT 云签、边缘离线验签）
+    description: 账号登录与单兵终端登录（JWT 本地签发、本地PEM验签）
   - name: exercise
     description: 想定、编成与演习生命周期（边缘同一时刻仅一场演习）
   - name: command
@@ -195,14 +202,14 @@ paths:
 components:
 
   securitySchemes:
-    # 云管签发、边缘离线验签。私有化无外网时依然可用（只依赖公钥）。
+    # 本地统一签发/验签。无外网时LAN登录与刷新可用，云端不持业务JWT私钥。
     # accessToken 短有效期（建议 30min），refreshToken 长有效期且可撤销。
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
     # 单兵终端（马甲 App）专用：可见字段被裁剪到「自身 + 所属队伍」。
-    # 与账号令牌同走 Authorization: Bearer，但签发者与受众不同，服务端按 aud 区分。
+    # 与账号令牌同由本地实例签发、同走Authorization: Bearer，服务端按aud区分用途。
     deviceToken:
       type: http
       scheme: bearer
@@ -222,7 +229,7 @@ x-scds-invariants:
   ports:
     http: 11001
     uwbTcpServer: 12001
-    note: 与部署形态无关，CLOUD / PRIVATE 均相同。
+    note: 本地业务固定端口；可选云端443及FRP代理端口不改变11001/12001，UWB不公网穿透。
 
   dualChannel:
     channels: [WEBSOCKET, HTTP_POLL]

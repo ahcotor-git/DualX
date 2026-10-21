@@ -1,0 +1,20 @@
+# Native FRPC on the same host as scds-next. No credentials are stored here.
+# FRPC renders Go templates from process environment; .env is not auto-loaded.
+# Reserve the server/control/proxy resources before starting this example.
+serverAddr = "{{ .Envs.SCDS_FRP_SERVER_ADDR }}"
+serverPort = {{ .Envs.SCDS_FRP_SERVER_PORT }}
+
+auth.method = "token"
+auth.token = "{{ .Envs.SCDS_FRP_TOKEN }}"
+
+transport.tls.enable = true
+transport.tls.serverName = "{{ .Envs.SCDS_FRP_SERVER_NAME }}"
+transport.tls.trustedCaFile = "{{ .Envs.SCDS_FRP_CA_FILE }}"
+
+[[proxies]]
+name = "{{ .Envs.SCDS_FRP_PROXY_NAME }}"
+type = "tcp"
+localIP = "{{ .Envs.SCDS_FRP_LOCAL_IP }}"
+localPort = 11001
+# FRPS must bind this port to loopback; only cloud Nginx may reach it.
+remotePort = {{ .Envs.SCDS_FRP_REMOTE_PORT }}
