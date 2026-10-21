@@ -1,6 +1,7 @@
 package com.dualx.api.map;
 
 import com.dualx.api.dto.common.PageMeta;
+import com.dualx.api.dto.map.FloorPoint;
 import com.dualx.api.dto.map.FloorPointsRequest;
 import com.dualx.api.dto.map.FloorPointsResponse;
 import com.dualx.api.dto.map.MapDetail;
@@ -17,6 +18,9 @@ import com.dualx.core.error.BusinessException;
 import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -34,19 +38,23 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
  * map 域：底图 / 楼层点位表 / UWB 坐标标定（契约 docs/api/paths/map.yaml）。
  *
  * <p><b>已接线</b>：底图台账 CRUD（{@code listMaps} / {@code createMap} / {@code getMap} /
- * {@code updateMap} / {@code deleteMap}）走 {@link MapLedgerService}。本层只做契约形状的搬运
- * （DTO ↔ 读取模型），「能不能删」这类判断全在服务层——写进控制器会让同一规则在 REST 与
+ * {@code updateMap} / {@code deleteMap}）、楼层点位表（{@code listFloorPoints} /
+ * {@code replaceFloorPoints}）与 UWB 标定参数（{@code getUwbMeta} / {@code putUwbMeta}）
+ * 走 {@link MapLedgerService}。本层只做契约形状的搬运（DTO ↔ 读取模型 ↔ 冻结 JSON），
+ * 「能不能删」「标定参数自不自洽」这类判断全在服务层——写进控制器会让同一规则在 REST 与
  * 将来的 WS 入口上各写一遍。</p>
  *
  * <p><b>仍是占位（501）</b>：图片上传 / 下载（{@code uploadMapImage} / {@code getMapImage}，
- * 需 {@code FileStore} 与真实图片头校验）、楼层点位表、UWB 标定四个端点。它们各自
- * 属后续段落，本段只保证路由与 DTO 已按契约立起。</p>
+ * 需 {@code FileStore} 与真实图片头校验）与 UWB 校准三端点（{@code startUwbCalibration} /
+ * {@code getUwbCalibration} / {@code clearUwbCalibration}，需 {@code scds-gateway} 的采样端口
+ * 与校准状态存储，本仓库尚不具备）。它们各自属后续段落，本段只保证路由与 DTO 已按契约立起。</p>
  *
  * <p>不设类级路径前缀，逐方法写完整绝对路径。</p>
  */
@@ -56,8 +64,15 @@ public class MapController {
 
     private final MapLedgerService ledger;
 
-    public MapController(MapLedgerService ledger) {
+    /**
+     * 冻结 JSON（{@code t_map.uwb_meta} 文本列与楼层点位数组）在这层的进出靠它：
+     * 契约 DTO 与库内文本因此共用一份结构定义，不需要手写字符串拼接。
+     */
+    private final ObjectMapper json;
+
+    public MapController(MapLedgerService ledger, ObjectMapper json) {
         this.ledger = ledger;
+        this.json = json;
     }
 
     // ── 底图台账 ────────────────────────────────────────────────────────────
@@ -113,33 +128,49 @@ public class MapController {
         throw new NotImplementedException("getMapImage");
     }
 
-    // ── 楼层点位表（占位：随楼层段落落地）────────────────────────────────────
+    // ── 楼层点位表 ──────────────────────────────────────────────────────────
 
-    /** 楼层点位表。 */
+    /**
+     * 楼层点位表。
+     *
+     * <p>该楼层还没录过点位表时返回**空列表**而不是 404：「这一层还没标点」是正常状态，
+     * 前端拿到的就是「零个点位」。</p>
+     */
     @GetMapping("/api/v1/maps/{mapId}/floors/{floorNum}/points")
     public FloorPointsResponse listFloorPoints(@PathVariable String mapId, @PathVariable int floorNum) {
-        throw new NotImplementedException("listFloorPoints");
+        String points = ledger.floorPoints(mapId(mapId), floorNum);
+        List<FloorPoint> parsed = points == null || points.isBlank()
+                ? List.of() : read(points, new TypeReference<List<FloorPoint>>() {
+                });
+        return new FloorPointsResponse(parsed);
     }
 
-    /** 整体替换楼层点位表。 */
+    /**
+     * 整体替换楼层点位表（**单楼层**语义：别的楼层不受影响）。
+     *
+     * <p>回显请求体而不是回读库：这是一次全量替换，响应就是替换后的点位集合；回读只会多一次
+     * 往返，还要面对 MySQL 对 JSON 列的键序重排（值相同、文本不同），徒增无意义的比对成本。</p>
+     */
     @PutMapping("/api/v1/maps/{mapId}/floors/{floorNum}/points")
     public FloorPointsRequest replaceFloorPoints(@PathVariable String mapId, @PathVariable int floorNum,
                                                  @RequestBody @Valid FloorPointsRequest body) {
-        throw new NotImplementedException("replaceFloorPoints");
+        ledger.replaceFloorPoints(mapId(mapId), floorNum, write(body));
+        return body;
     }
 
-    // ── UWB 坐标标定（占位：随标定段落落地）──────────────────────────────────
+    // ── UWB 坐标标定 ────────────────────────────────────────────────────────
 
-    /** 获取 UWB 坐标标定参数（旧 uwb_meta.json）。 */
+    /** 获取 UWB 坐标标定参数（旧 uwb_meta.json）；尚未标定时 404 MAP_NOT_CALIBRATED。 */
     @GetMapping("/api/v1/maps/{mapId}/uwb-meta")
     public UwbMeta getUwbMeta(@PathVariable String mapId) {
-        throw new NotImplementedException("getUwbMeta");
+        return read(ledger.uwbMeta(mapId(mapId)), UwbMeta.class);
     }
 
-    /** 保存 UWB 坐标标定参数。 */
+    /** 保存 UWB 坐标标定参数；基站缺项或几何不自洽时 400 MAP_UWB_META_INCOMPLETE。 */
     @PutMapping("/api/v1/maps/{mapId}/uwb-meta")
     public UwbMeta putUwbMeta(@PathVariable String mapId, @RequestBody @Valid UwbMeta body) {
-        throw new NotImplementedException("putUwbMeta");
+        ledger.saveUwbMeta(mapId(mapId), write(body));
+        return body;
     }
 
     /** 触发 UWB 中心基准校准（异步，用 GET 查进度）。 */
@@ -175,6 +206,37 @@ public class MapController {
             return UUID.fromString(raw);
         } catch (IllegalArgumentException malformed) {
             throw new BusinessException(ApiErrorCode.MAP_NOT_FOUND, "底图不存在：" + raw);
+        }
+    }
+
+    /**
+     * 库内冻结 JSON → DTO。
+     *
+     * <p>读不出来说明库里存了不是本服务写入的内容（手工改库、历史残留），属服务端数据缺陷：
+     * 让它走 500 并在日志里留下 ERROR，比返回一个半空对象更容易在联调期被抓到。</p>
+     */
+    private <T> T read(String text, Class<T> type) {
+        try {
+            return json.readValue(text, type);
+        } catch (JsonProcessingException broken) {
+            throw new IllegalStateException("底图冻结 JSON 读不出来", broken);
+        }
+    }
+
+    private <T> T read(String text, TypeReference<T> type) {
+        try {
+            return json.readValue(text, type);
+        } catch (JsonProcessingException broken) {
+            throw new IllegalStateException("底图冻结 JSON 读不出来", broken);
+        }
+    }
+
+    /** DTO → 库内冻结 JSON。序列化的是刚过 Bean Validation 的契约形状，正常不可能失败。 */
+    private String write(Object value) {
+        try {
+            return json.writeValueAsString(value);
+        } catch (JsonProcessingException broken) {
+            throw new IllegalStateException("底图冻结 JSON 写不出去", broken);
         }
     }
 

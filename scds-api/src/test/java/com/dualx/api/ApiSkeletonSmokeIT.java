@@ -16,6 +16,7 @@ import com.dualx.core.auth.DeviceAuthService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -97,8 +98,10 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
-        // 底图台账同理：底图 CRUD 已接核心 MapLedgerService，真实链路（楼层数 / 标定齐备
-        // 判定 / 被想定引用时 409）由 MapLedgerServiceIT 与 scds-app 的 HTTP 端到端覆盖。
+        // 底图台账同理：底图 CRUD、楼层点位表与 UWB 标定参数都已接核心 MapLedgerService，
+        // 真实链路（楼层数 / 标定齐备判定 / 越界与退化校验 / 被想定引用时 409）由
+        // MapLedgerServiceIT 与 scds-app 的 HTTP 端到端覆盖。替身一律抛占位异常，
+        // 使已接线端点在本测试里与真占位端点响应一致——本测试只问「路由注册了没有」。
         MapLedgerService mapLedgerService = Mockito.mock(MapLedgerService.class, invocation -> {
             if (invocation.getMethod().getDeclaringClass() == Object.class) {
                 return invocation.callRealMethod();
@@ -112,7 +115,9 @@ class ApiSkeletonSmokeIT {
                         new CommandController(),
                         new SituationController(),
                         new DeviceController(vestLedgerService, anchorLedgerService),
-                        new MapController(mapLedgerService),
+                        // standalone 不装配 Spring 上下文，ObjectMapper 只能自备：本测试里
+                        // 底图相关的 JSON 进出都会被替身的占位异常截断，用默认配置即可。
+                        new MapController(mapLedgerService, new ObjectMapper()),
                         new ReplayController())
                 .setControllerAdvice(new ApiExceptionHandler())
                 // standalone 不装配安全链，@AuthenticationPrincipal 需要显式解析器；

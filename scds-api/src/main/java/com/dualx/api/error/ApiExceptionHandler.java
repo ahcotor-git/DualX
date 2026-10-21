@@ -243,16 +243,20 @@ public class ApiExceptionHandler {
             // ── 台账域（M2 LEDGER）──────────────────────────────────────────────
             // 逐项按契约登记，不按前缀猜：同一前缀里既有 404（马甲不存在）又有 409（编号冲突）。
             // 尚未落服务的码（COMMAND_*、REPLAY_*、MAP_IMAGE_MISSING、
-            // MAP_UWB_META_INCOMPLETE、MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
+            // MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
             // 落地那一刻再补进这张表，而不是现在替它们猜一个看着合理的状态。
             case DEVICE_VEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND,
                  EXERCISE_ALREADY_RUNNING -> HttpStatus.CONFLICT;
 
-            // ── 地图域（M2 MAP-BASE 底图台账）────────────────────────────────────
-            // 已落地的两张底图错误码：查不到是 404；被想定引用/演习在用是 409
+            // ── 地图域（M2 MAP-BASE）────────────────────────────────────────────
+            // 底图台账：查不到是 404；被想定引用/演习在用是 409
             // （冲突是「现在不能删」，不是参数错误——契约 paths/map.yaml 的 deleteMap 即 409）。
-            case MAP_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            // 楼层点位与 UWB 标定：getUwbMeta 的「还没标定」是 404 MAP_NOT_CALIBRATED
+            // （与 MAP_NOT_FOUND 分码，现场动作不同）；putUwbMeta 的校验失败是 400，
+            // 契约把这两处原写成同一个码，本次按「一码一状态」拆开。
+            case MAP_NOT_FOUND, MAP_NOT_CALIBRATED -> HttpStatus.NOT_FOUND;
+            case MAP_UWB_META_INCOMPLETE -> HttpStatus.BAD_REQUEST;
             case MAP_IN_USE -> HttpStatus.CONFLICT;
 
             default -> HttpStatus.INTERNAL_SERVER_ERROR;

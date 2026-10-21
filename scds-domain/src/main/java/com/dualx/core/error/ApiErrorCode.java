@@ -60,7 +60,17 @@ public enum ApiErrorCode {
 
     // ===== MAP_* 地图 =====
     MAP_NOT_FOUND,
+    /**
+     * 底图存在，但还没做过 UWB 标定（HTTP 404，契约 {@code getUwbMeta}）。
+     *
+     * <p>与 {@link #MAP_NOT_FOUND} 成对：两者都是 404，但现场处置动作不同——
+     * 前者是「id 打错了」，后者是「图在、去标定」。契约原本让这条 404 与
+     * {@code putUwbMeta} 的 400 共用 {@link #MAP_UWB_META_INCOMPLETE}，
+     * 与「一码一状态」的状态表设计冲突，故按「新增专用码」拆开。</p>
+     */
+    MAP_NOT_CALIBRATED,
     MAP_IMAGE_MISSING,
+    /** 保存 {@code uwb_meta} 时基站缺项或几何不自洽（HTTP 400，固定给 PUT 校验失败）。 */
     MAP_UWB_META_INCOMPLETE,
     MAP_CALIBRATION_IN_PROGRESS,
     /**
