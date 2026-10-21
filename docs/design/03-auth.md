@@ -5,6 +5,10 @@
 > 本文档只定义鉴权的实现结构；契约需回写之处单列在 §6。
 > 本次已按已确认决策及真实代码修订。当前缺口见 [审查清单](../review.md)；
 > 309 项测试通过不等于本节所有验收判据通过，见 [测试矩阵](../testing.md)。
+> D02最新业务确认：云端签账号、边缘只验账号并本地签设备，支持断外网设备登录。
+> 具体双能力/双密钥方案待批准，见[03b-token-capabilities.md](03b-token-capabilities.md)。
+> 原单密钥配置与端口片段保留为现有实现说明，不是双能力方案已落地的证明；
+> 最新TEST-01完整启动证据为testing第11节558项，仍未验证双密钥或设备SID业务。
 
 ---
 
@@ -106,16 +110,18 @@
 
 | 令牌 | 谁签发 | `aud` | 有效期 | 撤销方式 |
 |---|---|---|---|---|
-| `accessToken`（账号） | 本进程（PRIVATE）或云管（CLOUD） | `scds-edge` | **30min** | 不做（无状态） |
-| `refreshToken`（账号） | **永远是本进程** | `scds-refresh` | **14d** | 落库可撤销（§4.8） |
-| `deviceToken`（单兵终端） | **永远是本进程** | `scds-device` | **12h** | 单端在线（§4.9） |
+| `accessToken`（账号） | D02目标由云端账号实例签；既有独立单机可显式自签 | `scds-edge` | **30min** | 不做（无状态） |
+| `refreshToken`（账号） | 管理该账号刷新记录的签发实例，D02目标为云端 | `scds-refresh` | **14d** | 落库可撤销（§4.8） |
+| `deviceToken`（单兵终端） | 本地边缘设备签发实例 | `scds-device` | **12h** | 单端在线（§4.9） |
 
-> `refreshToken` 与 `deviceToken` 一律由边缘实例自己签发：它们直接挂钩**边缘本地库**（`t_refresh_token`、`t_vest` 绑定关系），云管不该、也无法代替边缘管理这两件事。只有账号 `accessToken` 在 CLOUD 模式下需要云管签（见 §4.3）。
+> 原“refresh一律边缘签”描述不适用于D02已确认的云边场景。账号login/refresh/logout
+> 归管理该账号及refresh记录的云端实例，保持token_hash与全端退出语义；
+> 设备绑定/SID及设备签发归边缘本地库。不做跨库兑换或断网账号刷新回退。
 
 **claim 集合**（固定，不随意扩充）：
 
 ```
-iss   scds.auth.jwt.issuer（环境变量 SCDS_JWT_ISSUER，默认 scds-edge）
+iss   当前实现为scds.auth.jwt.issuer；D02拟按账号/设备用途绑定独立issuer，见03b
 sub   账号令牌 = accountId(UUIDv7)；设备令牌 = vestNum
 aud   见上表
 exp / iat / nbf
@@ -132,6 +138,7 @@ sid   仅设备令牌：设备会话 ID（§4.9）
 
 **已确认要求**：离线部署启动、验签不得依赖外网。当前满足此要求的配置是本地 PEM 且 `jwks-uri` 为空。
 不能把配置远端 JWKS 的实例也描述成“离线可验签”。
+下列配置为当前单密钥实现；双能力目标另见03b第3-4节，尚未修改实际部署配置。
 
 ```yaml
 scds:
@@ -160,7 +167,9 @@ scds:
 
 #### 4.3.1 PRIVATE 模式谁签发
 
-**边缘实例自行持有私钥，自签自验。** 生产由部署方提供每客户独立密钥；应用没有自动生成功能。
+**既有独立单机可显式启用账号签发，自签自验；不由PRIVATE自动推导。**
+新确认的D02云边场景中，边缘不持云端账号私钥，仅持独立设备私钥，技术拆分待实施。
+生产由部署方提供每客户独立密钥；应用没有自动生成功能。
 本机开发按已确认方案使用随仓库公开的 `dev-keys/` 固定测试密钥，严禁对外或生产使用。
 `signing-enabled=false` 时 `RsaTokenSigner` 不读私钥且拒绝全部三类签发。
 生成、文件权限及启动路径见 [环境手册](../environments.md)。
@@ -192,9 +201,9 @@ public interface TokenSigner {
 
 - `enabled() == false` 时，`POST /api/v1/auth/login|refresh|logout` **不注册**（404），客户端应按 baseUrl 指向的实例能力选择登录端点。
 - `/api/v1/auth/me` 为只读，两种模式都应存在。
-- **设备登录能力冲突尚待确认**：它确实签发 deviceToken，而当前 signer 的 enabled 开关控制
-  三类签发。文档初稿中“设备登录不涉及签发、永远可用”不成立。候选为拆分账号/设备签发能力，
-  或只验签实例不提供设备登录；不能把上述候选当成已经确认的决定。
+- **D02业务选择已确认，技术实现尚未完成**：账号由云端签、边缘只验账号，
+  设备可在边缘本地签发并断外网登录。当前三类共用signer不能满足该选择，
+  需按03b审阅后的方案拆分能力及用途信任；不采用“关闭账号即关闭设备”的旧推荐。
 - 实现类（`RsaTokenSigner`）落在 `scds-api`（本项目暂无 `scds-infra` 模块，签名与弹簧安全同属"接口适配层的基础设施"）。若日后拆出 `scds-infra`，把它迁过去即可。
 
 ### 4.4 免鉴权白名单（默认拒绝）
@@ -203,7 +212,7 @@ public interface TokenSigner {
 permitAll：
   POST  /api/v1/auth/login          仅 signing-enabled=true 时存在
   POST  /api/v1/auth/refresh        同上
-  POST  /api/v1/auth/device/login   恒在（设备登录属边缘本地事务）
+  POST  /api/v1/auth/device/login   当前恒在；D02目标仅设备签发启用时存在
   GET   /actuator/health            探活
   GET   /error                      Boot 内部错误转发
 
@@ -217,6 +226,8 @@ authenticated：
 - 必须覆盖 `/actuator/metrics/**`，当前仅匹配精确根路径，已实测 VIEWER 能读取子路径，见审查 R01。
 - **OPTIONS 预检一律放行**：Flutter 桌面/安卓不发 `Origin`，CORS 实际不生效；但一旦将来接 Web 控制台，预检被拦会导致"连登录都发不出去"这种极难排查的现象。
 - **白名单是"只增不改"清单**：任何新增 `permitAll` 必须回到本文档登记一行。理由——鉴权漏洞几乎从不是"写错了判断"，而是"某次调试顺手放行了一个端点，然后再也没人删"。
+- D02拟议能力关闭时精确404出口、账号与设备独立白名单见03b第5节；
+  本轮未修改SecurityConfig，不能将该目标矩阵当成运行结果。
 
 ### 4.5 角色 → 权限点
 
@@ -402,7 +413,7 @@ ALTER TABLE t_vest
 | **Q12** | logout 撤一条还是全部 | **已确认甲并实现**：该账号全部 refreshToken |
 | **Q13** | 本地开发密钥来源 | **已确认乙并实现**：公开固定测试密钥；生产独立密钥 |
 | **Q14** | device/me 本批是否实现 | **已确认甲**：留 501，等待态势服务 |
-| **Q15** | signing=false 下设备是否仍能登录 | **未裁定**：与当前三类令牌共用 signer 的能力开关冲突，须先确认 |
+| **Q15** | 账号只验签时设备是否仍能登录 | **D02业务已确认**：边缘设备本地签发并支持断外网登录；独立密钥/issuer配置与迁移按03b待批准方案实施 |
 
 ---
 
@@ -420,7 +431,8 @@ ALTER TABLE t_vest
 9. **限流**：同一账号连续 5 次错误口令 → 第 6 次返回 429；用正确口令在第 6 次也仍是 429（锁定期不因口令正确而放行）。
 10. **账号签发能力开关**：signing=false 时 login/refresh/logout 不注册且按约定得到 404；
     必须同时调整过滤链对不存在路由的处理，否则无令牌请求仍是 401。
-    device/login 行为待 Q15 确认，不能将未裁定结果写成通过。
+    device/login应由独立设备能力控制，Q15/D02业务已确认，具体拆分尚未实现；
+    不把原单密钥启动通过写成新能力验收。
 11. **claim 完整性**：缺 exp/sub、错误类型、未知用途令牌均 401；真实过期令牌归为 EXPIRED。
 12. **MVC 错误形状**：空体、非法 JSON、DTO 校验、multipart 缺失、405/404 均按约定返回
     Problem 的 code/traceId，不能被 Boot 默认 advice 截走。

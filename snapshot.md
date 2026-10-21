@@ -1,7 +1,7 @@
 # scds-next 交接快照
 
 > 更新：2026-10-21，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：全盘核查设计与代码、补全文档并生成新对话提示词；本轮没有修业务代码。
+> 当前任务：SEC-01/SEC-02/ERR-01已完成并推送；TEST-01数据库隔离子任务完成，待补完整应用启动验收。
 
 ## 1. 从这里继续
 
@@ -11,32 +11,35 @@
 [测试](docs/testing.md)和[下一对话提示词](docs/next-chat-prompt.md)。
 HTTP/WS唯一契约入口是 [openapi.yaml](docs/api/openapi.yaml)。
 
-建议下一原子任务为 SEC-01：修复指标子路径授权并补真实Security过滤链测试。
-先核查当前代码并提出 <=3 文件方案与验收口径，等待用户确认后实施。
-本次文档整理不授权自动执行全部后续工作包。
+下一原子任务：TEST-01完整ScdsNextApplication启动测试，真实安全链和测试DB共同装配；
+先给出 <=3 文件方案，隔离凭据/初始化门禁/临时密钥/管理员建号均须明确。
+之后AUTH-HTTP仍须先确认D02设备签发能力，不能默认批准其推荐。
+先前review/架构/设计的基线缺口为历史；最新修复证据见testing第7-10节。
+本次“继续”及D14授权不扩展为全部业务实施或后续自动提交推送。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源代码HEAD | da02622bdca893ddb60910de20efd4301da2116f |
-| 本地origin/main跟踪值 | 3c4f4f4adf650f644ae6a86c67ad8411cbcb6b6f |
-| 本地待推送 | af54c45、3d30e09、da02622，共3个提交 |
-| 实际远端 | 前序GitHub连接失败，未成功核验实际远端HEAD；本地跟踪值不代表实时远端 |
-| 本轮文档 | 未提交、未推送；开始下一任务前git status/diff确认 |
-| 凭据 | 实际.env未修改，仍被gitignore排除；禁止打印或提交 |
+| 源代码HEAD | 64b73e1a8c4cdac1a397c55a00e942dd5ff9f473 |
+| 实际远端main | 本轮提交/正常推送后用git ls-remote核验，同上完整SHA |
+| 已推送 | 前序af54c45、3d30e09、da02622及新64b73e1；无历史待推送 |
+| 本轮继续成果 | TEST-01脚本/配置/回归及交接文档尚未提交、暂存区为空 |
+| 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
-本轮新增README、snapshot、需求/架构/环境/测试/审查/新对话提示词与协议原文；
-修订设计01/02/03、auth契约说明、common响应headers层级及.env.example。
-没有改Java、pom或已应用迁移。不得恢复用户已删除的临时提交信息文件。
-本轮无新的提交授权，不自动commit或push文档。
+64b73e1纳入此前文档基线、SEC-01/SEC-02/ERR-01源码和回归，提交前已有485项通过。
+随后用户明确批准D14同容器独立测试库，分段实施和验证见testing第10节；
+未提交的9文件范围含被忽略的.env.test，不把本地继续成果宣称为远端已有。
+未改生产配置、pom、协议、算法或历史迁移。不得恢复用户已删除的临时提交信息文件。
 
 ## 3. 实际实现状态
 
 已实现：协议Framer/下行字节编码、冻结算法迁移、domain端口、
 JDBC仓储、账号首次建号、登录限流、RS256签发/验签、
 AuthService login/refresh/logout/me及事务并发保护。
+新增已完成：metrics子树ADMIN保护、JWT必需字段/原始类型/纯过期机器码分类、
+MVC统一Problem及真实Boot共存回归；核心IT独立库、初始化前门禁和最小权限回归。
 
 未完成：6个auth HTTP方法仍501，其他60个REST业务方法同样占位；
 gateway零主源码，演习/态势/指令业务链未实现。
@@ -51,25 +54,25 @@ Flyway文件V1-V7、V9，共8份；18张业务表，另有Flyway历史表。
 
 ## 4. 验证证据与局限
 
-本轮已运行`mvn clean verify`：**309项，失败/错误/跳过均0**。
-protocol19 + core211 + api79，全部reactor构建成功。
+最新`mvn clean verify`：2026-10-21 14:42:30 +08:00，
+**521项，失败/错误/跳过均0**：protocol19 + core247 + api79 + app176。
+35份XML与testcase计数一致，8个reactor成功。历史309/361/458/485不改写。
 AuthServiceIT有17项真实MySQL测试，包含refresh/logout并发、
 重放撤销持久性、签发/插入失败回滚。报告在各模块target/surefire-reports。
 API骨架使用standalone且只断言非404，不能证明真实Security或业务闭环。
 
-本地fat jar在signing=true/false下均已人工启动并验证HTTP，随后已停止。
-实测缺陷：
+历史fat jar在signing=true/false下均人工启动验证HTTP，已停止；本次未重复完整fat jar验收。
+原实测缺陷的当前状态：
 
 | 审查ID | 实测 |
 |---|---|
-| R01 | VIEWER访问metrics根403，但指标子路径200 |
-| R02 | 正确签名过期JWT返回INVALID而不是EXPIRED |
-| R03 | 缺exp的合法签名JWT通过认证进入501 |
-| R04 | 空device/login DTO返回默认400 Problem，缺code/traceId |
+| R01 | SEC-01已修；真实过滤链指标根/子树授权回归52项 |
+| R02/R03 | SEC-02已修；JWT字段/时间/机器码回归97项 |
+| R04 | ERR-01已修；Boot MVC回归27项，含3项真实Tomcat上传检查 |
 | R05 | signing=false时无token账号login返回401，目标404 |
 | R07 | 不存在SID的device token进入device/me占位，校验未实现 |
 
-以上只记录，**未修复**。R18-R28等静态风险未逐项运行时复现。
+R05/R07仍未修复。R23数据库隔离子任务已完成；R18-R28其他风险仍待对应工作包验证。
 无真实硬件、solver数值对拍、物理断网、WS帧序列、Flutter或生产节点验证。
 发布结论：**不可生产发布**。完整问题及测试矩阵见review/testing。
 
@@ -88,7 +91,13 @@ java -jar target\scds-next.jar --spring.profiles.active=local
 
 从仓库根运行须覆盖dev公私钥路径，详见环境手册。
 local需通过进程环境或命令行激活，仅在待导入.env里写profile不能提前激活它。
-IT当前与开发共库，不允许指向生产；AuthServiceIT真实提交，清理不是全量回滚。
+核心IT现在仅连接同一容器内的scds_next_test，scds_test只拥有精确测试库权限，
+不共用开发凭据；新.env.test仅含SCDS_TEST_JDBC_URL、
+SCDS_TEST_MYSQL_USER、SCDS_TEST_MYSQL_PASSWORD。
+初始化前门禁拒绝误连、连接覆盖及危险Flyway模式；不允许指向生产。
+AuthServiceIT仍真实提交、按自身UUID清理；多数仓储IT回滚。
+测试库默认保留，Initialize-TestDatabase.ps1仅首次运行，已有库/账号/文件均拒绝覆盖。
+空库已迁移V1-V7/V9，两库8份迁移校验和一致；开发与测试account/refresh/exercise均0。
 
 ## 6. 已确认与待确认
 
@@ -98,6 +107,8 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 device/me本阶段留501；公开dev密钥仅开发。
 自愈写SYSTEM证据后删该场残留指令，同事务；
 协议LogType不能加SYSTEM；谁持状态谁调推送端口。
+2026-10-21新增已确认D14：同容器独立库、独立测试账号和凭据、保留库、
+最小权限与初始化前门禁；不因此批准新容器、清库删卷、V10或其他决策。
 
 待确认：只验签实例的设备签发能力；自愈是否用下一递增V10；
 链路两通道的数组/信封根类型；跨进程revision恢复；
@@ -114,7 +125,7 @@ WS超窗409/close语义；权限与单兵可见性；UWB SERIAL/启停；
 - 不覆盖用户改动，不改.env或历史迁移，不清库/删卷/reset/force push。
 - 提交和推送须有当次授权；网络失败保留本地提交并如实报告。
 
-## 8. 文档校验记录
+## 8. 历史文档校验
 
 冻结协议从旧迁移目录按原字节复制，SHA256：
 `7CB9B4988B0D6BE64A6CA5A6B4AE91BC8005DA11466727C46B5BF0DD5859BD92`。
@@ -131,3 +142,5 @@ WS超窗409/close语义；权限与单兵可见性；UWB SERIAL/启停；
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
+最新TEST-01的35份报告、权限/清理/迁移及限制详见testing第10节；
+本快照和新对话提示已同步521项及下一任务，不要求重做已完成SEC/ERR。

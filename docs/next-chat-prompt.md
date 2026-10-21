@@ -16,25 +16,27 @@
 以实际pom/代码为准：Java21、Boot3.5.7、Flutter Android/Windows目标，
 每客户独立实例和数据库，无tenant_id、ORM/JPA、Redis、Kafka。
 
-交接时源代码HEAD为da02622，本地af54c45、3d30e09、da02622三个提交待推送，
-前序GitHub连接失败，实际远端HEAD未核验。本轮文档未提交。
-不要把本地origin/main当成实时远端，不自动commit/push。
+交接时HEAD为64b73e1a8c4cdac1a397c55a00e942dd5ff9f473。
+此前3个认证提交及SEC/ERR修复和文档已正常推送，git ls-remote确认远端main同SHA。
+随后TEST-01数据库隔离及交接文档继续成果尚未提交；先git status/diff核对，
+不要把工作树成果当成远端已有，不默认后续commit/push。
 
 已完成AuthService登录、刷新、全端退出和me，17项真实MySQL认证IT；
-最近mvn clean verify为309项全通过。不要重复实现这些已完成任务。
+SEC-01、SEC-02、ERR-01及TEST-01数据库隔离子任务已完成，
+最近mvn clean verify为521项全通过（19+247+79+176），35份XML计数一致。
+不要重复实现AuthService、metrics保护、JWT字段/时间分类或MVC Problem。
 但6个auth HTTP方法和其余60个REST仍占位，gateway零源码；
 SID、演习自愈、态势/推送业务和Flutter尚未实现，当前不可生产发布。
 
-优先处理审查中真实复现的安全/错误问题：
-R01 VIEWER可以读metrics子路径；
-R02 真实过期JWT被分类INVALID而非EXPIRED；
-R03 缺exp的签名JWT通过认证；
-R04 MVC字段校验Problem缺code/traceId；
-R05 signing=false账号login返回401而非目标404。
-R07设备SID校验未实现。其他静态风险见review，不要冒充已复现。
+review/架构/专题设计中R01-R04等是历史基线；最新修复证据以testing第7-10节为准。
+R05 signing=false账号login返回401而非目标404、R07设备SID仍未实现。
+其他静态风险见review，不要冒充已复现或自动标为完成。
 
-建议从SEC-01开始：核对metrics子树授权，提出最多3文件的最小修复方案，
-说明影响范围和真实Security过滤链测试口径，等待我确认后写业务代码。
+下一任务为TEST-01完整ScdsNextApplication启动回归，
+需真实安全链+测试库共同装配，不用受控无DB app测试代替；
+提出最多3文件方案，明确初始化前隔离门禁、临时内存密钥、禁用真实管理员建号，
+测试仅回环随机端口且自动关闭；等待确认后实施。
+之后AUTH-HTTP仍需先确认D02设备签发能力，不默认批准推荐。
 本条只授权检查与提出下一原子任务方案，不授权一次性修所有问题。
 每阶段按检查、分析、决定、执行；每原子任务<=3文件，修复最多5轮。
 获授权后实现、测试、独立提交；推送也需授权，失败保留本地成果如实报告。
@@ -51,11 +53,19 @@ logout无请求体、撤该账号全部refresh；accessToken无主动撤销。
 管理员由部署.env明文首次BCrypt建号、不写seed；不擅自改实际.env。
 device/me本阶段留501；自愈先SYSTEM存证再删残留且同事务，
 SYSTEM为非协议日志类型，不能改冻结协议LogType。
+D14已确认同容器独立scds_next_test/scds_test，精确转义库名授权，无开发库权限。
+核心IT只导入忽略的.env.test，不导入开发.env；独立测试口令owner-only ACL，
+禁止打印秘密、覆盖凭据或重置账号。Initialize-TestDatabase.ps1仅首次建库，
+已有库/账号/文件一律拒绝覆盖；默认保留库，测试仅清理自身UUID。
+新测试库已从空schema应用V1-V7/V9；Flyway clean禁用、out-of-order=false；
+开发/测试account、refresh、exercise运行后0，迁移校验和8项一致。
+核心隔离回归36项（初始化前29、真实DB7），认证17项仍保持；
+整个TEST-01尚有完整应用启动子任务，不能把M0标为完成。
 
 待确认：只验签实例是否独立签发设备token；V9已应用后自愈是否改V10；
 链路数组/信封同构；跨重启revision/epoch；WS超窗409/close；
 完整权限/单兵可见性；UWB SERIAL与开停演绑定；容量、文件、RPO/RTO。
 不能替我默认确认，也不能补V8、改已应用SQL、开启out-of-order或清库绕过问题。
 
-先用简短事实摘要报告新旧状态差异，再给SEC-01方案并等待确认。
+先简短核对新旧状态差异，再给TEST-01完整应用启动子任务方案并等待确认。
 ```
