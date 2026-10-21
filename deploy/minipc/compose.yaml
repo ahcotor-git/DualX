@@ -1,0 +1,74 @@
+name: scds-validation
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: scds-validation-mysql
+    pull_policy: never
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1.0
+    logging: *logging
+    environment:
+      MYSQL_DATABASE: scds_next
+      MYSQL_USER: scds_app
+      MYSQL_PASSWORD: ${SCDS_MYSQL_PASSWORD:?Missing SCDS_MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${SCDS_MYSQL_ROOT_PASSWORD:?Missing SCDS_MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u "$$MYSQL_USER" "$$MYSQL_DATABASE" -N -e "SELECT 1" >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+
+  backend:
+    image: scds-next:${SCDS_IMAGE_TAG:?Missing immutable SCDS_IMAGE_TAG}
+    container_name: scds-validation-backend
+    pull_policy: never
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1.0
+    logging: *logging
+    ports:
+      - "127.0.0.1:11001:11001"
+    volumes:
+      - /opt/scds/secrets/application.properties:/run/scds/application.properties:ro
+      - /opt/scds/secrets/jwt-public.pem:/run/scds/jwt-public.pem:ro
+      - /opt/scds/secrets/jwt-private.pem:/run/scds/jwt-private.pem:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -ec
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/11001
+          printf 'GET /actuator/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          grep -q '"status":"UP"' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+volumes:
+  mysql_data:
+    name: scds-validation_mysql_data
