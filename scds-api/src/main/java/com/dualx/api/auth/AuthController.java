@@ -3,48 +3,52 @@ package com.dualx.api.auth;
 import com.dualx.api.dto.auth.DeviceLoginRequest;
 import com.dualx.api.dto.auth.DeviceSelf;
 import com.dualx.api.dto.auth.DeviceTokenPair;
-import com.dualx.api.dto.auth.LoginRequest;
-import com.dualx.api.dto.auth.RefreshRequest;
 import com.dualx.api.dto.auth.TokenPair;
 import com.dualx.api.dto.auth.User;
 import com.dualx.api.error.NotImplementedException;
+import com.dualx.core.auth.AccountSession;
+import com.dualx.core.auth.AuthService;
+import com.dualx.core.auth.IssuedTokens;
+import com.dualx.core.domain.Account;
+import com.dualx.core.error.ApiErrorCode;
+import com.dualx.core.error.BusinessException;
 import jakarta.validation.Valid;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
- * 账号与设备认证接口。
+ * 认证接口中不随签发能力变化的部分：取自身信息与设备认证。
  *
- * <p>覆盖现场两类登录：指挥台账号（账号密码换 JWT）与单兵终端马甲 App（马甲编号 + 绑定密钥换设备令牌），
- * 以及各自的「取自身信息」查询。骨架期仅登记路由、参数与 DTO，业务实现留待后续阶段。</p>
+ * <p>{@code GET /api/v1/auth/me} 只读，只验签不签发的实例也要能回答「我是谁」，因此本类
+ * 不条件注册。签发端点 {@code login} / {@code refresh} / {@code logout} 在
+ * {@link AccountAuthController}，它们只在 {@code signing-enabled=true} 时存在。</p>
+ *
+ * <p>设备端点（{@code device/login}、{@code device/me}）仍是骨架期占位：设备登录要接
+ * {@code DeviceAuthService}（含 SID 单端在线），{@code device/me} 要等态势域就绪，
+ * 两者都留待后续阶段，本阶段不接线也不擅改语义。</p>
+ *
+ * <p>包内共享的「服务结果 → 契约 DTO」映射也放在本类：它是包里唯一无条件存在的控制器，
+ * 让条件注册的 {@link AccountAuthController} 反向依赖它，方向才稳定。</p>
  */
 @RestController
 public class AuthController {
 
-    /** 账号登录：发放 access/refresh 令牌。 */
-    @PostMapping("/api/v1/auth/login")
-    public TokenPair login(@RequestBody @Valid LoginRequest request) {
-        throw new NotImplementedException("login");
-    }
+    private final AuthService authService;
 
-    /** 用 refreshToken 滚动换取新的 accessToken。 */
-    @PostMapping("/api/v1/auth/refresh")
-    public TokenPair refreshToken(@RequestBody @Valid RefreshRequest request) {
-        throw new NotImplementedException("refreshToken");
-    }
-
-    /** 退出登录：使当前 refreshToken 失效。 */
-    @PostMapping("/api/v1/auth/logout")
-    public void logout() {
-        throw new NotImplementedException("logout");
+    public AuthController(AuthService authService) {
+        this.authService = authService;
     }
 
     /** 获取当前登录用户。 */
     @GetMapping("/api/v1/auth/me")
-    public User getCurrentUser() {
-        throw new NotImplementedException("getCurrentUser");
+    public User getCurrentUser(@AuthenticationPrincipal Jwt jwt) {
+        return toUser(authService.me(accountId(jwt)));
     }
 
     /** 单兵终端登录：马甲编号 + 绑定密钥换取设备令牌。 */
@@ -57,5 +61,33 @@ public class AuthController {
     @GetMapping("/api/v1/auth/device/me")
     public DeviceSelf getDeviceSelf() {
         throw new NotImplementedException("getDeviceSelf");
+    }
+
+    /**
+     * 从已认证令牌取账号主键。
+     *
+     * <p>{@code sub} 必须能还原成账号 UUID：本实例签发的账号令牌里它就是 {@code accountId}。
+     * 解析不出来说明令牌不是本实例签发的账号令牌——归为令牌不成立（401），不当作服务端缺陷。</p>
+     */
+    static UUID accountId(Jwt jwt) {
+        String subject = jwt == null ? null : jwt.getSubject();
+        try {
+            return UUID.fromString(subject);
+        } catch (IllegalArgumentException | NullPointerException invalid) {
+            throw new BusinessException(ApiErrorCode.AUTH_TOKEN_INVALID, "令牌主体不是有效账号");
+        }
+    }
+
+    /** 核心侧身份快照 → 契约 {@code User}。 */
+    static User toUser(AccountSession session) {
+        Account account = session.account();
+        return new User(account.id().toString(), account.username(), account.displayName(),
+                session.roles(), session.permissions(), account.lastLoginAt());
+    }
+
+    /** 核心侧签发结果 → 契约 {@code TokenPair}。 */
+    static TokenPair toTokenPair(IssuedTokens issued) {
+        return new TokenPair(issued.accessToken(), issued.refreshToken(), issued.expiresIn(),
+                toUser(issued.session()));
     }
 }

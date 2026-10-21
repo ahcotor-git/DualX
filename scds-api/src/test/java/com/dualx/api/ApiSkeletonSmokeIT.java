@@ -1,21 +1,26 @@
 package com.dualx.api;
 
+import com.dualx.api.auth.AccountAuthController;
 import com.dualx.api.auth.AuthController;
 import com.dualx.api.command.CommandController;
 import com.dualx.api.device.DeviceController;
 import com.dualx.api.error.ApiExceptionHandler;
+import com.dualx.api.error.NotImplementedException;
 import com.dualx.api.exercise.ExerciseController;
 import com.dualx.api.map.MapController;
 import com.dualx.api.replay.ReplayController;
 import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
+import com.dualx.core.auth.AuthService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.Mockito;
 import org.springframework.http.MediaType;
+import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
@@ -46,8 +51,18 @@ class ApiSkeletonSmokeIT {
 
     @BeforeAll
     static void setUpMockMvc() {
+        // 账号端点已接核心 AuthService，但本测试只验证「路由按契约注册」、不建立数据库上下文，
+        // 因此用一个「一律抛占位异常」的替身：使已接线端点与真占位端点在本测试里响应一致。
+        // 真实账号链路（登录 / 滚动刷新 / 退出 / me）由 scds-app 的完整启动测试与认证 IT 覆盖。
+        AuthService authService = Mockito.mock(AuthService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
-                        new AuthController(),
+                        new AccountAuthController(authService),
+                        new AuthController(authService),
                         new ExerciseController(),
                         new CommandController(),
                         new SituationController(),
@@ -55,6 +70,9 @@ class ApiSkeletonSmokeIT {
                         new MapController(),
                         new ReplayController())
                 .setControllerAdvice(new ApiExceptionHandler())
+                // standalone 不装配安全链，@AuthenticationPrincipal 需要显式解析器；
+                // 无认证上下文时它解析为 null，由控制器按「令牌不成立」返回 401。
+                .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .addFilters(new TraceIdFilter())
                 .build();
     }
@@ -165,14 +183,15 @@ class ApiSkeletonSmokeIT {
     @DisplayName("未实现接口统一 501 + application/problem+json + code=NOT_IMPLEMENTED + traceId")
     void notImplementedIsReportedAsProblem() throws Exception {
         String traceId = "smoke-trace-0001";
-        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/auth/me")
+        // 用仍是真占位的设备端点，而不是已接核心服务的 /auth/me。
+        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/auth/device/me")
                         .header(TraceIdFilter.HEADER, traceId))
                 .andExpect(status().isNotImplemented())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(header().string(TraceIdFilter.HEADER, traceId))
                 .andExpect(jsonPath("$.status").value(501))
                 .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"))
-                .andExpect(jsonPath("$.instance").value("/api/v1/auth/me"))
+                .andExpect(jsonPath("$.instance").value("/api/v1/auth/device/me"))
                 .andExpect(jsonPath("$.traceId").value(traceId));
     }
 }
