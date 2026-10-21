@@ -557,6 +557,11 @@ MapDetail:
         底图**短时效签名**访问 URL（默认 15 分钟）。可重复使用、**不带 `Authorization`**，
         供 `<img>` / 浏览器直接加载；未上传图片时为 null。过期后重新 `GET` 底图详情取新 URL，
         不缓存跨会话（D09-②）。
+
+        形状即 `GET /api/v1/files` 的取文件路由，**根相对路径**
+        （`/api/v1/files?path=maps/<mapId>/<uuid>.png&exp=<unix秒>&signature=<urlsafe-base64>`），
+        由客户端自行拼接 base URL——服务端不猜部署形态下的对外地址。
+        每次上传换图都会换新文件名，故 URL 随之变化，天然规避浏览器旧图缓存。
     imageWidth:
       type: [integer, 'null']
       format: int32

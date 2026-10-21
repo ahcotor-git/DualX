@@ -1,0 +1,85 @@
+# ============================================================================
+# files —— 受保护文件的签名 URL 访问（D09-②）
+#
+# 底图（maps/）与复盘导出件（exports/）落在每实例的受保护本地目录（D09-①），
+# 对外一律不暴露文件系统路径。带 Authorization 的按域下载路由是给程序调用的
+# （如 paths/map.yaml 的 getMapImage）；本路由是**免 Bearer 的签名 URL**，
+# 供 <img> / 浏览器直接拉取——浏览器不会为图片请求带上 Bearer。
+#
+# 授权凭据是查询参数里的短时效签名而非令牌，故本 path item 显式声明
+# `security: []`（本契约默认要求 bearerAuth）。服务端对它的免鉴权放行
+# 登记在 docs/design/03-auth.md §4.4 的白名单里。
+# ============================================================================
+
+files:
+  get:
+    tags: [file]
+    operationId: getFile
+    summary: 按签名 URL 读取受保护文件
+    description: |
+      三个查询参数由签发方给出（如底图详情 `MapDetail.imageUrl` 里的同一组值），
+      **不要自行拼接或改写**：签名覆盖 `path` 与 `exp` 两个值，改动任一个都会验签失败。
+
+      - `path` 是**存储相对路径**（如 `maps/<mapId>/<uuid>.png`），不是文件系统绝对路径；
+      - `exp` 是到期时刻（Unix 秒，十进制）；
+      - `signature` 是 HMAC-SHA256 对 `path + "\n" + exp` 的签名（URL-safe Base64，无填充）。
+
+      **可重复使用**：TTL 内同一 URL 可被反复拉取（D09-②），过期后重新 GET 底图详情取新 URL。
+      签名无效与已过期一律返回 403 `FILE_URL_INVALID`，**不区分两者**——区分只会给探测者
+      提供额外信息，而客户端的处置动作完全相同（重新取详情换新 URL）。
+    security: []
+    parameters:
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: 存储相对路径，如 `maps/<mapId>/<uuid>.png`
+      - name: exp
+        in: query
+        required: true
+        schema:
+          type: string
+        description: 到期时刻（Unix 秒，十进制）
+      - name: signature
+        in: query
+        required: true
+        schema:
+          type: string
+        description: URL-safe Base64（无填充）的 HMAC-SHA256 签名
+    responses:
+      '200':
+        description: 文件二进制，**按落盘原格式返回**，不做统一转码（D09-④）
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '403':
+        description: 签名无效或已过期（`FILE_URL_INVALID`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '404':
+        description: 文件不存在（`MAP_IMAGE_MISSING`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'

@@ -207,6 +207,20 @@ mapImage:
         $ref: '../schemas/common.yaml#/Forbidden'
       '404':
         $ref: '../schemas/common.yaml#/NotFound'
+      '413':
+        description: 图片超过单图上限（20MB，`PAYLOAD_TOO_LARGE`）
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '415':
+        description: |
+          不是白名单内的**真实**图片（仅 PNG / JPEG / WebP，按图片头判定，`UNSUPPORTED_MEDIA_TYPE`）。
+          扩展名与请求的 Content-Type 都不作数。
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
       '500':
         $ref: '../schemas/common.yaml#/InternalError'
 

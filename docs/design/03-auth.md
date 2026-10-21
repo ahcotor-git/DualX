@@ -213,6 +213,7 @@ permitAll：
   POST  /api/v1/auth/login          仅 signing-enabled=true 时存在
   POST  /api/v1/auth/refresh        同上
   POST  /api/v1/auth/device/login   当前恒在；D02目标仅设备签发启用时存在
+  GET   /api/v1/files               受保护文件的取文件路由；授权凭据是查询参数里的短时效签名，不是 Bearer
   GET   /actuator/health            探活
   GET   /error                      Boot 内部错误转发
 
@@ -222,6 +223,12 @@ authenticated：
 
 补充约定：
 
+- **`GET /api/v1/files` 是「免鉴权放行 + 接口层验签」，不是「不设防」**：浏览器为 `<img>` 发起的请求不会带
+  `Authorization`，所以这条路由必须在安全链上放行；真正的授权判断落在 `FileController`——先
+  `FileUrlSigner.verify(path, exp, signature)`，验不过一律 403 `FILE_URL_INVALID`（**不区分**「签名错」与
+  「已过期」，两者对客户端的处置动作相同），验过才允许 `FileStore` 读文件。
+  与登录类的区别：那条路由的凭据在路径本身，这条的凭据在查询参数；两者都必须在下一行登记。
+  路由形状与参数命名见 api/paths/files.yaml（D09-②）。
 - **`/actuator/info`、`/actuator/metrics` 需要 `ADMIN`**（指标会泄露内部结构与容量，不对外开放）。
 - 必须覆盖 `/actuator/metrics/**`，当前仅匹配精确根路径，已实测 VIEWER 能读取子路径，见审查 R01。
 - **OPTIONS 预检一律放行**：Flutter 桌面/安卓不发 `Origin`，CORS 实际不生效；但一旦将来接 Web 控制台，预检被拦会导致"连登录都发不出去"这种极难排查的现象。

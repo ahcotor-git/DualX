@@ -78,6 +78,8 @@ tags:
     description: 底图、楼层点位表、UWB 坐标标定
   - name: replay
     description: 复盘、轨迹回放与报表导出
+  - name: file
+    description: 受保护文件的短时效签名 URL 访问（免 Bearer，供 img/浏览器直接拉取）
 
 # 除显式声明 `security: []` 的接口（登录类）外，默认要求账号令牌。
 security:
@@ -202,6 +204,12 @@ paths:
     $ref: './paths/replay.yaml#/replayExportById'
   /api/v1/replays/{replayId}/exports/{taskId}/download:
     $ref: './paths/replay.yaml#/replayExportDownload'
+
+  # ── file（受保护文件的签名 URL，免 Bearer）───────────────────────────────
+  # 跨域通用：底图与复盘导出件共用同一条取文件路由，路径由 `path` 查询参数给出。
+  # 免鉴权放行登记在 docs/design/03-auth.md §4.4。
+  /api/v1/files:
+    $ref: './paths/files.yaml#/files'
 
 components:
 
