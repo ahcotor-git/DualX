@@ -20,9 +20,13 @@ class RolePermissionsTest {
 
     @Test
     void directorOwnsExerciseAndCommand() {
+        // map:* 而非 map:read：D04 裁定「想定 / 编成 / 地图 = DIRECTOR」，
+        // 服务端已按此强制授权，权限点必须同步，否则指挥台会隐藏 DIRECTOR 本可编辑的地图。
+        // 同时不含 device:link:*——DIRECTOR 能指挥但不能开关硬件链路，与 SecurityConfig 一致。
         assertThat(RolePermissions.of(Role.DIRECTOR))
                 .containsExactly("exercise:*", "command:*", "situation:read",
-                        "replay:*", "map:read", "device:read");
+                        "replay:*", "map:*", "device:read")
+                .doesNotContain("device:link:*");
     }
 
     @Test

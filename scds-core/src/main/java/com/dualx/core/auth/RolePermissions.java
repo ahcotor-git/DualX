@@ -27,7 +27,7 @@ public final class RolePermissions {
     private static final Map<Role, List<String>> BY_ROLE = Map.of(
             Role.ADMIN, List.of(ALL),
             Role.DIRECTOR, List.of("exercise:*", "command:*", "situation:read",
-                    "replay:*", "map:read", "device:read"),
+                    "replay:*", "map:*", "device:read"),
             Role.OPERATOR, List.of("command:*", "situation:read", "device:link:*", "map:read"),
             Role.VIEWER, List.of("situation:read", "replay:read", "map:read", "device:read"));
 

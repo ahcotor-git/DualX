@@ -110,7 +110,51 @@ public class SecurityConfig {
         // 与设计 02 的均匀广播直接冲突。设备令牌连 WS 得到 403（已认证但无权）。
         registry.requestMatchers("/ws/**").hasAuthority(AUD_EDGE);
 
-        // 其余一切（含全部业务接口与 /api/v1/auth/me）都要求账号令牌。
+        // ── 写权限矩阵（设计 03 §4.5；契约里每个 operationId 唯一对应一个 URL + 方法）──────
+        // 读一律 VIEWER 及以上：四个角色都持有 AUD_scds-edge，因此所有 GET 继续由末条兜底放行，
+        // 这里只对「非 GET」按域逐组授予角色。角色归属与 scds-core 的 RolePermissions
+        // 必须同源：两处不一致会让 /auth/me 的按钮显隐与服务端强制授权对不上账。
+        //
+        // 漏写一组不会报错，只会退化成「任意账号都能写」——新增写接口时必须同时补一组规则，
+        // 并回到 docs/design/03-auth.md §4.4 登记。
+        //
+        // 台账 / 基站（含绑定密钥与 SID 主动失效）= ADMIN。
+        registry.requestMatchers(HttpMethod.POST, "/api/v1/devices/vests").hasRole("ADMIN");
+        registry.requestMatchers(HttpMethod.PUT, "/api/v1/devices/vests/*").hasRole("ADMIN");
+        registry.requestMatchers(HttpMethod.DELETE, "/api/v1/devices/vests/*").hasRole("ADMIN");
+        registry.requestMatchers(HttpMethod.PUT, "/api/v1/devices/anchors/*").hasRole("ADMIN");
+
+        // 想定 / 编成 / 演习生命周期 / 地图 / 复盘导出 = DIRECTOR 及以上。
+        registry.requestMatchers(HttpMethod.POST,
+                        "/api/v1/plans", "/api/v1/plans/import",
+                        "/api/v1/exercise/current",
+                        "/api/v1/maps", "/api/v1/maps/*/image", "/api/v1/maps/*/uwb-calibration",
+                        "/api/v1/replays/*/exports")
+                .hasAnyRole("ADMIN", "DIRECTOR");
+        registry.requestMatchers(HttpMethod.PUT,
+                        "/api/v1/plans/*", "/api/v1/plans/*/roster",
+                        "/api/v1/maps/*", "/api/v1/maps/*/floors/*/points", "/api/v1/maps/*/uwb-meta")
+                .hasAnyRole("ADMIN", "DIRECTOR");
+        registry.requestMatchers(HttpMethod.DELETE,
+                        "/api/v1/plans/*",
+                        "/api/v1/exercise/current",
+                        "/api/v1/maps/*", "/api/v1/maps/*/uwb-calibration")
+                .hasAnyRole("ADMIN", "DIRECTOR");
+
+        // 指令 = DIRECTOR 及以上。DIRECTOR 持 command:*（可指挥），但不持 device:link:*，
+        // 因此下一组链路操作不含 DIRECTOR——这是本矩阵里最容易写错的一条边界。
+        registry.requestMatchers(HttpMethod.POST, "/api/v1/command/**")
+                .hasAnyRole("ADMIN", "DIRECTOR", "OPERATOR");
+        registry.requestMatchers(HttpMethod.PUT, "/api/v1/command/**")
+                .hasAnyRole("ADMIN", "DIRECTOR", "OPERATOR");
+
+        // 链路操作（串口 / UWB 开关）= OPERATOR 及以上。
+        registry.requestMatchers(HttpMethod.POST, "/api/v1/devices/links/**")
+                .hasAnyRole("ADMIN", "OPERATOR");
+        registry.requestMatchers(HttpMethod.DELETE, "/api/v1/devices/links/**")
+                .hasAnyRole("ADMIN", "OPERATOR");
+
+        // 其余一切（含全部读接口与 /api/v1/auth/me）都要求账号令牌。
         // 这条同时也是设备令牌的横向越权防线：aud 不对 → 403 而不是 401。
         registry.anyRequest().hasAuthority(AUD_EDGE);
     }
