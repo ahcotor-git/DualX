@@ -93,7 +93,8 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | D01 | 仅JWT必需字段、类型与过期分类已批准实施；身份归一化和限流预算仍待确认 |
 | D14 / TEST-01 | 2026-10-21用户选择同容器独立库推荐方案，批准分段实施；其他决策不因此获批 |
 | D02 | 2026-10-21用户明确“确定”：云端账号签发/边缘验签，边缘设备本地签发且支持断外网登录；仅先形成拆分方案，尚未批准具体实现 |
-| D03-D13、D15 | 待确认 |
+| D03 | 2026-10-21用户逐项裁定7项（见下“D03 执行边界”）；**校验侧（DEVICE-AUTH）已授权并完成实现**，写入侧（绑定接口）本阶段不做 |
+| D04-D13、D15 | 待确认 |
 | 业务批量实施 | 未授权 |
 | 创建隔离数据库 | 已批准在scds-local-mysql创建scds_next_test及scds_test；不创建新容器，不改开发.env |
 | 安装 VS | 未授权 |
@@ -136,3 +137,31 @@ AuthServiceIT真实提交不伪装为自动回滚。完整app启动验收另分�
 权限复核修正MySQL库级GRANT的下划线通配符：精确转义scds_next_test，
 撤销本轮新建账号的原未转义模式授权；不改开发账号、已有用户或口令。
 该收紧只涉及建库脚本、授权回归与本记录三文件，并由SHOW GRANTS核查精确模式。
+
+### D03 执行边界
+
+2026-10-21用户对[决策稿](design/04-device-binding.md)的7项逐条裁定：
+
+| 项 | 裁定 |
+|---|---|
+| D03-1 凭据来源 | **A：只认 `t_vest.bind_secret_hash`（BCrypt）**；`sim_no` 仅台账信息，不作凭据；不新增配置键 |
+| D03-2 写入入口 | **A：本阶段不做绑定接口**。DEVICE-AUTH 只交付校验侧，绑定数据由测试与部署工具直写库 |
+| D03-3 `bound` | 首次密钥校验通过即置 `bound=1`（与 sid 同一条 UPDATE，天然原子） |
+| D03-4 换绑/解绑/注销 | 换绑：写新 hash + 清 SID，保留 `bound=1`；解绑：`bound=0` + 清 SID，**保留密钥**；注销：`enabled=0` + 清 SID。均属后续 LEDGER 段，本段不实现 |
+| D03-5 SID 缓存 | **不引入缓存**，库即权威 |
+| D03-6 限流 | 复用 `LoginThrottle`，新增 `DEVICE` 口径（键 `vest:<num>`，阈值沿用 5 次 / 5 分钟）；`CLIENT_IP` 维度与账号登录共用 |
+| D03-7 响应/错误码 | `DeviceTokenPair` 形状不变；失败统一 401 `AUTH_DEVICE_NOT_BOUND`，不区分未登记/退役/未绑定/密钥错 |
+
+实施白名单（实际落地5个文件，分两段，每段<=3文件）：
+`scds-core` 新增 `DeviceAuthService`、改 `LoginThrottle`、改 `VestDeviceSessionRepository`；
+`scds-api` 改 `AuthController`、改 `DeviceLoginRequest`（补 `@Min/@Max`）；
+配套测试新增 `DeviceAuthServiceIT`、改 `LoginThrottleTest`、改 `ApiSkeletonSmokeIT`、改 `MvcProblemIT`。
+
+被本段打破并同步修正的既有断言：`MvcProblemIT.validDeviceRequestStillHitsPlaceholder`（501占位→
+401业务失败）、`ApiSkeletonSmokeIT` 与 `MvcProblemIT` 的 `AuthController` 构造点。
+按D03-6改为“两条链路各写自口径”后，`LoginThrottleTest` 中账号口径的键数断言（100 / 2）保持成立，未被打破。
+
+仍未做：`device/me` 留占位501；绑定/换绑/解绑接口未实现；`signing-enabled=false` 的只验签实例上
+`device/login` 仍注册且会因 `requireSigning()` 抛 `IllegalStateException`（500），
+是否改为条件注册（对齐账号端点返回404）属独立决策，本段不改。
+
