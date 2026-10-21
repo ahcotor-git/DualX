@@ -110,6 +110,10 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | 提交/推送 M2 MAP-BASE A1/A2 与 B1-B3 | 用户当次选择“提交并尝试推送”与“B2 + B3 连做”。**已落地 5 个本地提交**（`c8c1d5d` 契约 A1/A2、`867bd4c` 裁定登记、`8e1adbd` B1 存储端口与实现、`55739f1` B2 签名 URL、`7846030` B3 单测与配置）。`867bd4c` 那次推送已成功入远端；B1-B3 三次推送**均因网络失败**（`Connection was reset` / 无法连接 github.com:443），`main` 领先 `origin/main` **3 个提交**，**远端未更新** |
 | 提交/推送 M2 MAP-BASE 分段 C 与“演习中删图”裁定 | 用户当次选择“提交并重试推送”与“一并拦截，复用 MAP_IN_USE”。**已落地 3 个本地提交**（`3787254` C1 错误码与契约登记、`e8006b6` C2 台账服务与想定/演习引用判据、`8b9de5c` C2 用例），叠加既有 4 个后 `main` 领先 `origin/main` **7 个提交**；本轮推送**两次均因网络失败**（`Recv failure: Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。`C` 段已跑通全量 `mvn -B verify`（716 项，protocol 19 / core 316 / api 100 / app 281） |
 | 提交/推送 M2 MAP-BASE 分段 D | 用户当次选择“分两段提交并重试推送”与“下一步 E 楼层点位 + UWB 标定”。**已落地 2 个本地提交**（`43e6b87` D1 底图错误码登记状态表、`91779bd` D2 底图 CRUD 接线）。本轮推送**成功**：`867bd4c..91779bd main -> main`，随后 `git fetch` 确认 `main` 与 `origin/main` 无差异，**上表第 108、109 行所称“远端未更新”至此消解**（A1/A2 至 C 段的累计积压一并入远端）。D 段已跑通全量 `mvn -B -o verify`（718 项，protocol 19 / core 316 / api 102 / app 281）。注：本轮首跑 verify 时 Docker Desktop 已退出（`scds-local-mysql` 为 `Exited (255)`），重启 Docker 与容器后复跑方全绿——真实库用例的失败先查容器再查代码 |
+| 提交/推送 M2 MAP-BASE 分段 E | 用户当次选择“按 3 个语义提交并推送”与“先继续 F 段，推送稍后重试”。**已落地 3 个本地提交**（`d7854c7` 契约、`f99ce9e` 服务接线、`7fb24d2` 用例），叠加 D 段后 `main` 领先 `origin/main` **3 个提交**；推送**因网络失败**（`Recv failure: Connection was reset`），**远端未更新**。E 段已跑通全量 `mvn -o verify`（734 项） |
+| 提交/推送 M2 MAP-BASE 分段 F | 用户当次裁定四项口径（见下「MAP-BASE 分段 F」），并选择“按语义提交并尝试推送”。**已落地 4 个本地提交**（`1dd8880` 契约、`efae3a8` 存储落盘、`0f7b1e5` 文件端点接线、`e690c9c` 用例）。F 段已跑通全量 `mvn -o verify`（**749 项**：protocol 19 / core 346 / api 103 / app 281）。推送**未成功**（`Recv failure: Connection was reset`，EXIT=128），`main` 领先 `origin/main` **7 个提交**，**远端未更新**，不得视为已入远端 |
+| M2 MAP-BASE 分段 G（端到端 IT + 文档回写） | 用户当次选择“进入 G 段”，随后授权“分 2 个语义提交并重试推送”。**已落地 2 个本地提交**（`d2213ff` fix 楼层点位落库形状、`bae10d9` 端到端 IT + F/G 决策回写），叠加 F 段后 `main` 领先 `origin/main` **9 个提交**；推送**因网络失败**（`Failed to connect to github.com:443 after 21141 ms`，EXIT=128），**远端未更新**，不得视为已入远端。G 段已跑通全量 `mvn -o verify`（**751 项**：protocol 19 / core 346 / api 103 / app 283） |
+| M2 测试库残留清理 | G 段首跑失败留下 1 行 `t_map` + 1 行 `t_map_floor`（`cleanUp` 因列名写错而`BadSqlGrammar`，两处 `DELETE` 都未生效），导致 `BaseMapRepositoryIT` 的**全局行数断言**（`expected 1 but was 2`）失败。已按本记录 D14 口径定位到具体 UUID 并**只删自身残留行**（`t_map`/`t_map_floor` 现均为 0），未清库、未删卷、未动其它账号数据 |
 
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
@@ -285,4 +289,103 @@ D09 与 D15 的剩余实现细节（签名 URL 的 `exp` 精度与时钟偏移�
 - **UWB 校准三端点（`startUwbCalibration` / `getUwbCalibration` / `clearUwbCalibration`）继续 501**：
   `scds-gateway` 无 Java 源码，没有可注入的采样端口；库内也没有校准状态表（迁移 V1~V9），
   无法真实实现。`MAP_CALIBRATION_IN_PROGRESS` 与 `MAP_IMAGE_MISSING` 因此**不预登记**到状态表。
+
+### MAP-BASE 分段 F 口径（2026-10-21/22，图片落盘 + 签名文件下载）
+
+用户逐项裁定（均取推荐口径）：
+
+| 项 | 裁定 |
+|---|---|
+| 取文件的路由形状 | **通用 `GET /api/v1/files`**，不给每类资源各配一条下载路径 |
+| 查询参数命名 | **`path` / `exp` / `signature`** |
+| 验签层级 | **`SecurityConfig` 放行该路径 + 接口层验签**（不放进过滤链，避免过滤器依赖 `FileUrlSigner` 而污染安全链的职责） |
+| 验签失败返回码 | **新增 `FILE_URL_INVALID`（403）**，与「签名对但对象不存在」的 404 分开 |
+| `image_width/height` 来源 | **服务端解析图片头**（不信任客户端上报，也不按文件扩展名判断） |
+
+落地口径：
+
+- **签名覆盖 `relativePath + '\n' + exp`**，URL-safe Base64 无填充；比较走
+  `MessageDigest.isEqual`（恒定时间）。`verify` **先判 `exp` 是否已过**再算签名，过期即 false。
+  同一 URL 在 TTL 内可重复使用（D09-② 原文就是「短时效**可重复**签名 URL」，不是一次性消费）。
+- **Content-Type 按真实字节定**：文件端点读文件后嗅探图片头决定 `image/png|jpeg|webp`，
+  不采信 multipart 的 `Content-Type`、也不看文件名后缀。
+- **`LocalFileStore`**：`put` 落盘到 `maps/<mapId>/<uuidv7><ext>`；替换底图的顺序是
+  **校验 → `store.put` 新文件 → `maps.update` 改行 → `discard` 删旧文件**（新文件先落地、
+  旧文件后删；`discard` 失败只 WARN，不让一次清理失败回滚已提交的换图）。
+- **读图的两种失败折叠为同一 404 `MAP_IMAGE_MISSING`**：行内 `image_path` 为空，与行内有路径但
+  磁盘文件已丢，对客户端是同一件事，不给两套码。
+- **`GET /api/v1/files` 免 Bearer 但**：`path` 仍受签名约束（不能拿它当任意文件读取入口）；
+  上传底图后的回显 `imageUrl` 是签名 URL，供 `<img>` 直接拉取（D09-②）。
+- **`HmacFileUrlSigner` 与 `LocalFileStore` 均为 `@Component`**，端口在 `scds-domain`
+  （`FileStore` / `FileUrlSigner`），实现与配置在 `scds-core`（`scds.files.*`）。
+- **`FileController` 只做验签 + 读文件**，不做权限判断：授权来自签名本身。
+
+⚠ **一处实现偏离，需知悉**：`FileStorageProperties` 对 `sign-secret` 采取的是
+**未配置 → 本次启动随机生成并打 WARN**（显式配了但短于 32 字符才启动失败），
+这与 D09-⑤ 原文「未配置则**启动失败**」不一致。取此口径的理由是：本机开发与自动测试
+（`MapBaseHttpIT`、`ApiSkeletonSmokeIT` 等）不应被迫先手配密钥，而 TTL 只有 15 分钟，
+重启导致旧签名 URL 失效的影响可忽略；「显式填弱值」才是真正要拦的错误信号。
+**生产部署仍须在 `.env` 显式提供 `SCDS_FILE_SIGN_SECRET`**。若要求与 D09-⑤ 严格一致
+（未配置即启动失败），需单独裁定后改 `FileStorageProperties` 与本记录。
+
+本段新增/更新的契约与文档：`api/paths/files.yaml`（新建）、`openapi.yaml`、
+`api/paths/map.yaml`（`uploadMapImage` 补 413/415、`getMapImage` 补 `image/webp`）、
+`api/schemas/domain.yaml`、`api/schemas/common.yaml`、`design/03-auth.md` §4.4（白名单登记）。
+
+测试证据：`ImageHeadersTest` 8、`MapLedgerServiceIT` 35（含 6 条图片用例）、
+`ApiSkeletonSmokeIT` 71（含 `/api/v1/files?path=…&exp=…&signature=…`）、`RoleWritePermissionIT` 63。
+本段另**删除了 `MaxUploadSizeExceededException` 处理器**（改由 `MvcProblemIT` 的
+`actualContainerMultipartLimit` 以**真实 TCP 2KB 上传**断言 413 兜底），删后该 27 项全过，
+故判定该删除成立、无需恢复。
+
+### MAP-BASE 分段 G 口径（2026-10-22，端到端 IT + 文档回写）
+
+分段 G 的目标是**用真实链路走一遍 F 段的产物**，而不是再加服务层用例。
+新增 `scds-app` 的 `MapBaseHttpIT`：真实 Boot 入口（`ApplicationStartupSupport.start`）
++ 真实 MySQL（`scds_next_test`）+ 真实安全过滤链 + 真实 TCP + 真实 `multipart/form-data`，
+专属编号段 + `cleanUp()` 精确回收，并通过
+`environment.getPropertySources().addFirst(new MapPropertySource(...))`
+**只覆盖 `scds.files.root` 一项**（不动 `.env.test` 与其它已有配置）。
+
+两个用例覆盖的形状：
+
+1. `mapImageAndSignedUrlOverRealHttp`：未上传 → 404 `MAP_IMAGE_MISSING`；上传 37×19 PNG
+   （**刻意非正方形**：宽高写反在正方形图上分辨不出）断言回填宽高与 `imageUrl` 前缀；
+   **不带 Bearer** 取签名 URL → 200 + `image/png` + 字节相等；签名错 → 403 `FILE_URL_INVALID`
+   且 `instance` 为 `/api/v1/files`（取 requestURI，不含查询串）；带 Bearer 走域内路由；
+   假图片（文件名 `fake.png`、正文非图片）→ 415；换 JPEG 后**旧签名 URL 落 404、新 URL 回
+   `image/jpeg`**；删底图 → 204 且连带删文件。
+2. `floorPointsAndUwbMetaOverRealHttp`：未标点时读回**空列表**（不是 404）；PUT 后读回；
+   未标定 → 404 `MAP_NOT_CALIBRATED`；保存标定后 `calibrated=true` / `floorCount=1`；
+   `bs2` 越界 5000 → 400 `MAP_UWB_META_INCOMPLETE`；删图收尾。
+
+**本段暴露并修复的真实端到端缺陷（F 段遗留）**：
+`MapController.replaceFloorPoints` 原把**整个请求包体** `{"points":[…]}` 写入
+`t_map_floor.points`，而读回路径 `listFloorPoints` 按**裸数组**解析（`t_map_floor.points`
+的冻结结构就是 `[{posNum,xPct,yPct,label}]`）→ `MismatchedInputException` → 500。
+服务层 IT 直接喂裸数组文本，故从未暴露；只有让 HTTP 层把「请求体形状 → 落库形状」串起来才会现形。
+**修复**：落库改为 `write(body.points())`（响应仍回显请求体——这是一次全量替换，
+回读还要面对 MySQL 对 JSON 列的键序重排）。**教训：API 形状与库形状必须同形，
+且这只能在端到端路径上验证。**
+
+IT 自身也修了两处：`cleanUp` 原写 `DELETE FROM t_map WHERE map_id = :mapId`，
+而 `t_map` 主键列名是 **`id`**（`map_id` 只在 `t_map_floor` 上）→ `BadSqlGrammarException`；
+以及楼层点位断言改为**先断言状态码再解析**，否则 500 的响应体是 Problem 对象、
+`path("points")` 得到 `MissingNode`、`isEmpty()` 一样通过，会把 500 当成「空列表」放行。
+
+本段结果：`mvn -o test -pl scds-app -am -Dtest=MapBaseHttpIT` → **Tests run: 2, Failures: 0, Errors: 0**；
+随后全量 `mvn -o verify` → **BUILD SUCCESS，751 项全绿**
+（protocol 19 / core 346 / api 103 / app 283；app 由 F 段 281 增至 283 = 本段新增 2 条 IT）。
+
+**首跑全量 verify 曾失败，但不是代码回归**：`scds-core` 的 `BaseMapRepositoryIT` 两项
+（`findByType_filtersByEnum`、`findAll_ordersNewestFirstAndPaginates`）报
+`expected 1 but was 2`。根因是 IT 首跑失败时 `cleanUp` 抛出 `BadSqlGrammarException`，
+**两处 `DELETE` 都没执行**，把 1 行 `t_map` + 1 行 `t_map_floor` 留在 `scds_next_test` 里；
+而 `BaseMapRepositoryIT` 断言的是**全表行数**，看到外来行即失败。
+定位方式：失败信息里带出了残留行的完整内容（UUID、时间戳 `2026-10-21T17:01:15Z` = 首跑时刻），
+据此确认是自家残留而非他人数据，只按 UUID 删该行（删后两张表均为 0 行），未清库、未删卷。
+**教训：断言全表行数的 IT 与「会往同一张表写数据的其它 IT」共存时，任何一个 IT 的清理失败
+都会把它人的用例打红；排查顺序应是「先看残留数据是谁留下的」再怀疑代码。**
+本段仍为 501 的 UWB 校准三端点与 `device/me` 不在范围内，未触碰。
+
 
