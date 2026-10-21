@@ -361,7 +361,10 @@ mapUwbMeta:
       '401':
         $ref: '../schemas/common.yaml#/Unauthorized'
       '404':
-        description: 底图不存在或尚未标定（`MAP_NOT_FOUND` / `MAP_UWB_META_INCOMPLETE`）
+        description: |
+          底图不存在（`MAP_NOT_FOUND`）或该底图尚未标定（`MAP_NOT_CALIBRATED`）。
+          两者分码：前者是「id 打错了」，后者是「图在、但还没做 UWB 标定」，
+          现场处置动作不同（换图 vs 去标定），前端要能分别引导。
         content:
           application/problem+json:
             schema:
@@ -397,7 +400,11 @@ mapUwbMeta:
             schema:
               $ref: '../schemas/domain.yaml#/UwbMeta'
       '400':
-        description: 基站缺项或几何不自洽（`MAP_UWB_META_INCOMPLETE`）
+        description: |
+          基站缺项或几何不自洽。字段级问题（bs1~bs4 缺席、坐标非数值）由 Bean Validation
+          折叠为 `VALIDATION_FAILED`（`errors` 里逐字段回填）；语义问题（坐标越出底图宽高、
+          四角退化共线、`realLengthCm`/`realWidthCm` 非正整数厘米）由服务层判为
+          `MAP_UWB_META_INCOMPLETE`。
         content:
           application/problem+json:
             schema:

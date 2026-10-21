@@ -68,7 +68,9 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 - [开演](api/paths/exercise.yaml)要求多次硬件发送后整体回滚；物理副作用不能靠 JDBC 回滚撤回，归 D11。
 - [CommandAck](api/schemas/domain.yaml)定义 accepted=false 为未入队，却提示“已下发但设备未确认”；
   必须区分发送事实和确认事实，归 D11。
-- Anchor/UwbAnchorPoint 的 xPx/yPx 命名为像素，但 schema 限制 0..1，需对齐单位说明，归 D15。
+- ~~Anchor/UwbAnchorPoint 的 xPx/yPx 命名为像素，但 schema 限制 0..1，需对齐单位说明，归 D15。~~
+  **已闭合（2026-10-21，MAP-BASE 分段 E）**：以像素为准。`UwbAnchorPoint` 去掉 0~1 约束、
+  描述改为像素；D15-⑤ 原「归一化 0~1」口径已按此回退。详见下方「MAP-BASE 分段 E」小节。
 - getCurrentExercise 无演习时为 running=false，但 Exercise 强制 exerciseId/planId/startedAt；
   无场次时字段可空/缺席与 schema 必需约束需明确，归 D15。
 - UnitState.position 说明离线为 null，但冻结要求离线不能解除最后有效坐标；
@@ -244,7 +246,7 @@ AuthServiceIT真实提交不伪装为自动回滚。完整app启动验收另分�
 | D09-④ WebP | `getMapImage` **原格式返回**（响应 content-type 补 `image/webp`），不做统一转码 |
 | D09-⑤ 签名密钥 | **独立 HMAC 密钥** `SCDS_FILE_SIGN_SECRET`，由部署脚本写入 `.env`；签名覆盖 `path + exp`；未配置则**启动失败**（与 R27 TTL 校验同口径）。不复用 JWT 的 RSA 私钥，保证文件访问与令牌信任解耦、可单独轮换 |
 | D09-⑥ 存储根与上限 | 根目录 `SCDS_FILES_ROOT`，默认 `${user.home}/.scds/files`（沿用旧系统 `.scds` 约定）；子目录 `maps/`、`exports/`；单图上限 20MB；白名单 PNG/JPEG/WebP，按真实图片头校验而非扩展名 |
-| D15-⑤ 坐标命名 | **保留 `Anchor.xPx/yPx` 与 `UwbAnchorPoint.xPx/yPx` 字段名**，只修描述为“底图归一化坐标 0~1，原点左上”，与 `GeoPoint.xPct/yPct` 语义对齐。理由：`t_map.uwb_meta` 的 JSON 结构已冻结且字段名就是 `xPx/yPx`，改名等于动冻结结构 |
+| D15-⑤ 坐标命名 | **保留 `Anchor.xPx/yPx` 与 `UwbAnchorPoint.xPx/yPx` 字段名**，且**语义即底图像素**（原点左上），与 `PROTOCOL.md` §6.6 定稿结构、`t_map.uwb_meta`、`scds-solver` 的 `Geometry` 反解同口径。理由：`t_map.uwb_meta` 的 JSON 结构已冻结且字段名就是 `xPx/yPx`，改名等于动冻结结构。<br>⚠ 本行原写的「底图归一化坐标 0~1」**已回退**（原文把字段名当成了归一化语义，与 §6.6 定稿的整数像素示例互斥） |
 | D15-⑥ 无演习响应 | 维持 **HTTP 200 + `running=false`**（不是 404）；把 `Exercise` 的 `exerciseId/planId/startedAt` 由 `required` 改为可空，明确无场次时这些字段缺席 |
 | D15-⑦ 离线/阵亡 | `UnitState.position` schema 补 `null`；离线且从未定位 → `null`；**阵亡（`deadAt != null`）必须保留最后有效坐标**，并由 `positionSource` 标注来源，不解除冻结 |
 | D15-⑧ 危险物 | 危险物（65533-65535）**只在命中事件 `shooterNum` 出现**，`UnitState.vestNum` 保持 `1..65532`，不调整该上限 |
@@ -259,4 +261,28 @@ AuthServiceIT真实提交不伪装为自动回滚。完整app启动验收另分�
 
 D09 与 D15 的剩余实现细节（签名 URL 的 `exp` 精度与时钟偏移容忍、清理任务周期与失败重试、
 `signalQuality < 2` 时坐标是否下发、换图与 DB 更新的先后与补偿顺序）在 MAP-BASE 开工方案中逐项列出并再确认。
+
+### MAP-BASE 分段 E 口径（2026-10-21，楼层点位 + UWB 标定）
+
+分段 E 开工前勘察出**三处契约内部冲突**，用户逐项裁定如下（均取推荐口径）：
+
+| 冲突 | 裁定 |
+|---|---|
+| `uwb_meta` 的 `xPx/yPx`：`PROTOCOL.md` §6.6 定稿与 `scds-solver` 按**像素**，而 `schemas/domain.yaml` 的 `UwbAnchorPoint` 按 D15-⑤ 写**归一化 0~1**（含 `minimum/maximum` 断言），二者互斥 | **以像素为准**：`UwbAnchorPoint` 去 0~1 约束、描述改像素，D15-⑤ 描述回退；`UwbSolver` 零改动 |
+| `MAP_UWB_META_INCOMPLETE` 在 `paths/map.yaml` 里同时是 `getUwbMeta` 的 404 与 `putUwbMeta` 的 400，与状态表「一码一状态」冲突 | **新增专用码**：`MAP_NOT_CALIBRATED`（404）承载 GET 的「尚未标定」，`MAP_NOT_FOUND` 保留；`MAP_UWB_META_INCOMPLETE` 固定 400 给 PUT 校验失败 |
+| `uwb_meta` 的 API 形状（`{anchors:{bs1..}}`）与冻结存储/解算形状（`bs1..bs8` 在顶层）不一致 | **展平为冻结结构**：`UwbMeta` 直接含 `bs1~bs8` + `realLengthCm/realWidthCm`，删掉 `UwbAnchors` 包装。API、库、解算三者同形，零转换、零漂移 |
+
+配套口径：
+
+- **`putUwbMeta` 的 400 分两条路**：字段级缺项/非数值由 Bean Validation 折叠为 `VALIDATION_FAILED`
+  （`errors` 逐字段回填）；语义问题（坐标越出底图宽高、四角退化共线、`realLengthCm/realWidthCm`
+  非正整数厘米）由服务层判为 `MAP_UWB_META_INCOMPLETE`。
+- **不做「实测长宽 vs 像素比例」的严格自洽校验**：§6.6 的定稿示例本身不满足该比例
+  （`realLengthCm/宽高像素` 两侧相差约 15%），据此判 400 会把文档给出的合法样例拒掉；
+  严格反解仍在 `scds-solver` 的 `Geometry` 里（那里才需要它），保存侧只拦结构性与边界性错误。
+- **`replaceFloorPoints` 是单楼层替换**（路径里带 `floorNum`），不是整图替换：
+  仓储层补单楼层 upsert，不再借 `replaceByMapId` 的「先删全图再插」。
+- **UWB 校准三端点（`startUwbCalibration` / `getUwbCalibration` / `clearUwbCalibration`）继续 501**：
+  `scds-gateway` 无 Java 源码，没有可注入的采样端口；库内也没有校准状态表（迁移 V1~V9），
+  无法真实实现。`MAP_CALIBRATION_IN_PROGRESS` 与 `MAP_IMAGE_MISSING` 因此**不预登记**到状态表。
 
