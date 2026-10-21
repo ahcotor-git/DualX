@@ -171,7 +171,10 @@ mapImage:
     tags: [map]
     operationId: uploadMapImage
     summary: 上传底图图片
-    description: 支持 PNG/JPEG/WebP。上传成功后服务端回填 imageWidth/imageHeight。
+    description: |
+      支持 PNG/JPEG/WebP，**按原格式落盘不转码**（D09-④）。上传成功后服务端回填
+      imageWidth/imageHeight；同一底图重复上传即替换，旧文件删除（D09-②）。
+      服务端校验真实图片头，不信任扩展名与 Content-Type。
     parameters:
       - name: mapId
         in: path
@@ -211,6 +214,9 @@ mapImage:
     tags: [map]
     operationId: getMapImage
     summary: 下载底图图片
+    description: |
+      **按上传原格式返回**（PNG / JPEG / WebP 各自对应 contentType），不做统一转码（D09-④）。
+      该路径要求 Bearer；供 `<img>` 直接加载的短时效签名 URL 见 `MapDetail.imageUrl`（D09-②）。
     parameters:
       - name: mapId
         in: path
@@ -226,6 +232,10 @@ mapImage:
               type: string
               format: binary
           image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/webp:
             schema:
               type: string
               format: binary

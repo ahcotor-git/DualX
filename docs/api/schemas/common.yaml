@@ -367,7 +367,10 @@ AsyncTask:
       type: [string, 'null']
     downloadUrl:
       type: [string, 'null']
-      description: state=SUCCEEDED 时有效，为一次性签名 URL
+      description: |
+        state=SUCCEEDED 时有效。**短时效（默认 15 分钟）可重复**签名 URL，不带 `Authorization`，
+        可被浏览器直接拉取；到期以 `expireAt` 为准，过期后需重新发起导出。
+        原「一次性签名 URL」措辞已废止（D09-②），客户端不必设计消费记录与失效重试。
     expireAt:
       type: [string, 'null']
       format: date-time

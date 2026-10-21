@@ -224,37 +224,48 @@ RosterEntry:
 
 Exercise:
   type: object
-  required: [exerciseId, planId, startedAt, running]
+  description: |
+    当前/最近一场演习的状态。**无演习进行中时返回 HTTP 200 + `running=false`（不是 404）**，
+    此时除 `running` 外的业务字段一律缺席，且**不得编造场次 ID 或时间**（D15-⑥）。
+    客户端必须先判 `running` 再解引用 `exerciseId` / `planId` / `startedAt`。
+  required: [running]
   properties:
     exerciseId:
-      type: string
+      type: [string, 'null']
+      description: 无演习进行中时为 null / 缺席
     planId:
-      type: string
+      type: [string, 'null']
+      description: 无演习进行中时为 null / 缺席
     planName:
       type: string
+      description: 无演习进行中时缺席
     mapId:
       type: [string, 'null']
     battleMode:
       type: string
       enum: [TRAIN, BATTLE]
+      description: 无演习进行中时缺席
     running:
       type: boolean
     startedAt:
-      type: string
+      type: [string, 'null']
       format: date-time
+      description: 无演习进行中时为 null / 缺席
     endedAt:
       type: [string, 'null']
       format: date-time
     elapsedSeconds:
       type: integer
       format: int64
+      description: 无演习进行中时缺席
     rosterCount:
       type: integer
       format: int32
+      description: 无演习进行中时缺席
     onlineCount:
       type: integer
       format: int32
-      description: 心跳在 5000ms 窗口内的马甲数
+      description: 心跳在 5000ms 窗口内的马甲数；无演习进行中时缺席
 
 StartExerciseRequest:
   type: object
@@ -450,11 +461,17 @@ Anchor:
       format: double
       minimum: 0
       maximum: 1
+      description: |
+        底图归一化横坐标（0~1，原点左上）——**不是像素值**。
+        字段名沿用旧资产与冻结 `uwb_meta` 的 `xPx`，语义与 `GeoPoint.xPct` 一致（D15-⑤）。
     yPx:
       type: [number, 'null']
       format: double
       minimum: 0
       maximum: 1
+      description: |
+        底图归一化纵坐标（0~1，原点左上）——**不是像素值**；Y 轴映射由服务端完成，
+        前端不得做 `1 - y` 之类的翻转。语义与 `GeoPoint.yPct` 一致（D15-⑤）。
     enabled:
       type: boolean
       default: true
@@ -536,7 +553,10 @@ MapDetail:
       $ref: '#/MapType'
     imageUrl:
       type: [string, 'null']
-      description: 底图签名访问 URL
+      description: |
+        底图**短时效签名**访问 URL（默认 15 分钟）。可重复使用、**不带 `Authorization`**，
+        供 `<img>` / 浏览器直接加载；未上传图片时为 null。过期后重新 `GET` 底图详情取新 URL，
+        不缓存跨会话（D09-②）。
     imageWidth:
       type: [integer, 'null']
       format: int32
@@ -596,6 +616,9 @@ FloorPointsRequest:
 
 UwbAnchorPoint:
   type: object
+  description: |
+    单个基站的底图归一化坐标（0~1，原点左上）。字段名 `xPx` / `yPx` 沿用旧资产与
+    冻结 `uwb_meta` 结构，**不是像素值**；改名等于动冻结结构，故只修描述（D15-⑤）。
   required: [xPx, yPx]
   properties:
     xPx:
@@ -603,11 +626,13 @@ UwbAnchorPoint:
       format: double
       minimum: 0
       maximum: 1
+      description: 底图归一化横坐标（0~1，原点左上）
     yPx:
       type: number
       format: double
       minimum: 0
       maximum: 1
+      description: 底图归一化纵坐标（0~1，原点左上）；Y 轴映射由服务端完成
 
 UwbMeta:
   type: object

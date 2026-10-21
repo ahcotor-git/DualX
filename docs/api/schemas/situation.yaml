@@ -28,6 +28,8 @@ UnitState:
       description: |
         由编号区间推导：<= 1800 为 SOLDIER；1801~4800 为 WEAPON / VEHICLE；
         65533/65534/65535 为 HAZARD（地雷/爆炸物/手雷）。
+        **危险物只在命中事件的 `shooterNum` 出现，不会作为 `UnitState` 条目下发**，
+        故 `vestNum` 上限保持 65532（D15-⑧）。
     weaponKind:
       oneOf:
         - $ref: './common.yaml#/WeaponKind'
@@ -50,9 +52,16 @@ UnitState:
       format: int32
       description: 副武器弹药
     position:
-      allOf:
+      description: |
+        三态口径（D15-⑦）：
+        - 在线且已定位 → 最后一次有效坐标；
+        - **离线 / 未定位且从未有过有效坐标 → null**；
+        - **阵亡（`deadAt` 非空）→ 冻结在最后有效位置，不因离线或阵亡解除为 null**。
+        室内为 `xPct` / `yPct`（0~1，原点左上），Y 轴映射由服务端完成，前端不得翻转。
+        坐标来源由 `positionSource` 标注（`NONE` 表示无有效坐标）。
+      oneOf:
         - $ref: './common.yaml#/GeoPoint'
-      description: '离线/未定位时为 null。阵亡后必须冻结在最后有效位置'
+        - type: 'null'
     motion:
       $ref: './common.yaml#/MotionState'
     signalQuality:
