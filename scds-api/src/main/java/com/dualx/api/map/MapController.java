@@ -16,6 +16,7 @@ import com.dualx.core.domain.MapType;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -25,6 +26,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -38,23 +40,27 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * map 域：底图 / 楼层点位表 / UWB 坐标标定（契约 docs/api/paths/map.yaml）。
+ * map 域：底图 / 楼层点位表 / UWB 坐标标定 / 底图图片（契约 docs/api/paths/map.yaml）。
  *
  * <p><b>已接线</b>：底图台账 CRUD（{@code listMaps} / {@code createMap} / {@code getMap} /
  * {@code updateMap} / {@code deleteMap}）、楼层点位表（{@code listFloorPoints} /
- * {@code replaceFloorPoints}）与 UWB 标定参数（{@code getUwbMeta} / {@code putUwbMeta}）
- * 走 {@link MapLedgerService}。本层只做契约形状的搬运（DTO ↔ 读取模型 ↔ 冻结 JSON），
- * 「能不能删」「标定参数自不自洽」这类判断全在服务层——写进控制器会让同一规则在 REST 与
- * 将来的 WS 入口上各写一遍。</p>
+ * {@code replaceFloorPoints}）、UWB 标定参数（{@code getUwbMeta} / {@code putUwbMeta}）
+ * 与底图图片（{@code uploadMapImage} / {@code getMapImage}）走 {@link MapLedgerService}。
+ * 本层只做契约形状的搬运（DTO ↔ 读取模型 ↔ 冻结 JSON ↔ 图片字节），「能不能删」
+ * 「标定参数自不自洽」「这张图是不是真图片」这类判断全在服务层——写进控制器会让同一规则
+ * 在 REST 与将来的 WS 入口上各写一遍。</p>
  *
- * <p><b>仍是占位（501）</b>：图片上传 / 下载（{@code uploadMapImage} / {@code getMapImage}，
- * 需 {@code FileStore} 与真实图片头校验）与 UWB 校准三端点（{@code startUwbCalibration} /
+ * <p><b>仍是占位（501）</b>：UWB 校准三端点（{@code startUwbCalibration} /
  * {@code getUwbCalibration} / {@code clearUwbCalibration}，需 {@code scds-gateway} 的采样端口
- * 与校准状态存储，本仓库尚不具备）。它们各自属后续段落，本段只保证路由与 DTO 已按契约立起。</p>
+ * 与校准状态存储，本仓库尚不具备）。它们属后续段落，本段只保证路由与 DTO 已按契约立起。</p>
  *
  * <p>不设类级路径前缀，逐方法写完整绝对路径。</p>
  */
@@ -70,9 +76,18 @@ public class MapController {
      */
     private final ObjectMapper json;
 
-    public MapController(MapLedgerService ledger, ObjectMapper json) {
+    /**
+     * 把 {@code t_map.image_path} 签成 {@code MapDetail.imageUrl}。
+     *
+     * <p>签名本身在 core（两个信任域用不同密钥，D09-⑤），URL 形状属接口层——
+     * 端口只管「签什么、验得过不过」，前缀与查询参数名归这里（见 {@code FileUrlSigner} 注释）。</p>
+     */
+    private final FileUrlSigner signer;
+
+    public MapController(MapLedgerService ledger, ObjectMapper json, FileUrlSigner signer) {
         this.ledger = ledger;
         this.json = json;
+        this.signer = signer;
     }
 
     // ── 底图台账 ────────────────────────────────────────────────────────────
@@ -84,7 +99,7 @@ public class MapController {
                             @RequestParam(required = false, defaultValue = "20")
                             @Min(1) @Max(PageRequest.MAX_SIZE) int size) {
         Page<MapLedgerService.MapView> result = ledger.list(type, PageRequest.of(page, size));
-        return new MapPage(result.items().stream().map(MapController::toDetail).toList(),
+        return new MapPage(result.items().stream().map(this::toDetail).toList(),
                 new PageMeta(result.page(), result.size(), result.total()));
     }
 
@@ -114,18 +129,38 @@ public class MapController {
         ledger.delete(mapId(mapId));
     }
 
-    // ── 底图图片（占位：随图片段落落地）──────────────────────────────────────
+    // ── 底图图片 ────────────────────────────────────────────────────────────
 
-    /** 上传底图图片（multipart/form-data，文件字段名 file）。 */
+    /**
+     * 上传底图图片（multipart/form-data，文件字段名 file）。
+     *
+     * <p>回 200 而不是 201：契约把本操作定义成「同一底图重复上传即替换」，
+     * 资源本身（底图）早就存在，变的只是它的一张图。</p>
+     */
     @PostMapping("/api/v1/maps/{mapId}/image")
     public MapDetail uploadMapImage(@PathVariable String mapId, @RequestParam("file") MultipartFile file) {
-        throw new NotImplementedException("uploadMapImage");
+        byte[] content;
+        try {
+            content = file.getBytes();
+        } catch (IOException e) {
+            // 客户端中断或临时文件被清理：请求体已经收不全，这不是「图片不合法」，属服务端无法完成。
+            throw new UncheckedIOException("读取上传的底图文件失败", e);
+        }
+        return toDetail(ledger.uploadImage(mapId(mapId), content));
     }
 
-    /** 下载底图图片（image/png 或 image/jpeg 二进制）。 */
+    /**
+     * 下载底图图片（image/png、image/jpeg 或 image/webp 二进制）。
+     *
+     * <p>Content-Type 取自服务层按真实文件头判定的格式，不信 {@code image_path} 的扩展名。
+     * 本路径要 Bearer；供 {@code <img>} 直接加载的是 {@code MapDetail.imageUrl} 里的签名 URL。</p>
+     */
     @GetMapping("/api/v1/maps/{mapId}/image")
     public ResponseEntity<byte[]> getMapImage(@PathVariable String mapId) {
-        throw new NotImplementedException("getMapImage");
+        MapLedgerService.MapImage image = ledger.readImage(mapId(mapId));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(image.format().contentType()))
+                .body(image.content());
     }
 
     // ── 楼层点位表 ──────────────────────────────────────────────────────────
@@ -243,15 +278,35 @@ public class MapController {
     /**
      * {@code MapDetail} 组装。
      *
-     * <p>{@code imageUrl} 本段恒为 null：D09-② 只定了「短时效、可重复签名、不带
-     * Authorization」，**取文件的路径形状与查询参数名还没在契约里定下**，而图片上传接口
-     * 本身也是 501——本段所有底图的 {@code image_path} 必为空。图片段落接线时在这里接
-     * {@code FileUrlSigner}；先编一个 URL 形状会让契约、前端与后续实现三处跟着改。</p>
+     * <p>{@code imageUrl} 每次读详情都**重新签发**而不是缓存：TTL 只有 15 分钟（D09-②），
+     * 缓存下来的 URL 会在客户端手里悄悄过期，而重新签发只是一次 HMAC 计算。</p>
      */
-    private static MapDetail toDetail(MapLedgerService.MapView view) {
+    private MapDetail toDetail(MapLedgerService.MapView view) {
         BaseMap map = view.map();
-        return new MapDetail(map.id().toString(), map.name(), map.mapType(), null,
+        return new MapDetail(map.id().toString(), map.name(), map.mapType(), imageUrl(map),
                 map.imageWidth(), map.imageHeight(), (int) view.floorCount(), view.calibrated(),
                 map.createdAt(), map.updatedAt());
+    }
+
+    /**
+     * 为底图图片签发短时效访问 URL（D09-②）。
+     *
+     * <p>返回**根相对路径**，不带 scheme/host：服务端不猜部署形态下的对外地址（本地实例 +
+     * 云端反向代理，见契约 {@code MapDetail.imageUrl}）。三个查询参数的名字属于接口层，
+     * 必须与 {@code paths/files.yaml} 逐字一致——客户端只会原样转发，它无法自己纠正。</p>
+     *
+     * @return 尚未上传图片时为 {@code null}
+     */
+    private String imageUrl(BaseMap map) {
+        String path = map.imagePath();
+        if (path == null) {
+            return null;
+        }
+        FileUrlSigner.SignedFileUrl signed = signer.sign(path);
+        // path 与 signature 都过一遍编码：前者含 '/'，后者是 Base64 URL-safe（含 '-'、'_'），
+        // 虽不解码也能用，但编码后才算一个任何浏览器与代理都不会改写的合法查询串。
+        return "/api/v1/files?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8)
+                + "&exp=" + URLEncoder.encode(signed.exp(), StandardCharsets.UTF_8)
+                + "&signature=" + URLEncoder.encode(signed.signature(), StandardCharsets.UTF_8);
     }
 }

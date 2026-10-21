@@ -95,6 +95,11 @@ public class SecurityConfig {
             registry.requestMatchers(HttpMethod.POST, "/api/v1/auth/login", "/api/v1/auth/refresh").permitAll();
         }
 
+        // 受保护文件的签名 URL（D09-②）：授权凭据是短时效签名而非令牌，故免 Bearer——
+        // `<img>` 与浏览器不会为图片请求带上 Authorization。**放行不等于放行访问**：
+        // 验签在 FileController 里做，验不过一律 403 FILE_URL_INVALID。
+        registry.requestMatchers(HttpMethod.GET, "/api/v1/files").permitAll();
+
         // 指标会泄露内部结构与容量，不对外开放。
         registry.requestMatchers(HttpMethod.GET, "/actuator/info", "/actuator/metrics", "/actuator/metrics/**")
                 .hasRole("ADMIN");
