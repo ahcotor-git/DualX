@@ -9,10 +9,12 @@ import com.dualx.core.domain.Plan;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.core.map.MapLedgerService.MapView;
+import com.dualx.core.port.FileStore;
 import com.dualx.core.repository.BaseMapRepository;
 import com.dualx.core.repository.ExerciseRepository;
 import com.dualx.core.repository.MapFloorRepository;
 import com.dualx.core.repository.PlanRepository;
+import com.dualx.core.storage.ImageHeaders;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
 import com.dualx.core.support.UuidV7;
@@ -23,8 +25,12 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -58,6 +64,23 @@ class MapLedgerServiceIT {
     @Autowired private MapFloorRepository floors;
     @Autowired private PlanRepository plans;
     @Autowired private ExerciseRepository exercises;
+    @Autowired private FileStore store;
+
+    /**
+     * 图片落盘的一次性根目录，建在本模块的 {@code target/} 下（{@code mvn clean} 顺带清掉）。
+     *
+     * <p>{@code scds.files.root} 的默认值是 {@code ${user.home}/.scds/files}：让 IT 往开发机主目录写
+     * 文件既污染环境，也会让「上传成功」依赖开发机的目录状态。更要紧的是**事务回滚只管数据库、
+     * 不会删掉已落盘的文件**，所以这个目录必须一次性且不与人共用。</p>
+     */
+    private static final String FILES_ROOT =
+            Path.of("target", "test-files", UUID.randomUUID().toString()).toString();
+
+    /**
+     * 单图上限压到 4KB。真实默认是 20MB，而造一个 20MB 的数组只为触发一次 413 不值得；
+     * 上限的**取值来源**（配置而非硬编码）正是这条用例要验证的东西，数值大小不影响结论。
+     */
+    private static final int MAX_IMAGE_BYTES = 4096;
 
     @Test
     @DisplayName("新建底图 → 建档即空图：无图片、无标定、零楼层")
@@ -294,7 +317,102 @@ class MapLedgerServiceIT {
         assertThat(ledger.get(id).calibrated()).isTrue();
     }
 
+    // ── 底图图片（契约 uploadMapImage / getMapImage）─────────────────────────
+
+    @Test
+    @DisplayName("上传图片：按真实图片头回填宽高，落盘在 maps/<mapId>/ 下且状态是「已上传」")
+    void uploadImage_backfillsSizeFromRealHeaderAndLandsInTheMapDirectory() {
+        UUID id = insertMap("待上传底图", null, null);
+
+        MapView uploaded = ledger.uploadImage(id, png(4000, 3000, 64));
+
+        String path = uploaded.map().imagePath();
+        assertThat(path).startsWith("maps/" + id + "/").endsWith(".png");
+        assertThat(uploaded.map().imageWidth()).isEqualTo(4000);
+        assertThat(uploaded.map().imageHeight()).isEqualTo(3000);
+        assertThat(store.exists(path)).isTrue();
+        // 落盘的必须是上传的原字节，不做任何转码（D09-④）
+        assertThat(store.read(path))
+                .hasValueSatisfying(bytes -> assertThat(bytes).isEqualTo(png(4000, 3000, 64)));
+    }
+
+    @Test
+    @DisplayName("换图即换新文件名并删旧文件：旧名会把上一次的扩展名带错，也留着占磁盘")
+    void uploadImage_replaceDropsThePreviousFile() {
+        UUID id = insertMap("换图底图", null, null);
+        String first = ledger.uploadImage(id, png(4000, 3000, 32)).map().imagePath();
+
+        String second = ledger.uploadImage(id, png(800, 600, 32)).map().imagePath();
+
+        assertThat(second).isNotEqualTo(first);
+        assertThat(store.exists(first)).isFalse();
+        assertThat(store.exists(second)).isTrue();
+        assertThat(ledger.get(id).map().imageWidth()).isEqualTo(800);
+    }
+
+    @Test
+    @DisplayName("不是白名单内的真实图片 → UNSUPPORTED_MEDIA_TYPE，且不能把行改成「有图」")
+    void uploadImage_nonImage_isUnsupportedMediaType() {
+        UUID id = insertMap("非图片", null, null);
+
+        assertCode(() -> ledger.uploadImage(id, "#!/bin/sh\necho hi\n".getBytes(StandardCharsets.UTF_8)),
+                ApiErrorCode.UNSUPPORTED_MEDIA_TYPE);
+
+        assertThat(maps.findById(id).orElseThrow().imagePath()).isNull();
+        assertThat(ledger.get(id).map().imageWidth()).isNull();
+    }
+
+    @Test
+    @DisplayName("超过单图上限 → PAYLOAD_TOO_LARGE：上限取自配置，不是写死的 20MB")
+    void uploadImage_overMaxBytes_isPayloadTooLarge() {
+        UUID id = insertMap("超大图", null, null);
+
+        assertCode(() -> ledger.uploadImage(id, png(4000, 3000, MAX_IMAGE_BYTES + 1)),
+                ApiErrorCode.PAYLOAD_TOO_LARGE);
+
+        assertThat(maps.findById(id).orElseThrow().imagePath()).isNull();
+    }
+
+    @Test
+    @DisplayName("读图片：没上传过与文件已丢折叠成同一个 MAP_IMAGE_MISSING，格式按真实字节回")
+    void readImage_missingOrPresent() {
+        UUID neverUploaded = insertMap("还没上传", null, null);
+        assertCode(() -> ledger.readImage(neverUploaded), ApiErrorCode.MAP_IMAGE_MISSING);
+
+        // 行里有 image_path 但文件不在磁盘（手工清理 / 跨机搬迁漏拷）：同样是「现在取不到」
+        UUID staleRow = insertMap("行在文件不在", "maps/" + UUID.randomUUID() + "/gone.png", null);
+        assertCode(() -> ledger.readImage(staleRow), ApiErrorCode.MAP_IMAGE_MISSING);
+
+        UUID id = insertMap("读图片", null, null);
+        ledger.uploadImage(id, png(4000, 3000, 64));
+
+        MapLedgerService.MapImage image = ledger.readImage(id);
+        assertThat(image.format()).isEqualTo(ImageHeaders.ImageFormat.PNG);
+        assertThat(image.content()).isEqualTo(png(4000, 3000, 64));
+    }
+
+    @Test
+    @DisplayName("删底图连带删图片：库行是唯一真相，留下没人引用的图片文件纯属占磁盘")
+    void delete_removesTheImageFileToo() {
+        UUID id = insertMap("删图连带", null, null);
+        String path = ledger.uploadImage(id, png(4000, 3000, 64)).map().imagePath();
+
+        ledger.delete(id);
+
+        assertThat(store.exists(path)).isFalse();
+    }
+
     // ── 夹具 ─────────────────────────────────────────────────────────────────
+
+    /**
+     * 图片相关的两条配置只在类别级覆盖，不动共享的测试配置：{@code TestCoreApplication} 的
+     * 数据源守卫（只允许 {@code scds_next_test}）不该因为图片用例而放宽。
+     */
+    @DynamicPropertySource
+    static void fileStorage(DynamicPropertyRegistry registry) {
+        registry.add("scds.files.root", () -> FILES_ROOT);
+        registry.add("scds.files.max-image-bytes", () -> MAX_IMAGE_BYTES);
+    }
 
     private UUID insertMap(String name, String imagePath, String uwbMeta) {
         UUID id = UuidV7.generate();
@@ -302,6 +420,29 @@ class MapLedgerServiceIT {
                 imagePath == null ? null : 4000, imagePath == null ? null : 3000,
                 imagePath == null ? null : "备注", uwbMeta, null, null));
         return id;
+    }
+
+    /**
+     * 造一段「PNG 头合法、总长可指定」的字节。
+     *
+     * <p>{@link ImageHeaders} 只看文件头、不解码像素，故这里只需要 24 字节的头正确（签名 + IHDR + 大端宽高），
+     * 其余补零——用真实编码器造一张 4000×3000 的位图要 36MB 堆内存，本用例既不需要也不该为它付这个代价。</p>
+     */
+    private static byte[] png(int width, int height, int totalLength) {
+        byte[] bytes = new byte[Math.max(totalLength, 24)];
+        byte[] signature = {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+        System.arraycopy(signature, 0, bytes, 0, signature.length);
+        System.arraycopy("IHDR".getBytes(StandardCharsets.US_ASCII), 0, bytes, 12, 4);
+        beInt(bytes, 16, width);
+        beInt(bytes, 20, height);
+        return bytes;
+    }
+
+    private static void beInt(byte[] b, int offset, int value) {
+        b[offset] = (byte) (value >>> 24);
+        b[offset + 1] = (byte) (value >>> 16);
+        b[offset + 2] = (byte) (value >>> 8);
+        b[offset + 3] = (byte) value;
     }
 
     /**

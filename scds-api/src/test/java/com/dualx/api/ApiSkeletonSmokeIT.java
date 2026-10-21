@@ -7,6 +7,7 @@ import com.dualx.api.device.DeviceController;
 import com.dualx.api.error.ApiExceptionHandler;
 import com.dualx.api.error.NotImplementedException;
 import com.dualx.api.exercise.ExerciseController;
+import com.dualx.api.file.FileController;
 import com.dualx.api.map.MapController;
 import com.dualx.api.replay.ReplayController;
 import com.dualx.api.situation.SituationController;
@@ -16,6 +17,8 @@ import com.dualx.core.auth.DeviceAuthService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.port.FileStore;
+import com.dualx.core.port.FileUrlSigner;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -108,6 +111,23 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 底图详情要签 imageUrl，但本测试里底图相关调用一律在替身处就抛占位异常，签名端口不会真被用到；
+        // 给个同样会抛的替身，是为了让「装配缺件」以断言失败的形式暴露，而不是静默返回 null。
+        FileUrlSigner fileUrlSigner = Mockito.mock(FileUrlSigner.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
+        // 受保护文件的签发与落盘都在 scds-core 的适配器里（要真实文件系统与 scds.files.* 配置）。
+        // 两个替身都抛占位异常：/api/v1/files 因此稳定返回 501 而不是真去验签——
+        // 本测试只问「这条路由注册了没有」，验签与按格式回 Content-Type 由文件域自己的测试覆盖。
+        FileStore fileStore = Mockito.mock(FileStore.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService),
@@ -117,7 +137,8 @@ class ApiSkeletonSmokeIT {
                         new DeviceController(vestLedgerService, anchorLedgerService),
                         // standalone 不装配 Spring 上下文，ObjectMapper 只能自备：本测试里
                         // 底图相关的 JSON 进出都会被替身的占位异常截断，用默认配置即可。
-                        new MapController(mapLedgerService, new ObjectMapper()),
+                        new MapController(mapLedgerService, new ObjectMapper(), fileUrlSigner),
+                        new FileController(fileStore, fileUrlSigner),
                         new ReplayController())
                 .setControllerAdvice(new ApiExceptionHandler())
                 // standalone 不装配安全链，@AuthenticationPrincipal 需要显式解析器；
@@ -141,7 +162,7 @@ class ApiSkeletonSmokeIT {
         };
     }
 
-    /** 契约 {@code docs/api/paths/*.yaml} 的全部 69 条 REST 路由。 */
+    /** 契约 {@code docs/api/paths/*.yaml} 的全部 70 条 REST 路由。 */
     static Stream<Arguments> allContractRoutes() {
         return Stream.of(
                 // ---- auth（6）----
@@ -219,7 +240,12 @@ class ApiSkeletonSmokeIT {
                 route("GET", "/api/v1/replays/r1/statistics"),
                 route("POST", "/api/v1/replays/r1/exports"),
                 route("GET", "/api/v1/replays/r1/exports/t1"),
-                route("GET", "/api/v1/replays/r1/exports/t1/download")
+                route("GET", "/api/v1/replays/r1/exports/t1/download"),
+                // ---- file（1）----
+                // 带上三个查询参数而不是裸路径：裸路径会因缺参在参数解析阶段就 400，
+                // 那样只证明了「有条路由匹配上了」。带参则真的进到控制器里——签名端口的替身抛占位异常，
+                // 稳定得到 501，既证明路由注册，也证明它真的接到了签名端口。
+                route("GET", "/api/v1/files?path=maps/m1/a.png&exp=1&signature=x")
         );
     }
 

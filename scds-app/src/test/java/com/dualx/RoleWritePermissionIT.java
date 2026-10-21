@@ -16,6 +16,7 @@ import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.port.FileUrlSigner;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -122,6 +123,14 @@ class RoleWritePermissionIT {
         @Bean
         MapLedgerService mapLedgerService() {
             return stub(MapLedgerService.class);
+        }
+
+        // 底图详情要签 imageUrl。签名端口不碰数据库，本可给真实实现，但它依赖
+        // scds.files.sign-secret 的默认行为（未配置即随机生成），本切片只问「安全链放不放行」，
+        // 真签一份 HMAC 提供不了任何信息——故同样给替身。
+        @Bean
+        FileUrlSigner fileUrlSigner() {
+            return stub(FileUrlSigner.class);
         }
 
         private static <T> T stub(Class<T> type) {
