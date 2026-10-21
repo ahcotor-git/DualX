@@ -47,15 +47,20 @@ public class VestDeviceSessionRepository {
     }
 
     /**
-     * 设备登录：写入新会话 ID。旧令牌的 sid 与库中不再相等，即天然失效。
+     * 设备登录：写入新会话 ID，并把 {@code bound} 置 1。旧令牌的 sid 与库中不再相等，即天然失效。
      *
-     * @return 影响行数；0 表示该马甲不在台账中，调用方应拒登
+     * <p><b>为什么 {@code bound} 也在这条 UPDATE 里</b>：绑定密钥校验通过就是「已被某个单兵
+     * 终端认领」的充要条件（决策 04 D03-3）。分两条 UPDATE 写会出现「sid 已换新但 bound 还是
+     * 0」的中间态，且多一次往返；合在一条语句里则整个登录写入天然原子。</p>
+     *
+     * @return 影响行数；0 表示该马甲不在台账中（或编号超出 CHECK 约束），调用方应拒登
      */
     public int openSession(int vestNum, String sid, Instant loginAt) {
         return jdbc.sql("""
                         UPDATE t_vest
                            SET device_session_sid = :sid,
-                               device_login_at = :loginAt
+                               device_login_at = :loginAt,
+                               bound = 1
                          WHERE vest_num = :vestNum
                         """)
                 .param("vestNum", vestNum)

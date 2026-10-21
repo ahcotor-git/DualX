@@ -12,6 +12,7 @@ import com.dualx.api.replay.ReplayController;
 import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.auth.AuthService;
+import com.dualx.core.auth.DeviceAuthService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -60,9 +61,17 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 设备登录同理已接核心 DeviceAuthService：真实链路（绑定密钥 / SID 单端在线 / 限流）
+        // 由 DeviceAuthServiceIT 与 AuthHttpIT 覆盖，这里只需让它不碰数据库。
+        DeviceAuthService deviceAuthService = Mockito.mock(DeviceAuthService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
-                        new AuthController(authService),
+                        new AuthController(authService, deviceAuthService),
                         new ExerciseController(),
                         new CommandController(),
                         new SituationController(),

@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -24,6 +25,11 @@ import java.util.Optional;
  *
  * <p><b>阈值</b>：账号 5 次 / 5 分钟，客户端 IP 30 次 / 5 分钟。IP 阈值宽松得多，
  * 因为现场常有多台终端在同一 NAT 出口后面，按账号阈值卡 IP 会把正常登录连坐。</p>
+ *
+ * <p><b>三个口径分属两条独立链路</b>：账号登录用 {@code ACCOUNT + CLIENT_IP}
+ * （{@link #lockout(String, String)} 一族），设备登录用 {@code DEVICE + CLIENT_IP}
+ * （{@link #deviceLockout(int, String)} 一族）。键前缀不同（{@code account:} / {@code vest:}），
+ * 且一次失败只写本条链路的维度——否则设备登录会在账号命名空间里留下永不查询的键。</p>
  *
  * <p><b>作用域是单个进程、重启即清零。</b>本项目"每客户独立实例"，单机承载全部登录，
  * 故不需要跨实例共享计数；代价是重启会放掉正在锁定的账号——现场重启本就伴随人工
@@ -47,7 +53,14 @@ public class LoginThrottle {
     public static final Duration LOCK_DURATION = Duration.ofMinutes(5);
 
     private static final String ACCOUNT_KEY_PREFIX = "account:";
+    private static final String DEVICE_KEY_PREFIX = "vest:";
     private static final String IP_KEY_PREFIX = "ip:";
+
+    /** 账号登录适用的口径：账号自身 + 客户端 IP。 */
+    private static final List<Scope> ACCOUNT_DIMENSIONS = List.of(Scope.ACCOUNT, Scope.CLIENT_IP);
+
+    /** 设备登录适用的口径：设备自身 + 客户端 IP（IP 维度与账号登录共用，D03-6）。 */
+    private static final List<Scope> DEVICE_DIMENSIONS = List.of(Scope.DEVICE, Scope.CLIENT_IP);
 
     private final Clock clock;
     private final Map<String, Bucket> buckets = new HashMap<>();
@@ -69,11 +82,20 @@ public class LoginThrottle {
      * @return 空表示未锁定；非空给出锁的口径与剩余时长（后者用于 429 的 {@code Retry-After}）
      */
     public Optional<Lockout> lockout(String username, String clientIp) {
+        return lockout(ACCOUNT_DIMENSIONS, username, clientIp);
+    }
+
+    /** 设备口径的锁定判定，语义与 {@link #lockout} 相同，键为 {@code vest:<num>}。 */
+    public Optional<Lockout> deviceLockout(int vestNum, String clientIp) {
+        return lockout(DEVICE_DIMENSIONS, Integer.toString(vestNum), clientIp);
+    }
+
+    private Optional<Lockout> lockout(List<Scope> dimensions, String subject, String clientIp) {
         Instant now = clock.instant();
         synchronized (this) {
             Lockout found = null;
-            for (Scope scope : Scope.values()) {
-                Bucket bucket = buckets.get(scope.key(username, clientIp));
+            for (Scope scope : dimensions) {
+                Bucket bucket = buckets.get(scope.key(subject, clientIp));
                 if (bucket == null) {
                     continue;
                 }
@@ -88,10 +110,19 @@ public class LoginThrottle {
 
     /** 记录一次**口令校验失败**。锁定期内的请求不应调用本方法（见类注释）。 */
     public void recordFailure(String username, String clientIp) {
+        recordFailure(ACCOUNT_DIMENSIONS, username, clientIp);
+    }
+
+    /** 记录一次**设备绑定密钥校验失败**。口径见 {@link #deviceLockout}。 */
+    public void recordDeviceFailure(int vestNum, String clientIp) {
+        recordFailure(DEVICE_DIMENSIONS, Integer.toString(vestNum), clientIp);
+    }
+
+    private void recordFailure(List<Scope> dimensions, String subject, String clientIp) {
         Instant now = clock.instant();
         synchronized (this) {
-            for (Scope scope : Scope.values()) {
-                buckets.computeIfAbsent(scope.key(username, clientIp), key -> new Bucket())
+            for (Scope scope : dimensions) {
+                buckets.computeIfAbsent(scope.key(subject, clientIp), key -> new Bucket())
                         .recordFailure(now, scope.maxFailures());
             }
             evictStale(now);
@@ -114,9 +145,18 @@ public class LoginThrottle {
 
     /** 登录成功：两个口径一并清零（仅在未锁定状态下会走到这里）。 */
     public void reset(String username, String clientIp) {
+        reset(ACCOUNT_DIMENSIONS, username, clientIp);
+    }
+
+    /** 设备登录成功：设备与 IP 两个口径一并清零。 */
+    public void resetDevice(int vestNum, String clientIp) {
+        reset(DEVICE_DIMENSIONS, Integer.toString(vestNum), clientIp);
+    }
+
+    private void reset(List<Scope> dimensions, String subject, String clientIp) {
         synchronized (this) {
-            for (Scope scope : Scope.values()) {
-                buckets.remove(scope.key(username, clientIp));
+            for (Scope scope : dimensions) {
+                buckets.remove(scope.key(subject, clientIp));
             }
         }
     }
@@ -131,14 +171,23 @@ public class LoginThrottle {
     /** 锁的口径。 */
     public enum Scope {
         ACCOUNT,
+        /** 设备（马甲终端）维度：键为 {@code vest:<vestNum>}，阈值与账号同（D03-6）。 */
+        DEVICE,
         CLIENT_IP;
 
-        private String key(String username, String clientIp) {
-            return this == ACCOUNT ? ACCOUNT_KEY_PREFIX + username : IP_KEY_PREFIX + clientIp;
+        private String key(String subject, String clientIp) {
+            return switch (this) {
+                case ACCOUNT -> ACCOUNT_KEY_PREFIX + subject;
+                case DEVICE -> DEVICE_KEY_PREFIX + subject;
+                case CLIENT_IP -> IP_KEY_PREFIX + clientIp;
+            };
         }
 
         private int maxFailures() {
-            return this == ACCOUNT ? ACCOUNT_MAX_FAILURES : CLIENT_IP_MAX_FAILURES;
+            return switch (this) {
+                case ACCOUNT, DEVICE -> ACCOUNT_MAX_FAILURES;
+                case CLIENT_IP -> CLIENT_IP_MAX_FAILURES;
+            };
         }
     }
 

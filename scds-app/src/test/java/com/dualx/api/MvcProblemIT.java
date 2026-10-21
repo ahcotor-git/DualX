@@ -4,6 +4,7 @@ import com.dualx.api.auth.AuthController;
 import com.dualx.api.error.ApiExceptionHandler;
 import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.auth.AuthService;
+import com.dualx.core.auth.DeviceAuthService;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -88,6 +89,19 @@ class MvcProblemIT {
         @Bean
         AuthService authService() {
             return Mockito.mock(AuthService.class);
+        }
+
+        /**
+         * 设备登录已接核心服务。本测试只验证 MVC 出口，故让替身固定抛一条业务失败——
+         * 这样「已接线的端点」与 {@code /err01/business} 走的是同一条 problem+json 通道。
+         */
+        @Bean
+        DeviceAuthService deviceAuthService() {
+            DeviceAuthService service = Mockito.mock(DeviceAuthService.class);
+            Mockito.when(service.login(Mockito.anyInt(), Mockito.anyString(), Mockito.anyString()))
+                    .thenThrow(new BusinessException(ApiErrorCode.AUTH_DEVICE_NOT_BOUND,
+                            "马甲编号或绑定密钥不正确"));
+            return service;
         }
     }
 
@@ -291,9 +305,11 @@ class MvcProblemIT {
     }
 
     @Test
-    void validDeviceRequestStillHitsPlaceholder() throws Exception {
+    void wiredDeviceLoginSurfacesBusinessFailureAsProblem() throws Exception {
+        // 已接核心 DeviceAuthService 的端点：业务失败（此处由替身固定抛出）与 /err01/business
+        // 走同一条 problem+json 出口，不再是占位 501。
         problem(post("/api/v1/auth/device/login").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"vestNum\":7,\"secret\":\"test\"}"), 501, "NOT_IMPLEMENTED");
+                .content("{\"vestNum\":7,\"secret\":\"test\"}"), 401, "AUTH_DEVICE_NOT_BOUND");
     }
 
     @Test

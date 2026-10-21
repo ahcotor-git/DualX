@@ -8,10 +8,12 @@ import com.dualx.api.dto.auth.User;
 import com.dualx.api.error.NotImplementedException;
 import com.dualx.core.auth.AccountSession;
 import com.dualx.core.auth.AuthService;
+import com.dualx.core.auth.DeviceAuthService;
 import com.dualx.core.auth.IssuedTokens;
 import com.dualx.core.domain.Account;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -29,9 +31,8 @@ import java.util.UUID;
  * 不条件注册。签发端点 {@code login} / {@code refresh} / {@code logout} 在
  * {@link AccountAuthController}，它们只在 {@code signing-enabled=true} 时存在。</p>
  *
- * <p>设备端点（{@code device/login}、{@code device/me}）仍是骨架期占位：设备登录要接
- * {@code DeviceAuthService}（含 SID 单端在线），{@code device/me} 要等态势域就绪，
- * 两者都留待后续阶段，本阶段不接线也不擅改语义。</p>
+ * <p>{@code device/login} 已接 {@link DeviceAuthService}（绑定密钥校验 + SID 单端在线）；
+ * {@code device/me} 仍是骨架期占位——它要回答实时状态，归态势域，本阶段不接线也不擅改语义。</p>
  *
  * <p>包内共享的「服务结果 → 契约 DTO」映射也放在本类：它是包里唯一无条件存在的控制器，
  * 让条件注册的 {@link AccountAuthController} 反向依赖它，方向才稳定。</p>
@@ -40,9 +41,11 @@ import java.util.UUID;
 public class AuthController {
 
     private final AuthService authService;
+    private final DeviceAuthService deviceAuthService;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, DeviceAuthService deviceAuthService) {
         this.authService = authService;
+        this.deviceAuthService = deviceAuthService;
     }
 
     /** 获取当前登录用户。 */
@@ -53,8 +56,10 @@ public class AuthController {
 
     /** 单兵终端登录：马甲编号 + 绑定密钥换取设备令牌。 */
     @PostMapping("/api/v1/auth/device/login")
-    public DeviceTokenPair deviceLogin(@RequestBody @Valid DeviceLoginRequest request) {
-        throw new NotImplementedException("deviceLogin");
+    public DeviceTokenPair deviceLogin(@RequestBody @Valid DeviceLoginRequest request,
+                                      HttpServletRequest httpRequest) {
+        return toDeviceTokenPair(deviceAuthService.login(request.vestNum(), request.secret(),
+                httpRequest.getRemoteAddr()));
     }
 
     /** 单兵终端获取自身信息与实时状态。 */
@@ -89,5 +94,10 @@ public class AuthController {
     static TokenPair toTokenPair(IssuedTokens issued) {
         return new TokenPair(issued.accessToken(), issued.refreshToken(), issued.expiresIn(),
                 toUser(issued.session()));
+    }
+
+    /** 核心侧设备登录结果 → 契约 {@code DeviceTokenPair}。 */
+    static DeviceTokenPair toDeviceTokenPair(DeviceAuthService.IssuedDeviceToken issued) {
+        return new DeviceTokenPair(issued.deviceToken(), issued.expiresIn());
     }
 }

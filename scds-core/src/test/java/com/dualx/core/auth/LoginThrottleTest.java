@@ -140,6 +140,57 @@ class LoginThrottleTest {
         assertThat(throttle.trackedKeyCount()).isEqualTo(2);
     }
 
+    @Test
+    void deviceLocksOnFifthFailure_underItsOwnKeySpace() {
+        var throttle = new LoginThrottle(new MutableClock());
+
+        for (int i = 1; i <= 4; i++) {
+            throttle.recordDeviceFailure(7, IP);
+            assertThat(throttle.deviceLockout(7, IP)).as("第 %d 次失败后仍不该锁", i).isEmpty();
+        }
+
+        throttle.recordDeviceFailure(7, IP);
+        assertThat(throttle.deviceLockout(7, IP)).isPresent()
+                .get()
+                .extracting(LoginThrottle.Lockout::scope)
+                .isEqualTo(Scope.DEVICE);
+        // 键前缀不同（account: / vest:），同名 subject 也互不串扰：设备失败不该锁住同名账号
+        assertThat(throttle.lockout("7", IP)).isEmpty();
+        // 一次设备失败只写自己那条链路的两个键，不在对方命名空间里留空壳
+        assertThat(throttle.trackedKeyCount()).isEqualTo(2);
+    }
+
+    @Test
+    void deviceFailuresStillCountTowardTheSharedClientIpDimension() {
+        var throttle = new LoginThrottle(new MutableClock());
+
+        for (int i = 0; i < 30; i++) {
+            throttle.recordDeviceFailure(100 + i, IP);
+        }
+
+        // 每个马甲只失败 1 次（远低于设备阈值），锁只能来自共用的 IP 维度
+        assertThat(throttle.deviceLockout(999, IP)).isPresent()
+                .get()
+                .extracting(LoginThrottle.Lockout::scope)
+                .isEqualTo(Scope.CLIENT_IP);
+        assertThat(throttle.deviceLockout(999, "10.0.0.11")).isEmpty();
+    }
+
+    @Test
+    void deviceSuccessResetsBothDeviceAndIpDimensions() {
+        var throttle = new LoginThrottle(new MutableClock());
+
+        for (int i = 0; i < 4; i++) {
+            throttle.recordDeviceFailure(7, IP);
+        }
+        throttle.resetDevice(7, IP);
+
+        for (int i = 0; i < 4; i++) {
+            throttle.recordDeviceFailure(7, IP);
+            assertThat(throttle.deviceLockout(7, IP)).isEmpty();
+        }
+    }
+
     /** 可手动推进的时钟：限流逻辑全靠它，用真实时钟就没法在毫秒内验证 5 分钟的行为。 */
     private static final class MutableClock extends Clock {
 
