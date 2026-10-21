@@ -122,6 +122,12 @@ public class SecurityConfig {
         registry.requestMatchers(HttpMethod.POST, "/api/v1/devices/vests").hasRole("ADMIN");
         registry.requestMatchers(HttpMethod.PUT, "/api/v1/devices/vests/*").hasRole("ADMIN");
         registry.requestMatchers(HttpMethod.DELETE, "/api/v1/devices/vests/*").hasRole("ADMIN");
+        // 绑定闭环（POST/PUT/DELETE /api/v1/devices/vests/{n}/binding）必须单列：
+        // Ant 通配 `*` 只吃一段，`/devices/vests/*` 覆盖不到 `/vests/1/binding`，
+        // 漏掉这三行不会报错——绑定密钥会静默变成任意账号（含 VIEWER）都能改的字段。
+        registry.requestMatchers(HttpMethod.POST, "/api/v1/devices/vests/*/binding").hasRole("ADMIN");
+        registry.requestMatchers(HttpMethod.PUT, "/api/v1/devices/vests/*/binding").hasRole("ADMIN");
+        registry.requestMatchers(HttpMethod.DELETE, "/api/v1/devices/vests/*/binding").hasRole("ADMIN");
         registry.requestMatchers(HttpMethod.PUT, "/api/v1/devices/anchors/*").hasRole("ADMIN");
 
         // 想定 / 编成 / 演习生命周期 / 地图 / 复盘导出 = DIRECTOR 及以上。

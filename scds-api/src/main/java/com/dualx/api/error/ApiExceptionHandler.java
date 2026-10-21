@@ -239,6 +239,15 @@ public class ApiExceptionHandler {
             case RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS;
             case INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
             case NOT_IMPLEMENTED -> HttpStatus.NOT_IMPLEMENTED;
+
+            // ── 台账域（M2 LEDGER）──────────────────────────────────────────────
+            // 逐项按契约登记，不按前缀猜：同一前缀里既有 404（马甲不存在）又有 409（编号冲突）。
+            // 尚未落服务的码（COMMAND_*、MAP_*、REPLAY_* 等）继续走 default——
+            // 落地那一刻再补进这张表，而不是现在替它们猜一个看着合理的状态。
+            case DEVICE_VEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND,
+                 EXERCISE_ALREADY_RUNNING -> HttpStatus.CONFLICT;
+
             default -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }
