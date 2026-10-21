@@ -242,11 +242,18 @@ public class ApiExceptionHandler {
 
             // ── 台账域（M2 LEDGER）──────────────────────────────────────────────
             // 逐项按契约登记，不按前缀猜：同一前缀里既有 404（马甲不存在）又有 409（编号冲突）。
-            // 尚未落服务的码（COMMAND_*、MAP_*、REPLAY_* 等）继续走 default——
+            // 尚未落服务的码（COMMAND_*、REPLAY_*、MAP_IMAGE_MISSING、
+            // MAP_UWB_META_INCOMPLETE、MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
             // 落地那一刻再补进这张表，而不是现在替它们猜一个看着合理的状态。
             case DEVICE_VEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND,
                  EXERCISE_ALREADY_RUNNING -> HttpStatus.CONFLICT;
+
+            // ── 地图域（M2 MAP-BASE 底图台账）────────────────────────────────────
+            // 已落地的两张底图错误码：查不到是 404；被想定引用/演习在用是 409
+            // （冲突是「现在不能删」，不是参数错误——契约 paths/map.yaml 的 deleteMap 即 409）。
+            case MAP_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case MAP_IN_USE -> HttpStatus.CONFLICT;
 
             default -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
