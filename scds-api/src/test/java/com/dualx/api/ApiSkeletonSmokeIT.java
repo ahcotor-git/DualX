@@ -15,6 +15,7 @@ import com.dualx.core.auth.AuthService;
 import com.dualx.core.auth.DeviceAuthService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
+import com.dualx.core.map.MapLedgerService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,6 +53,16 @@ class ApiSkeletonSmokeIT {
 
     private static MockMvc mockMvc;
 
+    /**
+     * 底图路由的 {@code {mapId}} 取值。
+     *
+     * <p>契约把 {@code mapId} 写成 {@code type: string}，但实现里它是 UUIDv7（{@code t_map.id}）：
+     * 底图 CRUD 接线后，解析不出来的 id 会被直接判成 {@code MAP_NOT_FOUND}（404）。本测试的
+     * 判据恰恰是「非 404」，用 {@code "m1"} 这类占位串会让「路由没注册」与「这张图不存在」
+     * 变成同一个状态码，测试随之为已接线端点丧失鉴别力。故填一个语法合法的 UUID。</p>
+     */
+    private static final String MAP_ID = "018f4a2b-0000-7000-8000-000000000001";
+
     @BeforeAll
     static void setUpMockMvc() {
         // 账号端点已接核心 AuthService，但本测试只验证「路由按契约注册」、不建立数据库上下文，
@@ -86,6 +97,14 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 底图台账同理：底图 CRUD 已接核心 MapLedgerService，真实链路（楼层数 / 标定齐备
+        // 判定 / 被想定引用时 409）由 MapLedgerServiceIT 与 scds-app 的 HTTP 端到端覆盖。
+        MapLedgerService mapLedgerService = Mockito.mock(MapLedgerService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService),
@@ -93,7 +112,7 @@ class ApiSkeletonSmokeIT {
                         new CommandController(),
                         new SituationController(),
                         new DeviceController(vestLedgerService, anchorLedgerService),
-                        new MapController(),
+                        new MapController(mapLedgerService),
                         new ReplayController())
                 .setControllerAdvice(new ApiExceptionHandler())
                 // standalone 不装配安全链，@AuthenticationPrincipal 需要显式解析器；
@@ -176,18 +195,18 @@ class ApiSkeletonSmokeIT {
                 // ---- map（14）----
                 route("GET", "/api/v1/maps"),
                 route("POST", "/api/v1/maps"),
-                route("GET", "/api/v1/maps/m1"),
-                route("PUT", "/api/v1/maps/m1"),
-                route("DELETE", "/api/v1/maps/m1"),
-                route("POST", "/api/v1/maps/m1/image"),
-                route("GET", "/api/v1/maps/m1/image"),
-                route("GET", "/api/v1/maps/m1/floors/1/points"),
-                route("PUT", "/api/v1/maps/m1/floors/1/points"),
-                route("GET", "/api/v1/maps/m1/uwb-meta"),
-                route("PUT", "/api/v1/maps/m1/uwb-meta"),
-                route("POST", "/api/v1/maps/m1/uwb-calibration"),
-                route("GET", "/api/v1/maps/m1/uwb-calibration"),
-                route("DELETE", "/api/v1/maps/m1/uwb-calibration"),
+                route("GET", "/api/v1/maps/" + MAP_ID),
+                route("PUT", "/api/v1/maps/" + MAP_ID),
+                route("DELETE", "/api/v1/maps/" + MAP_ID),
+                route("POST", "/api/v1/maps/" + MAP_ID + "/image"),
+                route("GET", "/api/v1/maps/" + MAP_ID + "/image"),
+                route("GET", "/api/v1/maps/" + MAP_ID + "/floors/1/points"),
+                route("PUT", "/api/v1/maps/" + MAP_ID + "/floors/1/points"),
+                route("GET", "/api/v1/maps/" + MAP_ID + "/uwb-meta"),
+                route("PUT", "/api/v1/maps/" + MAP_ID + "/uwb-meta"),
+                route("POST", "/api/v1/maps/" + MAP_ID + "/uwb-calibration"),
+                route("GET", "/api/v1/maps/" + MAP_ID + "/uwb-calibration"),
+                route("DELETE", "/api/v1/maps/" + MAP_ID + "/uwb-calibration"),
                 // ---- replay（7）----
                 route("GET", "/api/v1/replays"),
                 route("GET", "/api/v1/replays/r1"),

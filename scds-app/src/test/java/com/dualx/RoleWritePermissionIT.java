@@ -15,6 +15,7 @@ import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
+import com.dualx.core.map.MapLedgerService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -113,6 +114,14 @@ class RoleWritePermissionIT {
         @Bean
         AnchorLedgerService anchorLedgerService() {
             return stub(AnchorLedgerService.class);
+        }
+
+        // 底图控制器同理：MapLedgerService 要四个仓储（各自要 JdbcClient），本切片已排掉
+        // DataSource。放行的底图写请求因此稳定返回 501；路径参数仍走控制器自己的
+        // UUID 解析，填不合法的 id 会得到 404——两者都不是 401/403，不影响本测试判据。
+        @Bean
+        MapLedgerService mapLedgerService() {
+            return stub(MapLedgerService.class);
         }
 
         private static <T> T stub(Class<T> type) {
