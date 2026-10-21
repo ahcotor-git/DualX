@@ -185,11 +185,16 @@ public class MapController {
      *
      * <p>回显请求体而不是回读库：这是一次全量替换，响应就是替换后的点位集合；回读只会多一次
      * 往返，还要面对 MySQL 对 JSON 列的键序重排（值相同、文本不同），徒增无意义的比对成本。</p>
+     *
+     * <p><b>落库的是裸数组 {@code body.points()}，不是请求包体</b>：{@code FloorPointsRequest}
+     * 只是这一层的内外包装，而 {@code t_map_floor.points} 的冻结结构就是
+     * {@code [{posNum,xPct,yPct,label}]}。存成 {@code {"points":[…]}} 会让读回路径
+     * （{@link #listFloorPoints}）按裸数组解析时直接失败——API 与库必须同形。</p>
      */
     @PutMapping("/api/v1/maps/{mapId}/floors/{floorNum}/points")
     public FloorPointsRequest replaceFloorPoints(@PathVariable String mapId, @PathVariable int floorNum,
                                                  @RequestBody @Valid FloorPointsRequest body) {
-        ledger.replaceFloorPoints(mapId(mapId), floorNum, write(body));
+        ledger.replaceFloorPoints(mapId(mapId), floorNum, write(body.points()));
         return body;
     }
 
