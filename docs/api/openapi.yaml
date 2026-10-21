@@ -152,6 +152,10 @@ paths:
     $ref: './paths/device.yaml#/vests'
   /api/v1/devices/vests/{vestNum}:
     $ref: './paths/device.yaml#/vestById'
+  # 绑定闭环：POST 首次绑定 / PUT 换绑 / DELETE 解绑（决策 04 D03-4）。
+  # 三个方法必须同处一个 slug —— `$ref` 只能整体替换 path item。
+  /api/v1/devices/vests/{vestNum}/binding:
+    $ref: './paths/device.yaml#/vestBinding'
   /api/v1/devices/vests/{vestNum}/link:
     $ref: './paths/device.yaml#/vestLink'
   /api/v1/devices/anchors:

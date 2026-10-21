@@ -182,6 +182,134 @@ vestById:
       '500':
         $ref: '../schemas/common.yaml#/InternalError'
 
+# 绑定闭环（决策 04 D03-4）。三个方法分工刻意不重叠：
+#   POST   首次绑定——要求当前未绑定；
+#   PUT    换绑——要求当前已绑定；
+#   DELETE 解绑——幂等，未绑定也返回 200。
+# 三者都只写 t_vest，不建会话表；「清 SID」就是 device_session_sid 置 NULL（V9 说明）。
+vestBinding:
+  post:
+    tags: [device]
+    operationId: bindVest
+    summary: 绑定单兵终端（首次设置绑定密钥）
+    description: |
+      请求体只携带明文绑定密钥，服务端存 BCrypt 摘要（`t_vest.bind_secret_hash`），永不回显。
+      成功后 `bound=1`，并把该马甲的 `device_session_sid` 置 NULL——绑定即意味着换了一份凭据，
+      此前签发的设备令牌必须立即失效（设计 03 §4.9）。
+      对**已绑定**的马甲调用返回 409，请改用 PUT 换绑；这条边界是为了让客户端能区分
+      「首次绑定」与「换绑」，而不是让两者静默互相顶替。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/VestBindingRequest'
+    responses:
+      '201':
+        description: 已绑定
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/VestDevice'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        description: 该马甲已绑定（`DEVICE_VEST_ALREADY_BOUND`）；换绑请用 PUT
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  put:
+    tags: [device]
+    operationId: rebindVest
+    summary: 换绑单兵终端（替换绑定密钥）
+    description: |
+      用新密钥替换旧摘要，`bound` 保持 1，并清空 `device_session_sid` 使旧设备令牌失效。
+      对**未绑定**的马甲调用返回 409（`DEVICE_VEST_NOT_BOUND`），请改用 POST。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/domain.yaml#/VestBindingRequest'
+    responses:
+      '200':
+        description: 已换绑
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/VestDevice'
+      '400':
+        $ref: '../schemas/common.yaml#/BadRequest'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '409':
+        description: 该马甲尚未绑定（`DEVICE_VEST_NOT_BOUND`）；首次绑定请用 POST
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
+  delete:
+    tags: [device]
+    operationId: unbindVest
+    summary: 解绑单兵终端
+    description: |
+      `bound` 置 0 并清空 `device_session_sid`，但**保留** `bind_secret_hash`——
+      解绑撤销的是「认领」这件事，不是销毁凭据；解绑后再次绑定同一密钥仍然有效（D03-4）。
+      幂等：对未绑定的马甲调用同样返回 200。
+    parameters:
+      - name: vestNum
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+    responses:
+      '200':
+        description: 已解绑（`bound=false`）
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/domain.yaml#/VestDevice'
+      '401':
+        $ref: '../schemas/common.yaml#/Unauthorized'
+      '403':
+        $ref: '../schemas/common.yaml#/Forbidden'
+      '404':
+        $ref: '../schemas/common.yaml#/NotFound'
+      '500':
+        $ref: '../schemas/common.yaml#/InternalError'
+
 vestLink:
   get:
     tags: [device]

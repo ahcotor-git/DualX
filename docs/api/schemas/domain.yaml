@@ -367,9 +367,18 @@ VestDevice:
       type: [string, 'null']
     firmwareVersion:
       type: [string, 'null']
+    remark:
+      type: [string, 'null']
+      description: 台账备注；与 `VestDeviceUpsertRequest.remark` 同源
     bound:
       type: boolean
       description: 是否已与某个单兵终端 App 绑定
+    enabled:
+      type: boolean
+      description: |
+        台账启用状态。`false` 表示报修/退役——`deleteVest` 的逻辑注销就落在此列，
+        演习中该设备被忽略。与 `bound` 是两件事：`enabled=false` 是「设备不算数」，
+        `bound=false` 是「设备是好的，只是还没被某台单兵终端认领」。
     lastSeenAt:
       type: [string, 'null']
       format: date-time
@@ -398,6 +407,20 @@ VestDeviceUpsertRequest:
       type: [string, 'null']
     remark:
       type: [string, 'null']
+
+VestBindingRequest:
+  type: object
+  required: [secret]
+  properties:
+    secret:
+      type: string
+      minLength: 8
+      maxLength: 128
+      description: |
+        单兵 App 绑定密钥**明文**，仅上行一次。服务端只存 BCrypt 摘要
+        （`t_vest.bind_secret_hash`），任何响应与列表都不回显、不落日志。
+        长度下限 8 是为了不让人用 `1234` 当现场凭据；上限 128 与 BCrypt 输入成本无关，
+        只为挡住把整份文件粘进来的误操作。
 
 VestDevicePage:
   type: object
