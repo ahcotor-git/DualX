@@ -97,12 +97,14 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | D04 | 2026-10-21 逐项裁定（见下“D01 / D04 执行边界”）：服务端写权限矩阵**已落地**，并已覆盖台账/基站的绑定路径；单兵端可见范围拆为独立工作包 DEVICE-SELF，本阶段不做 |
 | M2 LEDGER | 2026-10-21 完成台账/基站服务、控制器接线与绑定闭环；引用保护沿用契约，只拦“演习进行中”。见下“LEDGER 执行边界” |
 | R27 配置校验 | 2026-10-21 裁定：显式非正值的 TTL、以及 refresh 未严格长于 access，**启动期直接失败**；未配仍回落默认。**已落地** |
-| D05-D13、D15 | 待确认 |
+| D09 | 2026-10-21 用户裁定：本地受保护目录 + domain 存储端口；短时效可重复签名 + 原格式返回。见下“D09 / D15 执行边界”。**仅裁定口径，实现属 M2 MAP-BASE** |
+| D15 | 2026-10-21 用户裁定：保留 `xPx/yPx` 只修描述；无演习/离线/阵亡/危险物按统一口径。见下节。**仅裁定口径，实现后续分段** |
+| D05-D08、D10-D13 | 待确认 |
 | 业务批量实施 | 未授权 |
 | 创建隔离数据库 | 已批准在scds-local-mysql创建scds_next_test及scds_test；不创建新容器，不改开发.env |
 | 安装 VS | 未授权 |
 | Flutter 批量生成例外 | 未授权 |
-| 提交/推送当前成果及已有3个提交 | 用户本轮明确授权并完成，远端main与本地64b73e1完整SHA一致；不推导后续自动提交授权 |
+| 提交/推送 M2 LEDGER 成果 | 用户本轮明确授权“提交 LEDGER 并尝试推送”。**已落地 5 个本地提交**（`86e9b71` 契约、`a95bcf3` 服务、`9c3ab09` 接线+权限、`74162ca` 测试、`e8258a0` 文档），叠加既有 4 个后 `main` 领先 `origin/main` **9 个提交**；推送**两次均因网络失败**（`Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。不推导后续自动提交授权 |
 
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
@@ -223,5 +225,35 @@ AuthServiceIT真实提交不伪装为自动回滚。完整app启动验收另分�
 
 本段仍为 501 的路径：`getVestLink`、`getLinks`、`listSerialPorts` 与串口/UWB 开关——
 `scds-gateway` 无主源码，没有可用端口可接。
-本段未提交、未推送；工作树成果保留，提交/推送需另行授权。
+本段提交状态：经用户当次授权，已落地 5 个本地提交（`86e9b71`/`a95bcf3`/`9c3ab09`/`74162ca`/`e8258a0`），
+工作树已干净；推送两次均失败，**远端未更新**，见第 6 节对应条目。
+
+### D09 / D15 执行边界（2026-10-21，MAP-BASE 前置）
+
+用户对两个阻塞 MAP-BASE 的待确认项逐项裁定，**均取推荐口径**；本节只登记口径，
+实现分别属 M2 MAP-BASE（D09 存储/签名）与后续 STATE / CALIBRATION / LIFE 分段（D15 缺失态）。
+
+| 项 | 裁定口径 |
+|---|---|
+| D09-① 存储后端 | **每实例受保护本地目录 + `scds-domain` 存储端口**；`t_map.image_path` 仍只存相对路径；数据库与文件一起备份。不引入对象存储 |
+| D09-② 读取授权 | 底图与导出文件统一用**短时效（建议 15 分钟）可重复签名 URL**；签名 URL 不带 `Authorization`，供 `<img>`/浏览器直接拉取；换图即删旧文件 |
+| D09-③ 有效期与保留 | 导出文件保留 7 天后 `AsyncTask.expireAt` 到期；过期后须重新导出。具体数值在实现方案中再确认 |
+| D09-④ WebP | `getMapImage` **原格式返回**（响应 content-type 补 `image/webp`），不做统一转码 |
+| D09-⑤ 签名密钥 | **独立 HMAC 密钥** `SCDS_FILE_SIGN_SECRET`，由部署脚本写入 `.env`；签名覆盖 `path + exp`；未配置则**启动失败**（与 R27 TTL 校验同口径）。不复用 JWT 的 RSA 私钥，保证文件访问与令牌信任解耦、可单独轮换 |
+| D09-⑥ 存储根与上限 | 根目录 `SCDS_FILES_ROOT`，默认 `${user.home}/.scds/files`（沿用旧系统 `.scds` 约定）；子目录 `maps/`、`exports/`；单图上限 20MB；白名单 PNG/JPEG/WebP，按真实图片头校验而非扩展名 |
+| D15-⑤ 坐标命名 | **保留 `Anchor.xPx/yPx` 与 `UwbAnchorPoint.xPx/yPx` 字段名**，只修描述为“底图归一化坐标 0~1，原点左上”，与 `GeoPoint.xPct/yPct` 语义对齐。理由：`t_map.uwb_meta` 的 JSON 结构已冻结且字段名就是 `xPx/yPx`，改名等于动冻结结构 |
+| D15-⑥ 无演习响应 | 维持 **HTTP 200 + `running=false`**（不是 404）；把 `Exercise` 的 `exerciseId/planId/startedAt` 由 `required` 改为可空，明确无场次时这些字段缺席 |
+| D15-⑦ 离线/阵亡 | `UnitState.position` schema 补 `null`；离线且从未定位 → `null`；**阵亡（`deadAt != null`）必须保留最后有效坐标**，并由 `positionSource` 标注来源，不解除冻结 |
+| D15-⑧ 危险物 | 危险物（65533-65535）**只在命中事件 `shooterNum` 出现**，`UnitState.vestNum` 保持 `1..65532`，不调整该上限 |
+
+冻结边界：以上不改变马甲/UWB 协议字节与解算结果；`uwb_meta` 的字段名与结构不动。
+**已随本裁定同步修订契约（A1/A2）**：`schemas/domain.yaml`（`Exercise.required` 收为 `[running]`、
+`Anchor`/`UwbAnchorPoint` 的 `xPx/yPx` 描述、`MapDetail.imageUrl` 签名口径）、
+`schemas/situation.yaml`（`UnitState.position` 改 `oneOf: [GeoPoint, null]` 与三态说明、`combatRole` 危险物说明）、
+`schemas/common.yaml`（`AsyncTask.downloadUrl` 废止“一次性”措辞）、
+`paths/map.yaml`（`getMapImage` 补 `image/webp` 与“原格式返回”，`uploadMapImage` 注明原格式落盘与替换删旧图）。
+四份 YAML 已通过 SnakeYAML 解析校验；未改任何路由、请求/响应字段名或 Java 代码。
+
+D09 与 D15 的剩余实现细节（签名 URL 的 `exp` 精度与时钟偏移容忍、清理任务周期与失败重试、
+`signalQuality < 2` 时坐标是否下发、换图与 DB 更新的先后与补偿顺序）在 MAP-BASE 开工方案中逐项列出并再确认。
 
