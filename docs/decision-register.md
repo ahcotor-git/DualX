@@ -93,8 +93,9 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | D01 | JWT必需字段、类型与过期分类已批准实施；**2026-10-21 身份归一化与限流并发预算已裁定并落地**，见下“D01 / D04 执行边界” |
 | D14 / TEST-01 | 2026-10-21用户选择同容器独立库推荐方案，批准分段实施；其他决策不因此获批 |
 | D02 | 2026-10-21用户明确“确定”：云端账号签发/边缘验签，边缘设备本地签发且支持断外网登录；仅先形成拆分方案，尚未批准具体实现 |
-| D03 | 2026-10-21用户逐项裁定7项（见下“D03 执行边界”）；**校验侧（DEVICE-AUTH）已授权并完成实现**，写入侧（绑定接口）本阶段不做 |
-| D04 | 2026-10-21 逐项裁定（见下“D01 / D04 执行边界”）：服务端写权限矩阵**已落地**；单兵端可见范围拆为独立工作包 DEVICE-SELF，本阶段不做 |
+| D03 | 2026-10-21用户逐项裁定7项（见下“D03 执行边界”）；校验侧（DEVICE-AUTH）已完成；**写入侧（绑定/换绑/解绑）已随 M2 LEDGER 落地** |
+| D04 | 2026-10-21 逐项裁定（见下“D01 / D04 执行边界”）：服务端写权限矩阵**已落地**，并已覆盖台账/基站的绑定路径；单兵端可见范围拆为独立工作包 DEVICE-SELF，本阶段不做 |
+| M2 LEDGER | 2026-10-21 完成台账/基站服务、控制器接线与绑定闭环；引用保护沿用契约，只拦“演习进行中”。见下“LEDGER 执行边界” |
 | R27 配置校验 | 2026-10-21 裁定：显式非正值的 TTL、以及 refresh 未严格长于 access，**启动期直接失败**；未配仍回落默认。**已落地** |
 | D05-D13、D15 | 待确认 |
 | 业务批量实施 | 未授权 |
@@ -195,6 +196,32 @@ AuthServiceIT真实提交不伪装为自动回滚。完整app启动验收另分�
   `utf8mb4_0900_ai_ci`，`Admin` 与 `admin` 在库里是同一行，按原文记失败会让拼写变体把 5 次上限翻倍。
 
 仍未做：单兵端服务端可见范围（DEVICE-SELF，需新增队伍级契约与字段裁剪）；
-`device/me` 仍 501；绑定/换绑接口未实现；只验签实例上 `device/login` 的 500 属独立决策。
+`device/me` 仍 501；只验签实例上 `device/login` 的 500 属独立决策。
+（绑定/换绑/解绑接口已由 M2 LEDGER 补齐，见下节。）
 自动测试全绿不等于允许生产发布。
+
+### LEDGER 执行边界（2026-10-21，M2）
+
+本段只交付“台账 / 基站 / 绑定闭环”三块，链路开关仍不在范围内。
+
+| 项 | 落地口径 |
+|---|---|
+| 合同计数 | 契约仍为 **69 REST + 2 WS**（device 域 17 REST + watchLinks；situation 域 4 REST + watchSituation）。已核对 `paths/` 全部 `operationId`，本段未新增接口，只把既有路径接线 |
+| 逻辑注销 | 契约 `deleteVest` = `enabled=0` + 清 SID，**保留绑定密钥**；`VestRepository.deleteByVestNum`（物理删）**不对控制器暴露**（R22） |
+| 引用保护（R22 口径） | **只拦“演习进行中”**：此刻设备正被 `t_exercise_unit` 引用，注销会让态势凭空少人 → 409 `EXERCISE_ALREADY_RUNNING`。想定编成（`t_plan_roster`）的引用**不拦**，按契约不新增错误码 |
+| 绑定闭环 | 按 D03-4：首次绑定 `POST`（已绑定则 409 `DEVICE_VEST_ALREADY_BOUND`）、换绑 `PUT`（未绑定则 409 `DEVICE_VEST_NOT_BOUND`）、解绑 `DELETE`（`bound=0` + 清 SID，**保留摘要**，幂等）。绑定/换绑/注销都在**同一次提交**内写摘要与清 SID，不留“摘要已换、旧令牌仍有效”的窗口 |
+| 写权限（补 D04 缺口） | `POST·PUT·DELETE /api/v1/devices/vests/*/binding` → `ADMIN` **必须单列**：Ant 通配 `*` 只吃一段，原 `PUT/DELETE /devices/vests/*` 覆盖不到 `/vests/1/binding`，漏掉这三条会让绑定密钥静默变成任意已登录账号（含 VIEWER）都能改的字段 |
+| `listVests.status` | 契约 `VestStatus` 三值口径：`LIVE` = `last_seen_at` 距今 ≤ 5000ms，`OFFLINE` = 其余，`DIE`（阵亡）属演习运行态、台账层无数据源 → **显式返回空集**，不用“离线”冒充“阵亡” |
+| 基站 | `AnchorLedgerService` 只做 `list` / `upsert`。`bs1~bs4` 是矩形四角，契约标为“必开”，关闭请求 → 400 `VALIDATION_FAILED`（**不新增错误码**）。`anchors` 契约只有 400、无 409，故 upsert 语义就是“有则改、无则建” |
+| 已知缺口 | `t_anchor` 坐标与 `t_map.uwb_meta` 双源未统一：解算只读 `uwb_meta`，而库内没有“在用底图”定义，故本段**不写 `uwb_meta`**，等地图域落地时一并定 |
+
+契约同步：`VestDevice` 补 `remark` / `enabled`（`enabled` 是注销语义的承载列），新增请求体 `VestBindingRequest`（`secret` 8~128）。
+
+测试证据（本段新增/更新，全部通过）：
+`VestLedgerServiceIT` 16、`AnchorLedgerServiceIT` 5、`ApiSkeletonSmokeIT` 70（含 device 域 17 条路由）、
+`RoleWritePermissionIT` 63、`DeviceLedgerHttpIT` 2（完整生产入口 + 真实 MySQL + 真实 TCP 的端到端形状）。
+
+本段仍为 501 的路径：`getVestLink`、`getLinks`、`listSerialPorts` 与串口/UWB 开关——
+`scds-gateway` 无主源码，没有可用端口可接。
+本段未提交、未推送；工作树成果保留，提交/推送需另行授权。
 

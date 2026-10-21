@@ -258,7 +258,7 @@ authenticated：
 
 | 域 | 端点 | 允许角色 |
 |---|---|---|
-| 台账 / 基站（含绑定密钥与 SID 主动失效） | `POST /api/v1/devices/vests`、`PUT·DELETE /api/v1/devices/vests/*`、`PUT /api/v1/devices/anchors/*` | `ADMIN` |
+| 台账 / 基站（含绑定密钥与 SID 主动失效） | `POST /api/v1/devices/vests`、`PUT·DELETE /api/v1/devices/vests/*`、`POST·PUT·DELETE /api/v1/devices/vests/*/binding`、`PUT /api/v1/devices/anchors/*` | `ADMIN` |
 | 想定 / 编成 / 演习生命周期 / 地图 / 复盘导出 | `POST·PUT·DELETE /api/v1/plans*`、`POST·DELETE /api/v1/exercise/current`、`POST·PUT·DELETE /api/v1/maps*`、`POST /api/v1/replays/*/exports` | `ADMIN`、`DIRECTOR` |
 | 指令 | `POST·PUT /api/v1/command/**` | `ADMIN`、`DIRECTOR`、`OPERATOR` |
 | 链路操作（串口 / UWB 开关） | `POST·DELETE /api/v1/devices/links/**` | `ADMIN`、`OPERATOR` |

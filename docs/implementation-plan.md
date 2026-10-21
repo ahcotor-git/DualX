@@ -27,7 +27,7 @@
 | Git | main / da02622；本地跟踪 origin/main=3c4f4f4，领先 3 个提交；实际远端未能核验 |
 | 用户已有改动 | 6 个已跟踪文件修改、9 个未跟踪文档，暂存区为空；全部保留 |
 | 后端 | Java 21、Boot 3.5.7；协议、仓储、AuthService、签验基础已实现 |
-| 未完成 | 66 REST 业务方法占位；gateway 无主源码；SID、自愈、态势和推送业务未实现 |
+| 未完成 | 69 REST 中账号认证与台账/基站/绑定已接线，其余仍占位；gateway 无主源码；自愈、态势和推送业务未实现 |
 | 数据库 | 本机 MySQL 8.4.11 healthy；V1-V7、V9；18 张业务表加 Flyway 历史表 |
 | 自动测试 | 最近全量报告 309 项，失败/错误/跳过均 0；本轮未重跑，不是完整产品验收 |
 | Flutter | 3.47.7 stable、Dart 3.13.5；仓库没有 pubspec.yaml |
@@ -107,7 +107,7 @@ LIFE 的状态转换、硬件发送和持久化顺序必须在 D11 明确后再�
 
 ## 6. 全部契约操作覆盖
 
-以下从现有 paths 文件核对，66 REST + 2 WS，最终逐 operationId 验收。
+以下从现有 paths 文件核对，69 REST + 2 WS，最终逐 operationId 验收。
 当前全部列为待功能验收；已有核心服务和骨架不计作 HTTP 功能完成。
 若批准新增绑定或身份可见性接口，先更新唯一 OpenAPI，再更新此清单计数。
 
@@ -117,7 +117,7 @@ LIFE 的状态转换、硬件发送和持久化顺序必须在 D11 明确后再�
 | exercise | 13 | listPlans、createPlan、getPlan、updatePlan、deletePlan、getRoster、replaceRoster、downloadPlanTemplate、importPlan、getCurrentExercise、startExercise、stopExercise、listCurrentExerciseLogs |
 | command | 8 | killVest、reviveVest、injureVest、outOfRangeVest、reloadVest、reloadAllVests、setVestConfig、moveVest |
 | situation | 4 | getSituation、getVestState、getTeamSummary、listHits |
-| device | 14 | listVests、createVest、getVest、updateVest、deleteVest、getVestLink、listAnchors、upsertAnchor、getLinks、listSerialPorts、openVestSerial、closeVestSerial、openUwbLink、closeUwbLink |
+| device | 17 | listVests、createVest、getVest、updateVest、deleteVest、bindVest、rebindVest、unbindVest、getVestLink、listAnchors、upsertAnchor、getLinks、listSerialPorts、openVestSerial、closeVestSerial、openUwbLink、closeUwbLink |
 | map | 14 | listMaps、createMap、getMap、updateMap、deleteMap、uploadMapImage、getMapImage、listFloorPoints、replaceFloorPoints、getUwbMeta、putUwbMeta、startUwbCalibration、getUwbCalibration、clearUwbCalibration |
 | replay | 7 | listReplays、getReplay、getReplayTimeline、getReplayStatistics、exportReplay、getExportTask、downloadExport |
 | WS | 2 个握手 | watchSituation、watchLinks；不计入 REST 数 |

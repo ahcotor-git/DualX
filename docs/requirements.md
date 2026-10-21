@@ -52,13 +52,13 @@ scds-next 对旧 DualX/SCDS-UWB 系统进行全量重写，不在旧工程上增
 | FR-COMMAND | 判死/活/伤、越界、充弹、参数轮询与联调置位 | `api/paths/command.yaml` | 下行字节编码与队列仓储存在，发送编排未实现 |
 | FR-SITUATION | 状态、队伍汇总、命中流水、增量 revision、阵亡冻结 | `api/paths/situation.yaml` | DTO/契约存在，状态所有者与查询未实现 |
 | FR-PUSH | 态势及链路 WS + Poll，同构载荷、首帧、补齐、背压、保活 | 同上与 `device.yaml` | WS 只有 PING/PONG；链路 JSON 根类型存在设计冲突 |
-| FR-LEDGER | 马甲台账、UWB 基站、链路开关及状态、串口枚举 | `api/paths/device.yaml` | 台账仓储存在，gateway 无源码 |
+| FR-LEDGER | 马甲台账、UWB 基站、链路开关及状态、串口枚举 | `api/paths/device.yaml` | 台账/基站/绑定闭环已实现；链路开关与串口枚举未实现，gateway 无源码 |
 | FR-MAP | 室内底图/室外 GPS、图片、楼层点位、UWB 标定与校准 | `api/paths/map.yaml` | 仓储/DTO存在，文件与校准流程未实现 |
 | FR-REPLAY | 列表、时间轴分片、战损统计、CSV/XLSX 异步导出 | `api/paths/replay.yaml` | 轨迹/任务仓储存在，统计及导出业务未实现 |
 | FR-CLIENT | Android/Windows 登录、配置向导、实时地图、断线恢复、复盘 | 全部边缘契约 | 尚无前端工程 |
 
-接口计数：68 个 operationId = 66 REST + 2 WS 握手。
-`ApiSkeletonSmokeIT` 的 67 项用例 = 66 路由 + 1 统一 501 响应测试，不能写成 67 REST 接口。
+接口计数：71 个 operationId = 69 REST + 2 WS 握手。
+`ApiSkeletonSmokeIT` 的 70 项用例 = 69 路由 + 1 统一 501 响应测试，不能写成 70 REST 接口。
 
 ## 4. 不可变约束
 

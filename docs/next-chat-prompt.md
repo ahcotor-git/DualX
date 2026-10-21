@@ -16,27 +16,27 @@
 以实际pom/代码为准：Java21、Boot3.5.7、Flutter Android/Windows目标，
 每客户独立实例和数据库，无tenant_id、ORM/JPA、Redis、Kafka。
 
-交接时HEAD为64b73e1a8c4cdac1a397c55a00e942dd5ff9f473。
-此前3个认证提交及SEC/ERR修复和文档已正常推送，git ls-remote确认远端main同SHA。
-随后TEST-01数据库隔离及交接文档继续成果尚未提交；先git status/diff核对，
-不要把工作树成果当成远端已有，不默认后续commit/push。
+交接时HEAD为fae966dafeaf6d994b42d33f5a0b0bbce85f068f
+（`docs(auth): 回写 D01/D04 与 R27 的落地口径`），本地跟踪的origin/main为44fa450，
+即HEAD领先4个提交且本轮未联网核验远端；LEDGER全部改动仍在工作树、尚未提交。
+先git status/diff/log核对，不要把工作树成果当成远端已有，不默认后续commit/push。
 
-已完成AuthService登录、刷新、全端退出和me，17项真实MySQL认证IT；
-SEC-01、SEC-02、ERR-01及TEST-01数据库隔离子任务已完成，
-最近mvn clean verify为521项全通过（19+247+79+176），35份XML计数一致。
-不要重复实现AuthService、metrics保护、JWT字段/时间分类或MVC Problem。
-但6个auth HTTP方法和其余60个REST仍占位，gateway零源码；
-SID、演习自愈、态势/推送业务和Flutter尚未实现，当前不可生产发布。
+已完成AuthService登录/刷新/全端退出/me、DeviceAuthService设备登录与SID单端在线、
+服务端写权限矩阵、TTL与限流配置校验、SEC-01/SEC-02/ERR-01、TEST-01（隔离库+完整应用启动），
+以及M2 LEDGER（马甲台账、UWB基站、D03-4绑定闭环、绑定路径ADMIN写权限）。
+最近mvn clean verify为681项全通过（19+281+100+281），35份XML计数一致，
+证据见testing第11-12节；契约计数已修订为69 REST + 2 WS。
+不要重复实现AuthService、DeviceAuthService、metrics保护、JWT字段/时间分类、MVC Problem或LEDGER。
+device域10条已接线，但链路开关、串口枚举、device/me及其余exercise/command/situation/map/replay
+业务方法仍占位；gateway零源码；演习自愈、态势/推送和Flutter尚未实现，当前不可生产发布。
 
-review/架构/专题设计中R01-R04等是历史基线；最新修复证据以testing第7-10节为准。
-R05 signing=false账号login返回401而非目标404、R07设备SID仍未实现。
+review/架构/专题设计中R01-R04等是历史基线；最新修复证据以testing第7-12节为准。
+R05 signing=false账号login返回401而非目标404、R07设备SID仍未实现（device/me仍501）。
 其他静态风险见review，不要冒充已复现或自动标为完成。
 
-下一任务为TEST-01完整ScdsNextApplication启动回归，
-需真实安全链+测试库共同装配，不用受控无DB app测试代替；
-提出最多3文件方案，明确初始化前隔离门禁、临时内存密钥、禁用真实管理员建号，
-测试仅回环随机端口且自动关闭；等待确认后实施。
-之后AUTH-HTTP仍需先确认D02设备签发能力，不默认批准推荐。
+下一任务为M2 MAP-BASE（地图CRUD、图片、楼层点位、引用与文件安全），
+前置D09、D15仍待确认，不得默认采用推荐方案；
+提出最多3文件方案并等待确认后实施。LEDGER工作树成果的提交/推送须先取得当次授权。
 本条只授权检查与提出下一原子任务方案，不授权一次性修所有问题。
 每阶段按检查、分析、决定、执行；每原子任务<=3文件，修复最多5轮。
 获授权后实现、测试、独立提交；推送也需授权，失败保留本地成果如实报告。
@@ -59,13 +59,14 @@ D14已确认同容器独立scds_next_test/scds_test，精确转义库名授权�
 已有库/账号/文件一律拒绝覆盖；默认保留库，测试仅清理自身UUID。
 新测试库已从空schema应用V1-V7/V9；Flyway clean禁用、out-of-order=false；
 开发/测试account、refresh、exercise运行后0，迁移校验和8项一致。
-核心隔离回归36项（初始化前29、真实DB7），认证17项仍保持；
-整个TEST-01尚有完整应用启动子任务，不能把M0标为完成。
+核心隔离回归36项（初始化前29、真实DB7）与TEST-01完整应用启动（37项）均已完成；
+M0不再有未完成的测试子任务。
 
 待确认：只验签实例是否独立签发设备token；V9已应用后自愈是否改V10；
 链路数组/信封同构；跨重启revision/epoch；WS超窗409/close；
-完整权限/单兵可见性；UWB SERIAL与开停演绑定；容量、文件、RPO/RTO。
-不能替我默认确认，也不能补V8、改已应用SQL、开启out-of-order或清库绕过问题。
+完整权限/单兵可见性；UWB SERIAL与开停演绑定；容量、文件、RPO/RTO；
+t_anchor与t_map.uwb_meta双源如何统一。不能替我默认确认，
+也不能补V8、改已应用SQL、开启out-of-order或清库绕过问题。
 
-先简短核对新旧状态差异，再给TEST-01完整应用启动子任务方案并等待确认。
+先简短核对新旧状态差异，再给M2 MAP-BASE的<=3文件方案并等待确认。
 ```

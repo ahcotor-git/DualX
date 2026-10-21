@@ -5,6 +5,7 @@
 > 第1至6节保留交接基线历史；SEC-01修复及13:36:58 +08:00的新验证结果见第7节。
 > SEC-02字段/时间校验的新验证记录见第8节，后续结果不覆盖历史证据。
 > ERR-01见第9节；TEST-01数据库隔离及521项最新全量结果见第10节。
+> M2 LEDGER台账/基站/绑定与681项最新全量结果见第12节。
 
 ## 1. 本次自动化结果
 
@@ -557,3 +558,47 @@ mvn clean verify
 不是生产发布批准，也不是完整业务、实际fat jar运行、gateway或Flutter交付验收。
 下一业务前置仍为D02设备签发能力确认，然后分段推进AUTH-HTTP；
 不自动提交/推送当前及上轮工作树成果，**仍不可生产发布**。
+
+## 12. M2 LEDGER 台账/基站/绑定闭环
+
+2026-10-21 按 LEDGER 工作包分段实施：台账服务与基站服务、`DeviceController` 接线、
+绑定闭环写权限。本节记录本段证据；第1节的 309 项是历史基线，被本节取代。
+
+命令（仓库根）：`mvn -B clean verify`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| core | 281 | 0/0/0 | 含新增 `VestLedgerServiceIT` 16、`AnchorLedgerServiceIT` 5 |
+| api | 100 | 0/0/0 | `ApiSkeletonSmokeIT` 70（device 域补齐至 17 条路由）、`MvcProblemIT` 等 |
+| app | 281 | 0/0/0 | 含新增 `DeviceLedgerHttpIT` 2；`RoleWritePermissionIT` 63 |
+| solver/domain/gateway | 0 | 无测试 | 构建成功，不证明算法数值或网关业务 |
+| 总计 | **681** | **0/0/0** | 8 个 reactor SUCCESS，制品 `scds-next.jar` 生成于 18:48:41 +08:00 |
+
+### 12.1 本段新增/更新的用例
+
+- `VestLedgerServiceIT`（core，16）：登记/重复编号 409、修改、逻辑注销、绑定/换绑/解绑闭语义、
+  SID 顶替，以及「未绑定但残留会话」这种前置（不能借用 `openSession` 造——它同一条 UPDATE 会把 `bound` 置 1）。
+- `AnchorLedgerServiceIT`（core，5）：建档、就地改写（不回滚 `created_at`、不加行）、
+  `bs5~8` 可关、`bs1~4` 关闭 → 400 `VALIDATION_FAILED`、列表升序。
+- `ApiSkeletonSmokeIT`（api，70）：信任链外的路由存在性与 501 形状；device 域由 14 条补到 17 条。
+- `RoleWritePermissionIT`（app，63）：写权限矩阵逐 operationId 回归，含新增的三条绑定路由。
+- `DeviceLedgerHttpIT`（app，2）：完整生产入口 + 真实 MySQL + 真实 TCP 的端到端形状——
+  201/400/404/409 状态码、Problem 的 `code`/`instance`、绑定密钥不回显、
+  `device/login` 真能换到令牌、换绑后 SID 置空、解绑幂等、注销后行仍在 `enabled=false`。
+
+### 12.2 只在 HTTP 上才看得见的两处约定
+
+- **密钥只进不出**：`VestDevice` 不含 `bindSecretHash`/`secret` 任何形态；请求体与响应体分离
+  （`VestBindingRequest` 只进，`VestDevice` 只出）。
+- **Ant 通配只吃一段**：`/devices/vests/*` 覆盖不到 `/vests/{n}/binding`。
+  本段先用回归证明缺口（三条绑定路由穿透到 `anyRequest()` 得 404），再补
+  `POST·PUT·DELETE /api/v1/devices/vests/*/binding` → `ADMIN` 三条规则。
+
+### 12.3 边界
+
+现存 Flyway MySQL 8.4 支持警告和 Mockito 动态 agent 提示未修改，与本段无关。
+本段为**代码验收**，不是生产发布批准；不提交、不推送，工作树成果保留。
+`getVestLink`/`getLinks`/`listSerialPorts` 与串口/UWB 开关仍为 501——`scds-gateway` 无主源码。
+`t_anchor` 与 `t_map.uwb_meta` 的双源问题按设计缺口登记，本段不写 `uwb_meta`。
