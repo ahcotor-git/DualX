@@ -24,11 +24,17 @@ class BaseMapRepositoryIT {
     @Autowired
     private BaseMapRepository maps;
 
-    /** 契约 UwbMeta 的冻结结构，逐字保存、逐字读回（uwb_meta 是 TEXT，库不做任何改写）。 */
+    /**
+     * 契约 UwbMeta 的冻结结构，逐字保存、逐字读回（uwb_meta 是 TEXT，库不做任何改写）。
+     *
+     * <p>取值即 {@code PROTOCOL.md} §6.6 的定稿示例：**整数像素坐标**。仓储层不校验坐标范围
+     * （那是 {@code MapLedgerService.saveUwbMeta} 的职责），本常量只保证是一份结构合法的冻结 JSON。</p>
+     */
     private static final String UWB_META = """
-            {"bs1":{"xPx":0.1,"yPx":0.2},"bs2":{"xPx":0.9,"yPx":0.2},\
-            "bs3":{"xPx":0.9,"yPx":0.8},"bs4":{"xPx":0.1,"yPx":0.8},\
-            "bs5":null,"bs6":null,"bs7":null,"bs8":null,"realLengthCm":2000.0,"realWidthCm":1000.0}""";
+            {"bs1":{"xPx":120,"yPx":240},"bs2":{"xPx":1980,"yPx":245},\
+            "bs3":{"xPx":118,"yPx":1560},"bs4":{"xPx":1975,"yPx":1565},\
+            "bs5":{"xPx":1050,"yPx":240},"bs6":null,"bs7":null,"bs8":null,\
+            "realLengthCm":3000,"realWidthCm":1800}""";
 
     @Test
     void insertThenFindById_roundTripsEveryColumn() {

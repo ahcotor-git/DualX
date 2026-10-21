@@ -41,11 +41,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Transactional
 class MapLedgerServiceIT {
 
-    /** 契约 UwbMeta 的冻结结构，逐字保存、逐字读回（uwb_meta 是 TEXT，库不做任何改写）。 */
+    /**
+     * 契约 UwbMeta 的冻结结构，逐字保存、逐字读回（uwb_meta 是 TEXT，库不做任何改写）。
+     *
+     * <p>取值即 {@code PROTOCOL.md} §6.6 的定稿示例：**整数像素坐标**（原点左上），
+     * 落在夹具的 4000×3000 底图之内。</p>
+     */
     private static final String UWB_META = """
-            {"bs1":{"xPx":0.1,"yPx":0.2},"bs2":{"xPx":0.9,"yPx":0.2},\
-            "bs3":{"xPx":0.9,"yPx":0.8},"bs4":{"xPx":0.1,"yPx":0.8},\
-            "bs5":null,"bs6":null,"bs7":null,"bs8":null,"realLengthCm":2000.0,"realWidthCm":1000.0}""";
+            {"bs1":{"xPx":120,"yPx":240},"bs2":{"xPx":1980,"yPx":245},\
+            "bs3":{"xPx":118,"yPx":1560},"bs4":{"xPx":1975,"yPx":1565},\
+            "bs5":{"xPx":1050,"yPx":240},"bs6":null,"bs7":null,"bs8":null,\
+            "realLengthCm":3000,"realWidthCm":1800}""";
 
     @Autowired private MapLedgerService ledger;
     @Autowired private BaseMapRepository maps;
@@ -143,12 +149,12 @@ class MapLedgerServiceIT {
 
     @ParameterizedTest(name = "uwb_meta 齐备性 → {1}")
     @CsvSource(delimiter = '|', value = {
-            "{\"bs1\":{\"xPx\":0.1,\"yPx\":0.2},\"bs2\":{\"xPx\":0.9,\"yPx\":0.2},\"bs3\":{\"xPx\":0.9,\"yPx\":0.8},\"bs4\":{\"xPx\":0.1,\"yPx\":0.8},\"realLengthCm\":2000.0,\"realWidthCm\":1000.0}|true",
-            "{\"bs1\":{\"xPx\":0.1,\"yPx\":0.2},\"bs2\":{\"xPx\":0.9,\"yPx\":0.2},\"bs3\":{\"xPx\":0.9,\"yPx\":0.8},\"realLengthCm\":2000.0,\"realWidthCm\":1000.0}|false",
-            "{\"bs1\":{\"xPx\":0.1,\"yPx\":0.2},\"bs2\":{\"xPx\":0.9,\"yPx\":0.2},\"bs3\":{\"xPx\":0.9,\"yPx\":0.8},\"bs4\":{\"xPx\":0.1,\"yPx\":0.8},\"realWidthCm\":1000.0}|false",
-            "{\"bs1\":null,\"bs2\":{\"xPx\":0.9,\"yPx\":0.2},\"bs3\":{\"xPx\":0.9,\"yPx\":0.8},\"bs4\":{\"xPx\":0.1,\"yPx\":0.8},\"realLengthCm\":2000.0,\"realWidthCm\":1000.0}|false",
-            "{\"bs1\":{\"xPx\":\"0.1\",\"yPx\":0.2},\"bs2\":{\"xPx\":0.9,\"yPx\":0.2},\"bs3\":{\"xPx\":0.9,\"yPx\":0.8},\"bs4\":{\"xPx\":0.1,\"yPx\":0.8},\"realLengthCm\":2000.0,\"realWidthCm\":1000.0}|false",
-            "[{\"bs1\":{\"xPx\":0.1,\"yPx\":0.2}}]|false",
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"bs4\":{\"xPx\":1975,\"yPx\":1565},\"realLengthCm\":3000,\"realWidthCm\":1800}|true",
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"realLengthCm\":3000,\"realWidthCm\":1800}|false",
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"bs4\":{\"xPx\":1975,\"yPx\":1565},\"realWidthCm\":1800}|false",
+            "{\"bs1\":null,\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"bs4\":{\"xPx\":1975,\"yPx\":1565},\"realLengthCm\":3000,\"realWidthCm\":1800}|false",
+            "{\"bs1\":{\"xPx\":\"120\",\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"bs4\":{\"xPx\":1975,\"yPx\":1565},\"realLengthCm\":3000,\"realWidthCm\":1800}|false",
+            "[{\"bs1\":{\"xPx\":120,\"yPx\":240}}]|false",
             "{不是合法 JSON|false",
     })
     @DisplayName("calibrated 只判「有没有」不判「对不对」：文本损坏按未标定处理，不让列表 500")
@@ -184,6 +190,108 @@ class MapLedgerServiceIT {
 
         assertThat(all.total()).isEqualTo(maps.count());
         assertThat(all.total()).isEqualTo(maps.countByType(MapType.INDOOR) + maps.countByType(MapType.OUTDOOR));
+    }
+
+    // ── 楼层点位表（契约 listFloorPoints / replaceFloorPoints）────────────────
+
+    @Test
+    @DisplayName("楼层点位：没录过的楼层读回 null（控制器折叠成空列表），第一次 PUT 即建档")
+    void floorPoints_absentIsNullAndFirstPutCreatesTheFloor() {
+        UUID id = insertMap("点位读写", null, null);
+
+        assertThat(ledger.floorPoints(id, 1)).isNull();
+
+        ledger.replaceFloorPoints(id, 1, "[{\"posNum\":1,\"xPct\":0.5,\"yPct\":0.5}]");
+
+        // points 是 MySQL JSON 列：键序被重排为「键长优先、再按字节序」，文本不是逐字回读
+        assertThat(ledger.floorPoints(id, 1)).isEqualTo("[{\"xPct\": 0.5, \"yPct\": 0.5, \"posNum\": 1}]");
+        assertThat(floors.countByMapId(id)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("楼层点位是单楼层替换：改 2 楼不动 1 楼，也不影响别的底图")
+    void replaceFloorPoints_touchesOnlyThatFloorOfThatMap() {
+        UUID id = insertMap("单层替换", null, null);
+        UUID other = insertMap("另一张图", null, null);
+        ledger.replaceFloorPoints(id, 1, "[{\"posNum\":1,\"xPct\":0.1,\"yPct\":0.1}]");
+        ledger.replaceFloorPoints(id, 2, "[{\"posNum\":2,\"xPct\":0.2,\"yPct\":0.2}]");
+        ledger.replaceFloorPoints(other, 1, "[{\"posNum\":1,\"xPct\":0.3,\"yPct\":0.3}]");
+
+        ledger.replaceFloorPoints(id, 2, "[{\"posNum\":9,\"xPct\":0.9,\"yPct\":0.9}]");
+
+        assertThat(ledger.floorPoints(id, 1)).isEqualTo("[{\"xPct\": 0.1, \"yPct\": 0.1, \"posNum\": 1}]");
+        assertThat(ledger.floorPoints(id, 2)).isEqualTo("[{\"xPct\": 0.9, \"yPct\": 0.9, \"posNum\": 9}]");
+        assertThat(ledger.floorPoints(other, 1)).isEqualTo("[{\"xPct\": 0.3, \"yPct\": 0.3, \"posNum\": 1}]");
+        assertThat(floors.countByMapId(id)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("楼层点位挂在底图上：底图不存在时读写都是 MAP_NOT_FOUND，不静默留下孤儿点位")
+    void floorPoints_unknownMap_isMapNotFound() {
+        UUID absent = UuidV7.generate();
+
+        assertCode(() -> ledger.floorPoints(absent, 1), ApiErrorCode.MAP_NOT_FOUND);
+        assertCode(() -> ledger.replaceFloorPoints(absent, 1, "[]"), ApiErrorCode.MAP_NOT_FOUND);
+    }
+
+    // ── UWB 标定（契约 getUwbMeta / putUwbMeta）─────────────────────────────
+
+    @Test
+    @DisplayName("未标定的底图读 uwb-meta → MAP_NOT_CALIBRATED：图在、只是还没标定，与「id 打错了」的 404 分码")
+    void uwbMeta_uncalibrated_isMapNotCalibrated() {
+        UUID id = insertMap("还没标定", null, null);
+
+        assertCode(() -> ledger.uwbMeta(id), ApiErrorCode.MAP_NOT_CALIBRATED);
+    }
+
+    @Test
+    @DisplayName("底图不存在仍是 MAP_NOT_FOUND：先判图在不在，再判标没标定")
+    void uwbMeta_unknownMap_isMapNotFound() {
+        assertCode(() -> ledger.uwbMeta(UuidV7.generate()), ApiErrorCode.MAP_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("保存标定只改 uwb_meta 一列：名字/图片/备注原样，随后可原样读回")
+    void saveUwbMeta_keepsOtherColumnsAndBecomesReadable() {
+        UUID id = insertMap("待标定", "maps/abc.png", null);
+
+        ledger.saveUwbMeta(id, UWB_META);
+
+        assertThat(ledger.uwbMeta(id)).isEqualTo(UWB_META);
+        MapView view = ledger.get(id);
+        assertThat(view.calibrated()).isTrue();
+        assertThat(view.map().name()).isEqualTo("待标定");
+        assertThat(view.map().imagePath()).isEqualTo("maps/abc.png");
+        assertThat(view.map().imageWidth()).isEqualTo(4000);
+        assertThat(view.map().remark()).isEqualTo("备注");
+    }
+
+    @ParameterizedTest(name = "putUwbMeta 拒绝 → {1}")
+    @CsvSource(delimiter = '|', value = {
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"realLengthCm\":3000,\"realWidthCm\":1800}|四角缺 bs4",
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":5000,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"bs4\":{\"xPx\":1975,\"yPx\":1565},\"realLengthCm\":3000,\"realWidthCm\":1800}|坐标越出底图宽 4000",
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":240},\"bs3\":{\"xPx\":118,\"yPx\":240},\"bs4\":{\"xPx\":1975,\"yPx\":240},\"realLengthCm\":3000,\"realWidthCm\":1800}|四角共线退化",
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"bs4\":{\"xPx\":1975,\"yPx\":1565},\"bs5\":{\"xPx\":1050},\"realLengthCm\":3000,\"realWidthCm\":1800}|bs5 写了但缺 yPx",
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"bs4\":{\"xPx\":1975,\"yPx\":1565},\"realLengthCm\":2500.5,\"realWidthCm\":1800}|长不是整数厘米",
+            "{\"bs1\":{\"xPx\":120,\"yPx\":240},\"bs2\":{\"xPx\":1980,\"yPx\":245},\"bs3\":{\"xPx\":118,\"yPx\":1560},\"bs4\":{\"xPx\":1975,\"yPx\":1565},\"realLengthCm\":3000,\"realWidthCm\":0}|宽非正",
+    })
+    @DisplayName("putUwbMeta 的 400 判据：结构缺项与边界不自洽一律 MAP_UWB_META_INCOMPLETE，拒绝时不留半份标定")
+    void saveUwbMeta_invalid_isUwbMetaIncomplete(String uwbMeta, String reason) {
+        UUID id = insertMap("标定校验", "maps/abc.png", null);
+
+        assertCode(() -> ledger.saveUwbMeta(id, uwbMeta), ApiErrorCode.MAP_UWB_META_INCOMPLETE);
+
+        assertThat(maps.findById(id).orElseThrow().uwbMeta()).isNull();
+    }
+
+    @Test
+    @DisplayName("图片还没上传时没有可比的边界：越界校验跳过，标定照常保存")
+    void saveUwbMeta_withoutImageSkipsBoundsCheck() {
+        UUID id = insertMap("还没上传图片", null, null);
+
+        ledger.saveUwbMeta(id, UWB_META);
+
+        assertThat(ledger.get(id).calibrated()).isTrue();
     }
 
     // ── 夹具 ─────────────────────────────────────────────────────────────────

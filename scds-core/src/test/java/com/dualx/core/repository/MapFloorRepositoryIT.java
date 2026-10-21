@@ -132,6 +132,53 @@ class MapFloorRepositoryIT {
     }
 
     @Test
+    void upsert_insertsFloorWhenAbsent() {
+        UUID mapId = UuidV7.generate();
+
+        assertThat(floors.upsertByMapIdAndFloorNum(mapId, 1, "[{\"posNum\":1,\"xPct\":0.1,\"yPct\":0.1}]"))
+                .isEqualTo(1);
+
+        assertThat(floors.findByMapIdAndFloorNum(mapId, 1).orElseThrow().points())
+                .isEqualTo("[{\"xPct\": 0.1, \"yPct\": 0.1, \"posNum\": 1}]");
+        assertThat(floors.countByMapId(mapId)).isEqualTo(1);
+    }
+
+    @Test
+    void upsert_overwritesExistingFloorInPlace() {
+        UUID mapId = UuidV7.generate();
+        floors.insert(floor(mapId, 1, "[{\"posNum\":1,\"xPct\":0.1,\"yPct\":0.1}]"));
+        long oldId = floors.findByMapIdAndFloorNum(mapId, 1).orElseThrow().id();
+
+        // ON DUPLICATE KEY UPDATE 的 MySQL 语义：新建计 1 行，命中唯一键改行计 2 行
+        assertThat(floors.upsertByMapIdAndFloorNum(mapId, 1, null)).isEqualTo(2);
+
+        MapFloor loaded = floors.findByMapIdAndFloorNum(mapId, 1).orElseThrow();
+        assertThat(loaded.points()).isNull();
+        // 改行不是先删后插：代理主键与建行时间都保持
+        assertThat(loaded.id()).isEqualTo(oldId);
+        assertThat(loaded.createdAt()).isNotNull();
+        assertThat(floors.countByMapId(mapId)).isEqualTo(1);
+    }
+
+    @Test
+    void upsert_leavesOtherFloorsAndMapsUntouched() {
+        UUID target = UuidV7.generate();
+        UUID other = UuidV7.generate();
+        floors.insert(floor(target, 1, "[{\"posNum\":1,\"xPct\":0.1,\"yPct\":0.1}]"));
+        floors.insert(floor(target, 2, null));
+        floors.insert(floor(other, 1, "[{\"posNum\":1,\"xPct\":0.2,\"yPct\":0.2}]"));
+
+        floors.upsertByMapIdAndFloorNum(target, 1, "[{\"posNum\":9,\"xPct\":0.9,\"yPct\":0.9}]");
+
+        assertThat(floors.findByMapIdAndFloorNum(target, 1).orElseThrow().points())
+                .isEqualTo("[{\"xPct\": 0.9, \"yPct\": 0.9, \"posNum\": 9}]");
+        assertThat(floors.findByMapIdAndFloorNum(target, 2)).isPresent();
+        assertThat(floors.findByMapIdAndFloorNum(other, 1).orElseThrow().points())
+                .isEqualTo("[{\"xPct\": 0.2, \"yPct\": 0.2, \"posNum\": 1}]");
+        assertThat(floors.countByMapId(target)).isEqualTo(2);
+    }
+
+    @Test
     void deleteByMapId_removesAllFloorsOfThatMap() {
         UUID mapId = UuidV7.generate();
         floors.insert(floor(mapId, 1, null));
