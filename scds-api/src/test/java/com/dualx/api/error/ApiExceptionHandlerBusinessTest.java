@@ -6,6 +6,8 @@ import com.dualx.core.error.BusinessException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -70,9 +72,34 @@ class ApiExceptionHandlerBusinessTest {
             throw BusinessException.rateLimited(Duration.ofSeconds(123));
         }
 
+        @GetMapping("/boom/vest-not-found")
+        void vestNotFound() {
+            throw new BusinessException(ApiErrorCode.DEVICE_VEST_NOT_FOUND, "马甲不存在");
+        }
+
+        @GetMapping("/boom/vest-num-conflict")
+        void vestNumConflict() {
+            throw new BusinessException(ApiErrorCode.DEVICE_VEST_NUM_CONFLICT, "马甲编号已存在");
+        }
+
+        @GetMapping("/boom/vest-already-bound")
+        void vestAlreadyBound() {
+            throw new BusinessException(ApiErrorCode.DEVICE_VEST_ALREADY_BOUND, "该马甲已绑定");
+        }
+
+        @GetMapping("/boom/vest-not-bound")
+        void vestNotBound() {
+            throw new BusinessException(ApiErrorCode.DEVICE_VEST_NOT_BOUND, "该马甲尚未绑定");
+        }
+
+        @GetMapping("/boom/exercise-running")
+        void exerciseRunning() {
+            throw new BusinessException(ApiErrorCode.EXERCISE_ALREADY_RUNNING, "演习进行中");
+        }
+
         @GetMapping("/boom/unmapped")
         void unmapped() {
-            throw new BusinessException(ApiErrorCode.EXERCISE_ALREADY_RUNNING, "已有演习在运行");
+            throw new BusinessException(ApiErrorCode.COMMAND_QUEUE_FULL, "指令队列已满");
         }
     }
 
@@ -123,14 +150,32 @@ class ApiExceptionHandlerBusinessTest {
                 .andExpect(header().string(HttpHeaders.RETRY_AFTER, "123"));
     }
 
+    @ParameterizedTest(name = "{0} → {1} {2}")
+    @CsvSource(delimiter = '|', value = {
+            "/boom/vest-not-found    | 404 | DEVICE_VEST_NOT_FOUND",
+            "/boom/vest-num-conflict | 409 | DEVICE_VEST_NUM_CONFLICT",
+            "/boom/vest-already-bound| 409 | DEVICE_VEST_ALREADY_BOUND",
+            "/boom/vest-not-bound    | 409 | DEVICE_VEST_NOT_BOUND",
+            "/boom/exercise-running  | 409 | EXERCISE_ALREADY_RUNNING",
+    })
+    @DisplayName("台账域错误码逐项按契约登记状态，不按前缀猜（DEVICE_* 里既有 404 又有 409）")
+    void ledgerCodesMapToTheirContractStatus(String path, int expectedStatus, String expectedCode) throws Exception {
+        mockMvc.perform(MockMvcRequestBuilders.get(path.trim()))
+                .andExpect(status().is(expectedStatus))
+                .andExpect(jsonPath("$.code").value(expectedCode))
+                .andExpect(jsonPath("$.status").value(expectedStatus));
+    }
+
     @Test
     @DisplayName("未登记状态的错误码响亮地失败：500 并在响应里保留原码")
     void unmappedCodeFailsLoudlyInsteadOfGuessingAnHttpStatus() throws Exception {
-        // 这条是刻意的绊线：状态映射表刻意不按前缀猜（EXERCISE_* 里既有 404 又有 409）。
-        // 将来为 EXERCISE_ALREADY_RUNNING 登记了 409，本用例会失败——那一刻请一并更新它，
-        // 而不是把默认分支改回"猜一个看起来合理的 4xx"。
+        // 这条是刻意的绊线：状态映射表刻意不按前缀猜（同一前缀里既有 404 又有 409）。
+        // 台账域（M2 LEDGER）登记完 DEVICE_VEST_* 与 EXERCISE_ALREADY_RUNNING 后，
+        // 绊线换到尚未落服务的 COMMAND_* 上；将来为 COMMAND_QUEUE_FULL 登记了状态，
+        // 本用例会失败——那一刻请一并换成下一个未登记的码，而不是把默认分支改回「猜一个
+        // 看起来合理的 4xx」。
         mockMvc.perform(MockMvcRequestBuilders.get("/boom/unmapped"))
                 .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.code").value("EXERCISE_ALREADY_RUNNING"));
+                .andExpect(jsonPath("$.code").value("COMMAND_QUEUE_FULL"));
     }
 }

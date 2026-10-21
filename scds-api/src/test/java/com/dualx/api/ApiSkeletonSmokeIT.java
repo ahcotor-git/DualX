@@ -13,6 +13,8 @@ import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.auth.AuthService;
 import com.dualx.core.auth.DeviceAuthService;
+import com.dualx.core.ledger.AnchorLedgerService;
+import com.dualx.core.ledger.VestLedgerService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -69,13 +71,28 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 设备台账与基站台账已接核心服务：本测试不建数据库上下文，故同样用占位替身。
+        // 真实链路（过滤 / 分页 / 绑定闭环 / 编号冲突）由 VestLedgerServiceIT、
+        // AnchorLedgerServiceIT 与 scds-app 的 DeviceLedgerHttpIT 覆盖。
+        VestLedgerService vestLedgerService = Mockito.mock(VestLedgerService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
+        AnchorLedgerService anchorLedgerService = Mockito.mock(AnchorLedgerService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService),
                         new ExerciseController(),
                         new CommandController(),
                         new SituationController(),
-                        new DeviceController(),
+                        new DeviceController(vestLedgerService, anchorLedgerService),
                         new MapController(),
                         new ReplayController())
                 .setControllerAdvice(new ApiExceptionHandler())
@@ -100,7 +117,7 @@ class ApiSkeletonSmokeIT {
         };
     }
 
-    /** 契约 {@code docs/api/paths/*.yaml} 的全部 66 条 REST 路由。 */
+    /** 契约 {@code docs/api/paths/*.yaml} 的全部 69 条 REST 路由。 */
     static Stream<Arguments> allContractRoutes() {
         return Stream.of(
                 // ---- auth（6）----
@@ -138,12 +155,15 @@ class ApiSkeletonSmokeIT {
                 route("GET", "/api/v1/situation/vests/1"),
                 route("GET", "/api/v1/situation/teams/summary"),
                 route("GET", "/api/v1/situation/hits"),
-                // ---- device（14）----
+                // ---- device（17）----
                 route("GET", "/api/v1/devices/vests"),
                 route("POST", "/api/v1/devices/vests"),
                 route("GET", "/api/v1/devices/vests/1"),
                 route("PUT", "/api/v1/devices/vests/1"),
                 route("DELETE", "/api/v1/devices/vests/1"),
+                route("POST", "/api/v1/devices/vests/1/binding"),
+                route("PUT", "/api/v1/devices/vests/1/binding"),
+                route("DELETE", "/api/v1/devices/vests/1/binding"),
                 route("GET", "/api/v1/devices/vests/1/link"),
                 route("GET", "/api/v1/devices/anchors"),
                 route("PUT", "/api/v1/devices/anchors/a1"),

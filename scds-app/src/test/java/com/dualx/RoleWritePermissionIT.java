@@ -3,6 +3,7 @@ package com.dualx;
 import com.dualx.api.command.CommandController;
 import com.dualx.api.device.DeviceController;
 import com.dualx.api.error.ApiExceptionHandler;
+import com.dualx.api.error.NotImplementedException;
 import com.dualx.api.exercise.ExerciseController;
 import com.dualx.api.map.MapController;
 import com.dualx.api.replay.ReplayController;
@@ -12,6 +13,8 @@ import com.dualx.api.security.JwtDecoderConfig;
 import com.dualx.api.security.SecurityConfig;
 import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
+import com.dualx.core.ledger.AnchorLedgerService;
+import com.dualx.core.ledger.VestLedgerService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -21,6 +24,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
@@ -28,6 +32,7 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.MockMvcPrint;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -96,6 +101,28 @@ class RoleWritePermissionIT {
             ExerciseController.class, CommandController.class, SituationController.class,
             DeviceController.class, MapController.class, ReplayController.class})
     static class PermissionApplication {
+
+        // 设备控制器已接核心台账服务，而台账服务要 JdbcClient（本切片排掉了 DataSource）。
+        // 替身一律抛占位异常：放行的请求因此稳定返回 501 而不是 Mockito 的 null 触发的 500，
+        // 本测试只问「授权层放不放行」，不关心服务返回什么。
+        @Bean
+        VestLedgerService vestLedgerService() {
+            return stub(VestLedgerService.class);
+        }
+
+        @Bean
+        AnchorLedgerService anchorLedgerService() {
+            return stub(AnchorLedgerService.class);
+        }
+
+        private static <T> T stub(Class<T> type) {
+            return Mockito.mock(type, invocation -> {
+                if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                    return invocation.callRealMethod();
+                }
+                throw new NotImplementedException(invocation.getMethod().getName());
+            });
+        }
     }
 
     @DynamicPropertySource
@@ -119,6 +146,10 @@ class RoleWritePermissionIT {
                 new WriteRoute("POST", "/api/v1/devices/vests", ADMIN_ONLY),
                 new WriteRoute("PUT", "/api/v1/devices/vests/1", ADMIN_ONLY),
                 new WriteRoute("DELETE", "/api/v1/devices/vests/1", ADMIN_ONLY),
+                // 绑定闭环挂在 /vests/{n}/binding 下：`/devices/vests/*` 的通配只吃单段，覆盖不到它。
+                new WriteRoute("POST", "/api/v1/devices/vests/1/binding", ADMIN_ONLY),
+                new WriteRoute("PUT", "/api/v1/devices/vests/1/binding", ADMIN_ONLY),
+                new WriteRoute("DELETE", "/api/v1/devices/vests/1/binding", ADMIN_ONLY),
                 new WriteRoute("PUT", "/api/v1/devices/anchors/1", ADMIN_ONLY),
                 // ---- 想定 / 编成 ----
                 new WriteRoute("POST", "/api/v1/plans", DIRECTOR_UP),
