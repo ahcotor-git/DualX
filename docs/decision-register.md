@@ -107,6 +107,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | 提交/推送 M2 LEDGER 成果 | 用户本轮明确授权“提交 LEDGER 并尝试推送”。**已落地 5 个本地提交**（`86e9b71` 契约、`a95bcf3` 服务、`9c3ab09` 接线+权限、`74162ca` 测试、`e8258a0` 文档），叠加既有 4 个后 `main` 领先 `origin/main` **9 个提交**；推送**两次均因网络失败**（`Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。不推导后续自动提交授权 |
 | 提交/推送 M2 MAP-BASE A1/A2 与 B1-B3 | 用户当次选择“提交并尝试推送”与“B2 + B3 连做”。**已落地 5 个本地提交**（`c8c1d5d` 契约 A1/A2、`867bd4c` 裁定登记、`8e1adbd` B1 存储端口与实现、`55739f1` B2 签名 URL、`7846030` B3 单测与配置）。`867bd4c` 那次推送已成功入远端；B1-B3 三次推送**均因网络失败**（`Connection was reset` / 无法连接 github.com:443），`main` 领先 `origin/main` **3 个提交**，**远端未更新** |
 | 提交/推送 M2 MAP-BASE 分段 C 与“演习中删图”裁定 | 用户当次选择“提交并重试推送”与“一并拦截，复用 MAP_IN_USE”。**已落地 3 个本地提交**（`3787254` C1 错误码与契约登记、`e8006b6` C2 台账服务与想定/演习引用判据、`8b9de5c` C2 用例），叠加既有 4 个后 `main` 领先 `origin/main` **7 个提交**；本轮推送**两次均因网络失败**（`Recv failure: Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。`C` 段已跑通全量 `mvn -B verify`（716 项，protocol 19 / core 316 / api 100 / app 281） |
+| 提交/推送 M2 MAP-BASE 分段 D | 用户当次选择“分两段提交并重试推送”与“下一步 E 楼层点位 + UWB 标定”。**已落地 2 个本地提交**（`43e6b87` D1 底图错误码登记状态表、`91779bd` D2 底图 CRUD 接线）。本轮推送**成功**：`867bd4c..91779bd main -> main`，随后 `git fetch` 确认 `main` 与 `origin/main` 无差异，**上表第 108、109 行所称“远端未更新”至此消解**（A1/A2 至 C 段的累计积压一并入远端）。D 段已跑通全量 `mvn -B -o verify`（718 项，protocol 19 / core 316 / api 102 / app 281）。注：本轮首跑 verify 时 Docker Desktop 已退出（`scds-local-mysql` 为 `Exited (255)`），重启 Docker 与容器后复跑方全绿——真实库用例的失败先查容器再查代码 |
 
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
