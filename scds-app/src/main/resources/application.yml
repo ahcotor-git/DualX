@@ -102,6 +102,16 @@ scds:
       refresh-token-ttl: 14d
       device-token-ttl: 12h
 
+  # ===== 初始管理员（仅首次启动建号）=====
+  # 迁移文件刻意不种任何账号：写死口令等于所有客户共用一把钥匙，写死散列则无法换口令。
+  # 这里由部署侧提供口令明文，应用在启动时用 BCrypt 落成散列，**建号成功后建议从 .env
+  # 删掉 SCDS_ADMIN_PASSWORD**——此后进程不再读它，口令只以散列形式存在于库中。
+  # 两项任一为空则跳过建号（CLOUD 形态下账号由云管下发，边缘本就不该自建）。
+  admin:
+    username: ${SCDS_ADMIN_USERNAME:}
+    password: ${SCDS_ADMIN_PASSWORD:}
+    display-name: ${SCDS_ADMIN_DISPLAY_NAME:}
+
   # ===== 协议 A：马甲串口链路 =====
   serial:
     port-name: COM7

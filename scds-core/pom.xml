@@ -40,6 +40,16 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- 口令散列（BCryptPasswordEncoder）。刻意只引 spring-security-crypto 而非
+             spring-boot-starter-security：前者是一个不依赖 Spring 容器、不涉及 servlet
+             的纯算法包，正是核心侧校验 t_account.password_hash / t_vest.bind_secret_hash
+             所需的全部；引 starter 会把整个 Web 过滤链拖进业务核心。
+             版本由 Boot BOM（spring-security-bom）统一管理，此处不写版本号。 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
         <!-- ===== 存续层 =====
              持久化方案与 E:\ZAA 保持一致的「JdbcClient + Flyway」，不引入 ORM：
              本机 .m2 里已有一套跑通的组合（SB 3.5.7 → flyway 11.7.2 / mysql-connector-j），
