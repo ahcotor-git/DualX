@@ -1,0 +1,167 @@
+package com.dualx.core.auth;
+
+import com.dualx.core.auth.LoginThrottle.Scope;
+import org.junit.jupiter.api.Test;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * 登录限流的边界行为。纯单测（不碰数据库），用可控时钟推进时间。
+ */
+class LoginThrottleTest {
+
+    private static final String IP = "10.0.0.9";
+
+    @Test
+    void accountLockedOnFifthFailure_notBefore() {
+        var throttle = new LoginThrottle(new MutableClock());
+
+        for (int i = 1; i <= 4; i++) {
+            throttle.recordFailure("u1", IP);
+            assertThat(throttle.lockout("u1", IP)).as("第 %d 次失败后仍不该锁", i).isEmpty();
+        }
+
+        throttle.recordFailure("u1", IP);
+        assertThat(throttle.lockout("u1", IP)).isPresent()
+                .get()
+                .extracting(LoginThrottle.Lockout::scope)
+                .isEqualTo(Scope.ACCOUNT);
+    }
+
+    @Test
+    void lockLastsFullFiveMinutes_evenWhenFailuresAreBunchedAtTheEnd() {
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock);
+
+        // 5 次失败全在第 4 分钟涌入：若用"窗口内计数≥阈值"判定，
+        // 最早的失败 1 分钟后滑出窗口就解锁了，锁定只剩 1 分钟。
+        clock.advance(Duration.ofMinutes(4));
+        for (int i = 0; i < 5; i++) {
+            throttle.recordFailure("u2", IP);
+        }
+
+        clock.advance(Duration.ofMinutes(1).plusSeconds(1));
+        assertThat(throttle.lockout("u2", IP)).isPresent();
+        clock.advance(Duration.ofMinutes(3).plusSeconds(58));
+        assertThat(throttle.lockout("u2", IP)).isPresent();
+
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(throttle.lockout("u2", IP)).isEmpty();
+    }
+
+    @Test
+    void retryAfterCountsDownToLockExpiry() {
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock);
+
+        for (int i = 0; i < 5; i++) {
+            throttle.recordFailure("u3", IP);
+        }
+
+        assertThat(throttle.lockout("u3", IP)).get()
+                .extracting(LoginThrottle.Lockout::retryAfter)
+                .isEqualTo(Duration.ofMinutes(5));
+
+        clock.advance(Duration.ofMinutes(2));
+        assertThat(throttle.lockout("u3", IP)).get()
+                .extracting(LoginThrottle.Lockout::retryAfter)
+                .isEqualTo(Duration.ofMinutes(3));
+    }
+
+    @Test
+    void clientIpLocksOnlyAtThirtyFailures_acrossDifferentUsernames() {
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock);
+
+        // 每个用户名只试 2 次（远低于账号阈值），但都来自同一出口 IP
+        for (int i = 0; i < 15; i++) {
+            throttle.recordFailure("victim" + i, IP);
+            throttle.recordFailure("victim" + i, IP);
+        }
+
+        assertThat(throttle.lockout("someone-else", IP)).get()
+                .extracting(LoginThrottle.Lockout::scope)
+                .isEqualTo(Scope.CLIENT_IP);
+        // 另一个 IP 上的新账号不受影响：锁的是 IP 维度，不是全局
+        assertThat(throttle.lockout("someone-else", "10.0.0.10")).isEmpty();
+    }
+
+    @Test
+    void successResetsBothDimensions() {
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock);
+
+        for (int i = 0; i < 4; i++) {
+            throttle.recordFailure("u4", IP);
+        }
+        throttle.reset("u4", IP);
+
+        for (int i = 0; i < 4; i++) {
+            throttle.recordFailure("u4", IP);
+            assertThat(throttle.lockout("u4", IP)).isEmpty();
+        }
+    }
+
+    @Test
+    void failuresOutsideTheWindowDoNotAccumulate() {
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock);
+
+        for (int i = 0; i < 4; i++) {
+            throttle.recordFailure("u5", IP);
+            clock.advance(Duration.ofMinutes(2));
+        }
+        // 4 次失败跨越 6 分钟，任意时刻窗口内都不足 5 次
+        throttle.recordFailure("u5", IP);
+        assertThat(throttle.lockout("u5", IP)).isEmpty();
+    }
+
+    @Test
+    void staleBucketsAreEvicted_soLongRunningProcessDoesNotLeakKeys() {
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock);
+
+        for (int i = 0; i < 50; i++) {
+            throttle.recordFailure("ghost" + i, "10.1.1." + i);
+        }
+        assertThat(throttle.trackedKeyCount()).isEqualTo(100);
+
+        // 清理挂在失败路径上：所有旧失败滑出窗口后，再记一次失败即可触发回收。
+        // 这次失败自身会留下两个键（账号 + IP），故清理后不是 0 而是 2。
+        clock.advance(LoginThrottle.FAILURE_WINDOW.plusSeconds(1));
+        throttle.recordFailure("survivor", "10.2.2.2");
+
+        assertThat(throttle.trackedKeyCount()).isEqualTo(2);
+    }
+
+    /** 可手动推进的时钟：限流逻辑全靠它，用真实时钟就没法在毫秒内验证 5 分钟的行为。 */
+    private static final class MutableClock extends Clock {
+
+        private Instant now = Instant.parse("2026-10-21T00:00:00Z");
+
+        void advance(Duration duration) {
+            now = now.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+    }
+}
