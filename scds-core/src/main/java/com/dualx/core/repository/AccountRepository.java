@@ -38,6 +38,14 @@ public class AccountRepository {
                 .optional();
     }
 
+    /** 在事务内串行化同一账号的登录、刷新及退出；锁定读返回最新已提交状态。 */
+    public Optional<Account> findByIdForUpdate(UUID id) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM t_account WHERE id = :id FOR UPDATE")
+                .param("id", id.toString())
+                .query(AccountRepository::map)
+                .optional();
+    }
+
     public Optional<Account> findByUsername(String username) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM t_account WHERE username = :username")
                 .param("username", username)
