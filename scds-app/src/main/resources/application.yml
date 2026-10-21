@@ -35,6 +35,15 @@ spring:
     problemdetails:
       enabled: true
 
+  # ===== 底图上传上限 =====
+  # 与 scds.files.max-image-bytes 是一对，改一处必须同步另一处：
+  # 容器层超限会在进控制器之前就被拒（拿不到 Problem 体），两处不一致会让
+  # 「文件过大」以两种不同形态出现，排查时更难定位。
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
   # ===== JSON 契约 =====
   # 契约承诺「时间一律 RFC 3339、服务端只发 UTC」。下面三项在 Boot 里本就是默认值，
   # 但默认值不等于契约——显式钉死，避免升版本或引依赖时被静默改形。
@@ -107,6 +116,16 @@ scds:
     username: ${SCDS_ADMIN_USERNAME:}
     password: ${SCDS_ADMIN_PASSWORD:}
     display-name: ${SCDS_ADMIN_DISPLAY_NAME:}
+
+  # ===== 底图文件存储与签名 URL（D09）=====
+  # 根目录留空则用 ${user.home}/.scds/files（沿用旧系统 .scds 约定）。
+  # 签名密钥留空则本次启动随机生成并打 WARN；显式配置短于 32 字符直接启动失败。
+  # max-image-bytes 用字节数（不写 20MB，避免 Long 绑定解析不到 DataSize）。
+  files:
+    root: ${SCDS_FILES_ROOT:}
+    sign-secret: ${SCDS_FILE_SIGN_SECRET:}
+    sign-ttl: 15m
+    max-image-bytes: 20971520
 
   # ===== 协议 A：马甲串口链路 =====
   serial:
