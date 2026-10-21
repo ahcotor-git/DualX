@@ -45,6 +45,12 @@ public class AuthService {
     /** 库内统一存 UTC 挂钟值（V1 迁移文件头第 2 条）。 */
     private static final Clock CLOCK = Clock.systemUTC();
 
+    /**
+     * 未登记用户名的限流键。所有查不到账号的用户名共用这一个桶，理由见 {@link #login}。
+     * 取值刻意避开 UUID 文本形态，不会与任何 {@code account.id()} 撞键。
+     */
+    private static final String UNKNOWN_ACCOUNT_KEY = "unknown";
+
     private final AccountRepository accounts;
     private final AccountRoleRepository accountRoles;
     private final RefreshTokenRepository refreshTokens;
@@ -77,27 +83,42 @@ public class AuthService {
      */
     public IssuedTokens login(String username, String password, String clientIp) {
         requireSigning();
+        // D01 身份归一化：限流键必须取自库内身份，不能取自请求原文。t_account.username 的排序
+        // 规则是 utf8mb4_0900_ai_ci（不区分大小写与重音），"Admin" 与 "admin" 在库里就是同一行；
+        // 若按原文记失败，"Admin" 试 3 次 + "admin" 试 3 次就绕过了 5 次的单账号上限。
+        // 代价是锁定期内仍会查这一库（设计 03 §4.10）。
+        Account candidate = accounts.findByUsername(username).orElse(null);
+        String accountKey = candidate == null
+                // 未登记的用户名共用一个桶：既不让每个乱填的用户名都占一个键（review R27 的
+                // 桶容量上限），也让「未命中账号」与「口令错误」同为 5 次锁定——否则
+                // 「试不存在的用户名不会被锁」会把用户名是否存在从 429/401 的差异里泄漏出去。
+                ? UNKNOWN_ACCOUNT_KEY
+                : candidate.id().toString();
+
         // 锁定期判定必须在校验口令之前：锁定期内不因「这次口令正好对了」而放行，
         // 否则攻击者撞对一次即可解锁（设计 03 §4.10）
-        throttle.lockout(username, clientIp).ifPresent(lock -> {
+        throttle.lockout(accountKey, clientIp).ifPresent(lock -> {
             log.warn("登录被限流：username={} 口径={} 剩余={}s",
                     username, lock.scope(), lock.retryAfter().toSeconds());
             throw BusinessException.rateLimited(lock.retryAfter());
         });
 
         IssuedTokens issued = transaction.execute(status -> {
-            Account account = accounts.findByUsername(username)
-                    .flatMap(found -> accounts.findByIdForUpdate(found.id())).orElse(null);
+            // 事务外那次查找只用来定限流键，不作鉴权依据：持行锁后按 id 重读，
+            // 账号是否被禁用、口令是否匹配一律以锁内状态为准。
+            Account account = candidate == null
+                    ? null
+                    : accounts.findByIdForUpdate(candidate.id()).orElse(null);
             if (account == null || !account.enabled()
                     || !passwordEncoder.matches(password, account.passwordHash())) {
-                throttle.recordFailure(username, clientIp);
+                throttle.recordFailure(accountKey, clientIp);
                 throw new BusinessException(ApiErrorCode.AUTH_BAD_CREDENTIALS, "账号或密码错误");
             }
             Instant now = CLOCK.instant();
             accounts.update(withLastLoginAt(account, now));
             return issue(account, UuidV7.generate(), now);
         });
-        throttle.reset(username, clientIp);
+        throttle.reset(accountKey, clientIp);
         return issued;
     }
 

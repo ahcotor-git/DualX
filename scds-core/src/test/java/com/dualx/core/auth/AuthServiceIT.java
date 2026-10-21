@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -145,7 +146,42 @@ class AuthServiceIT {
         }
         login(account);
         assertCode(() -> auth.login(account.username(), "wrong", IP), ApiErrorCode.AUTH_BAD_CREDENTIALS);
-        assertThat(throttle.lockout(account.username(), IP)).isEmpty();
+        // 限流键是库内身份（account.id），不是请求原文（D01 身份归一化）
+        assertThat(throttle.lockout(account.id().toString(), IP)).isEmpty();
+    }
+
+    @Test
+    void usernameCaseVariantsShareOneFailureCounter() {
+        Account account = account(true, null);
+        // t_account.username 的排序规则是 utf8mb4_0900_ai_ci，"Admin" 与 "admin" 在库里是同一行。
+        // 限流键若取请求原文，两种拼写各记一份，单账号 5 次的上限就会被拼写变体翻倍。
+        String upper = account.username().toUpperCase(Locale.ROOT);
+        for (int i = 0; i < 3; i++) {
+            assertCode(() -> auth.login(account.username(), "wrong", IP), ApiErrorCode.AUTH_BAD_CREDENTIALS);
+        }
+        for (int i = 0; i < 2; i++) {
+            assertCode(() -> auth.login(upper, "wrong", IP), ApiErrorCode.AUTH_BAD_CREDENTIALS);
+        }
+
+        assertThatThrownBy(() -> login(account)).isInstanceOfSatisfying(BusinessException.class,
+                failure -> assertThat(failure.code()).isEqualTo(ApiErrorCode.RATE_LIMITED));
+        assertThat(countTokens(account.id(), false)).isZero();
+    }
+
+    @Test
+    void unregisteredUsernamesShareOneBucketWithoutAffectingRegisteredAccounts() {
+        Account account = account(true, null);
+        for (int i = 0; i < 5; i++) {
+            assertCode(() -> auth.login("missing-" + UuidV7.generate(), PASSWORD, IP),
+                    ApiErrorCode.AUTH_BAD_CREDENTIALS);
+        }
+
+        // 未登记用户名的桶只锁「查不到账号」这条通道；已登记账号的键是 account:<uuid>，互不串扰。
+        // 这次成功登录顺带清零 IP 维度，于是下一条断言只可能由账号口径触发。
+        assertThat(login(account).refreshToken()).isNotBlank();
+        assertThatThrownBy(() -> auth.login("missing-" + UuidV7.generate(), PASSWORD, IP))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        failure -> assertThat(failure.code()).isEqualTo(ApiErrorCode.RATE_LIMITED));
     }
 
     @Test

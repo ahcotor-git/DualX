@@ -31,6 +31,12 @@ import java.util.Optional;
  * （{@link #deviceLockout(int, String)} 一族）。键前缀不同（{@code account:} / {@code vest:}），
  * 且一次失败只写本条链路的维度——否则设备登录会在账号命名空间里留下永不查询的键。</p>
  *
+ * <p><b>账号口径的 subject 是「库内身份」而不是「请求原文」</b>（D01 身份归一化）：
+ * {@code t_account.username} 的排序规则是 {@code utf8mb4_0900_ai_ci}，大小写与重音不敏感的
+ * 拼写变体在库里是同一行，所以调用方必须传账号的稳定标识（本项目的 {@code account.id()}），
+ * 否则拼写变体各记一份，单账号的 5 次上限会被翻倍。未登记的账号由调用方统一映射到一个
+ * 共享键，本类不关心它长什么样，只保证同一 subject 落在同一桶。</p>
+ *
  * <p><b>作用域是单个进程、重启即清零。</b>本项目"每客户独立实例"，单机承载全部登录，
  * 故不需要跨实例共享计数；代价是重启会放掉正在锁定的账号——现场重启本就伴随人工
  * 在场，可接受，为此引入中间件则得不偿失。</p>
@@ -79,10 +85,12 @@ public class LoginThrottle {
      * 当前是否处于锁定期。**必须在校验口令之前调用**——锁定期不因"这次口令正好对了"
      * 而放行，否则攻击者撞对一次即可解锁。
      *
+     * @param accountKey 账号的库内稳定标识（{@code account.id()}），未登记账号用共享键；
+     *                   传请求原文会让大小写变体各记一份
      * @return 空表示未锁定；非空给出锁的口径与剩余时长（后者用于 429 的 {@code Retry-After}）
      */
-    public Optional<Lockout> lockout(String username, String clientIp) {
-        return lockout(ACCOUNT_DIMENSIONS, username, clientIp);
+    public Optional<Lockout> lockout(String accountKey, String clientIp) {
+        return lockout(ACCOUNT_DIMENSIONS, accountKey, clientIp);
     }
 
     /** 设备口径的锁定判定，语义与 {@link #lockout} 相同，键为 {@code vest:<num>}。 */
@@ -108,9 +116,13 @@ public class LoginThrottle {
         }
     }
 
-    /** 记录一次**口令校验失败**。锁定期内的请求不应调用本方法（见类注释）。 */
-    public void recordFailure(String username, String clientIp) {
-        recordFailure(ACCOUNT_DIMENSIONS, username, clientIp);
+    /**
+     * 记录一次**口令校验失败**。锁定期内的请求不应调用本方法（见类注释）。
+     *
+     * @param accountKey 与 {@link #lockout} 同一个库内身份键，两次调用必须一致
+     */
+    public void recordFailure(String accountKey, String clientIp) {
+        recordFailure(ACCOUNT_DIMENSIONS, accountKey, clientIp);
     }
 
     /** 记录一次**设备绑定密钥校验失败**。口径见 {@link #deviceLockout}。 */
@@ -143,9 +155,13 @@ public class LoginThrottle {
         });
     }
 
-    /** 登录成功：两个口径一并清零（仅在未锁定状态下会走到这里）。 */
-    public void reset(String username, String clientIp) {
-        reset(ACCOUNT_DIMENSIONS, username, clientIp);
+    /**
+     * 登录成功：两个口径一并清零（仅在未锁定状态下会走到这里）。
+     *
+     * @param accountKey 与 {@link #lockout} 同一个库内身份键，两次调用必须一致
+     */
+    public void reset(String accountKey, String clientIp) {
+        reset(ACCOUNT_DIMENSIONS, accountKey, clientIp);
     }
 
     /** 设备登录成功：设备与 IP 两个口径一并清零。 */
