@@ -73,6 +73,35 @@ scds:
   # ⚠ 当前尚无消费者：能力开关落地（设计 03）时才接线，此处先作为运维约定登记。
   deployment-mode: ${SCDS_DEPLOYMENT_MODE:PRIVATE}
 
+  # ===== 鉴权（完整设计见 docs/design/03-auth.md）=====
+  # 两条铁律：
+  #   1. 验签只用本地公钥，**启动过程绝不联网**——因此禁用 Boot 的
+  #      spring.security.oauth2.resourceserver.jwt.* 自动装配（issuer-uri 形态会在
+  #      启动期做一次 OIDC 发现，现场无外网表现为「服务起不来」）。
+  #   2. 环境（deployment-mode）与能力（signing-enabled）正交，禁止互相反推。
+  auth:
+    jwt:
+      issuer: ${SCDS_JWT_ISSUER:scds-edge}
+      # 本进程是否具备签发账号 accessToken 的能力。false 时 login/refresh/logout
+      # 三个端点**不注册**（404）——而不是注册后返回 501，因为 501 在本项目里
+      # 专指「骨架期占位」，混用会让客户端分不清「没实现」与「这台机器不签发」。
+      signing-enabled: ${SCDS_JWT_SIGNING:true}
+      # 验签公钥：内联 PEM 或文件二选一。内联形态在 .env/.properties 里要把换行写成 \n，
+      # 现场更推荐用 public-key-file，省掉转义与「换行被吃掉」这类难查问题。
+      public-key: ${SCDS_JWT_PUBLIC_KEY:}
+      public-key-file: ${SCDS_JWT_PUBLIC_KEY_FILE:}
+      # 签名私钥：仅 signing-enabled=true 时需要。**绝不内置默认私钥**——那等于所有客户共用一把钥匙。
+      private-key: ${SCDS_JWT_PRIVATE_KEY:}
+      private-key-file: ${SCDS_JWT_PRIVATE_KEY_FILE:}
+      # 云管 JWKS 端点。留空 = 永不联网，只用本地公钥（PRIVATE 单机的常态）。
+      jwks-uri: ${SCDS_JWKS_URI:}
+      jwks-refresh-ms: 3600000
+      # 有效期三档：access 覆盖一次指挥台作业，refresh 覆盖一次集训周期，
+      # device 覆盖单日演习（设备令牌不该跨天存活，丢了重登即可）。
+      access-token-ttl: 30m
+      refresh-token-ttl: 14d
+      device-token-ttl: 12h
+
   # ===== 协议 A：马甲串口链路 =====
   serial:
     port-name: COM7
