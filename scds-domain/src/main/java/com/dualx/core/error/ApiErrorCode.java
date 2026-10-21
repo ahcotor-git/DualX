@@ -63,6 +63,14 @@ public enum ApiErrorCode {
     MAP_IMAGE_MISSING,
     MAP_UWB_META_INCOMPLETE,
     MAP_CALIBRATION_IN_PROGRESS,
+    /**
+     * 底图被引用，拒绝删除（HTTP 409）。
+     *
+     * <p>与 {@link #MAP_NOT_FOUND} 成对：删除要比「存在性」多判一层「有没有人在用」。
+     * 契约把 409 写成通用 {@code Conflict}，前端无法据此区分「被想定引用」与其它冲突，
+     * 故单独成码——地图被引用是运营动作（先解绑想定），不是参数错误。</p>
+     */
+    MAP_IN_USE,
 
     // ===== REPLAY_* 复盘 =====
     REPLAY_NOT_FOUND,
