@@ -24,7 +24,7 @@
 | 免鉴权白名单 | `SecurityConfig` 已实现；完整过滤链遍历回归尚缺 |
 | 6 个 `/api/v1/auth/*` 端点 | 全部 `throw new NotImplementedException(...)` → 501 |
 | 账号核心服务 | `AuthService` 的 login/refresh/logout/me 已实现并通过 17 项真实 MySQL IT，尚未接控制器 |
-| 业务端点 | 已要求账号用途令牌；实际业务写权限尚未铺设，控制器仍是占位 |
+| 业务端点 | 已要求账号用途令牌；服务端写权限矩阵已按域落地（§4.5.1），控制器仍是占位 |
 | 两个 WebSocket 通道 | 已要求账号用途令牌；只支持 PING/PONG，真实握手与推送回归尚缺，Origin 仍全放开 |
 | 设备单端在线 | V9 两列与会话仓储已实现；设备登录服务、SID 验证器及主动失效尚缺 |
 | 启动 | 两种签发开关均已真实启动；本地公钥路径正常。物理断网专项未执行 |
@@ -226,6 +226,8 @@ authenticated：
 - 必须覆盖 `/actuator/metrics/**`，当前仅匹配精确根路径，已实测 VIEWER 能读取子路径，见审查 R01。
 - **OPTIONS 预检一律放行**：Flutter 桌面/安卓不发 `Origin`，CORS 实际不生效；但一旦将来接 Web 控制台，预检被拦会导致"连登录都发不出去"这种极难排查的现象。
 - **白名单是"只增不改"清单**：任何新增 `permitAll` 必须回到本文档登记一行。理由——鉴权漏洞几乎从不是"写错了判断"，而是"某次调试顺手放行了一个端点，然后再也没人删"。
+- **服务端授权规则同属"只增不改"**：`SecurityConfig` 里每条按域声明的角色规则都必须在 §4.5.1 的矩阵里出现，
+  并与 `RolePermissions` 同源。漏写一组**不会报错**，只会静默退化成"任意账号都能写"，这类缺口没有测试之外的发现途径。
 - D02拟议能力关闭时精确404出口、账号与设备独立白名单见03b第5节；
   本轮未修改SecurityConfig，不能将该目标矩阵当成运行结果。
 
@@ -241,12 +243,34 @@ authenticated：
 | 角色 | 权限点 |
 |---|---|
 | `ADMIN` | 全部 |
-| `DIRECTOR` | `exercise:*`、`command:*`、`situation:read`、`replay:*`、`map:read`、`device:read` |
+| `DIRECTOR` | `exercise:*`、`command:*`、`situation:read`、`replay:*`、`map:*`、`device:read` |
 | `OPERATOR` | `command:*`、`situation:read`、`device:link:*`、`map:read` |
 | `VIEWER` | `situation:read`、`replay:read`、`map:read`、`device:read` |
 
+- `DIRECTOR` 是 `map:*` 而不是 `map:read`（D04 裁定：想定/编成/地图的**写**权限归 DIRECTOR），
+  但不含 `device:link:*`——**能指挥，不能开关硬件链路**。这条边界在 §4.5.1 的服务端规则里同样成立。
 - **`permissions` 不进 JWT**，只由 `/api/v1/auth/me` 返回。理由：令牌体积，以及权限点会随版本变化——把它冻在 30 分钟的令牌里，改权限就得等令牌过期；而角色正好相反（变化极少，且变了本来就该重登）。
-- 服务端方法级校验：`@EnableMethodSecurity` + `@PreAuthorize("hasRole('DIRECTOR')")`，**先只加在必要的写接口上**（开演/停演、指挥下发、链路开关、账号管理），不在阶段 4 一次性铺满 70+ 端点——铺满了会掩盖"哪条规则真的在起作用"。
+
+#### 4.5.1 服务端写权限矩阵（已落地，D04）
+
+**读一律 `VIEWER` 及以上**：四个角色都持 `AUD_scds-edge`，所以所有 GET 继续由末条 `anyRequest()` 放行。
+下表只约束**非 GET**（`SecurityConfig` 已按此声明）：
+
+| 域 | 端点 | 允许角色 |
+|---|---|---|
+| 台账 / 基站（含绑定密钥与 SID 主动失效） | `POST /api/v1/devices/vests`、`PUT·DELETE /api/v1/devices/vests/*`、`PUT /api/v1/devices/anchors/*` | `ADMIN` |
+| 想定 / 编成 / 演习生命周期 / 地图 / 复盘导出 | `POST·PUT·DELETE /api/v1/plans*`、`POST·DELETE /api/v1/exercise/current`、`POST·PUT·DELETE /api/v1/maps*`、`POST /api/v1/replays/*/exports` | `ADMIN`、`DIRECTOR` |
+| 指令 | `POST·PUT /api/v1/command/**` | `ADMIN`、`DIRECTOR`、`OPERATOR` |
+| 链路操作（串口 / UWB 开关） | `POST·DELETE /api/v1/devices/links/**` | `ADMIN`、`OPERATOR` |
+
+- **规则必须声明在 `anyRequest()` 兜底之前**：Spring 的请求匹配器**按声明顺序短路**，写在兜底之后永远不生效。
+- 真正的缺口不是"写错判断"，而是**新增写接口时忘了补一组规则**——那不会报错，只会退化成任意账号可写。
+  新增写接口时必须同时补规则并回到本表登记一行。
+- 回归：`RoleWritePermissionIT`（32 条写路由 × 4 角色 + 23 条读路径 × 4 角色 + 5 条授权层形状，共 60 项）。
+  口径是「**非 401/403 即放行**」——骨架期控制器抛 `NotImplementedException`，所以不能断言具体状态码，
+  这样同一套用例在骨架期与实现期都能跑。
+- 方法级 `@PreAuthorize` 暂不铺开（见 §6 Q8）：按域在 filter chain 里集中声明更易审计，
+  也避免"哪条规则真的在起作用"被 70+ 端点淹没。
 
 ### 4.6 401 / 403 必须长成 `ApiProblem`
 
@@ -343,9 +367,23 @@ ALTER TABLE t_vest
 
 | 维度 | 阈值 | 锁定时长 |
 |---|---|---|
-| 账号（`username`） | 5 次失败 / 5 分钟 | 5 分钟 |
+| 账号（**库内身份 `account.id`**） | 5 次失败 / 5 分钟 | 5 分钟 |
 | 客户端 IP | 30 次失败 / 5 分钟 | 5 分钟 |
 
+- **限流键取库内身份，不取请求原文**（D01 身份归一化，已落地）：`t_account.username` 的排序规则是
+  `utf8mb4_0900_ai_ci`（不区分大小写、不区分重音），`Admin` 与 `admin` 在库里就是同一行。按原文记失败会让
+  拼写变体各记一份，单账号 5 次的上限被翻倍。故 `AuthService.login` 在限流判定**之前**先按用户名查一次账号，
+  用 `account.id()` 作键。代价是锁定期内仍会查一次库；换来的是「上限对的是账号，不是字符串」。
+  这次查询只用于定位限流键，不作鉴权依据——事务内持行锁后按 id 重读，禁用状态与口令一律以锁内为准。
+- **未登记的用户名共用一个键**（`account:unknown`）：既不为每个乱填的用户名建桶（失败桶容量因此有界，
+  见审查 R27），也让「未命中账号」与「口令错误」同为 5 次锁定——否则「试不存在的用户名不会被锁」
+  会把用户名是否存在从 429/401 的差异里泄漏出去。
+- **计数与判锁在同一把实例锁内，并发下不丢更新**（D01 并发预算，已回归）：
+  `LoginThrottleTest.concurrentFailuresAtTheThresholdStillLockTheAccount`（5 线程掐同一空转起跑线 × 50 轮，
+  丢一次更新就会停在 4 次而漏锁）与 `concurrentFailuresAcrossUsernamesStillExhaustTheClientIpBudget`
+  （30 次 IP 预算，每个用户名只失败 1 次）。
+- 桶的回收挂在**失败路径**上：只有失败会新增键，于是清理频率天然被限流封顶
+  （单个 IP 每 5 分钟至多记 30 次失败，锁定期内更是一次都不记）。
 - 只对**失败**计数，成功即清零（仅在未锁定状态下）。
 - **锁定期内在校验口令之前直接拒绝**（返回 429）——锁定期不因"这次口令正好对了"而放行，否则攻击者靠撞对一次即可解锁。
 - IP 取值：默认使用 `remoteAddr`；只有明确配置可信代理、代理覆盖外来转发头且完成信任链验证后
@@ -358,6 +396,23 @@ ALTER TABLE t_vest
 - core 用 `spring-security-crypto` 的 `BCryptPasswordEncoder`，不引 Web 安全过滤链。
 - `t_account.password_hash` 与 `t_vest.bind_secret_hash` 都用它（V1/V6 已如此注明）。
 - cost 取默认 10：设备登录在现场可能**集中发生**（一次演习开始，几十台终端同时登录），cost 太高会在登录端点排队，反而影响开演。
+
+### 4.12 配置校验：漏配给默认，配错就失败关闭
+
+`AuthJwtProperties` 的紧凑构造器是 `scds.auth.jwt.*` 的唯一入口，规则分两类：
+
+- **漏配（`null`）补明确默认值**，不让整个上下文因一项漏配而起不来：`issuer` 取 `scds-edge`、
+  access 30m、refresh 14d、device 12h、`signing-enabled` 取 `true`。
+- **配了但配错直接拒绝**（`IllegalArgumentException`，**报错只带属性名、不回显配置值**）：
+  - `jwks-uri` 非空：本地部署只认 PEM，远端 JWKS 一律拒绝，避免鉴权意外依赖外网。
+  - 三类 TTL 为 0 或负数：静默回落会表现为"登录后令牌立刻过期"这类**极难定位**的故障（审查 R27）。
+  - `refresh-token-ttl` 未**严格**长于 `access-token-ttl`：滚动换发依赖"access 先过期、refresh 还有效"
+    这个窗口；两者相等则前端没有任何换发窗口。
+- 历史兼容键 `jwks-refresh-ms` 无消费者，配了非正值仍回落默认、不拒绝——它不影响任何行为，
+  为它拒绝启动反而会把无害的残留配置变成故障。
+- **失败发生在装配期而不是第一次登录**：`ApplicationContextRunner` 回归见 `AuthJwtPropertiesTest`。
+  这和 §4.3 的密钥缺失同属一条原则——**配置错误必须在启动期响亮失败**，宁可起不来，
+  也不要带着一个"能启动但每次登录都立刻过期"的实例上现场。
 
 ---
 
@@ -406,7 +461,7 @@ ALTER TABLE t_vest
 | **Q5** | 初始管理员账号从哪来 | **已确认并实现**：部署配置 `.env` 明文 `SCDS_ADMIN_USERNAME/PASSWORD`，应用首次启动 BCrypt cost 10 建号；V9 不种账号，已有账号不覆盖。当前本机 .env 尚无管理员项 |
 | **Q6** | 权限点集合是否要整理成完整清单（§4.5 只给了通配级别） | 建议单独出一份 `docs/design/03a-permissions.md` 或在契约里补 `permissions` 枚举；**本设计不阻塞于它**（`permissions` 只影响前端显隐） |
 | **Q7** | WS 是否允许设备令牌连接 | **不允许**（403）。理由见 §4.7：会与设计 02 的均匀广播冲突。若单兵终端确有实时态需求，正解是给它一条按会话裁剪的独立通道，而不是放开现状势 WS |
-| **Q8** | `@PreAuthorize` 是否全面铺开 | **先只加在必要的写接口上**（开演/停演、指挥、链路开关、账号管理）。铺满 70+ 端点会掩盖"哪条规则真的在起作用"，且阶段 4 会频繁改接口 |
+| **Q8** | `@PreAuthorize` 是否全面铺开 | **不铺开**。已改为按域在 `SecurityConfig` 集中声明角色规则（§4.5.1，4 组已落地），filter chain 里一眼能看完；方法级 `@PreAuthorize` 只在日后出现"同一 URL 不同方法分级、无法用域表达"时按需补 |
 | **Q9** | `TraceIdFilter` 与 Spring Security 顺序 | **已实现并实测**最高优先级；异步事件 traceId 传播仍属后续需求 |
 | **Q10** | `sid` 校验缓存 TTL 30s | 采纳；但需确认"登出后立即失效"对现场是否足够（缓存键主动失效已覆盖同进程登出，跨进程/断电重启无缓存） |
 | **Q11** | 按 hash 刷新还是 api 先解析 JWT | **已确认甲并实现**：按 token_hash 查库 |

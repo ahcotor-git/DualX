@@ -90,11 +90,13 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 |---|---|
 | 全量计划与决策文档整理 | 本轮已授权，文档已形成，待审阅 |
 | SEC-01、SEC-02、ERR-01 | 分段获批并完成；485项全量通过，证据见testing第7-9节 |
-| D01 | 仅JWT必需字段、类型与过期分类已批准实施；身份归一化和限流预算仍待确认 |
+| D01 | JWT必需字段、类型与过期分类已批准实施；**2026-10-21 身份归一化与限流并发预算已裁定并落地**，见下“D01 / D04 执行边界” |
 | D14 / TEST-01 | 2026-10-21用户选择同容器独立库推荐方案，批准分段实施；其他决策不因此获批 |
 | D02 | 2026-10-21用户明确“确定”：云端账号签发/边缘验签，边缘设备本地签发且支持断外网登录；仅先形成拆分方案，尚未批准具体实现 |
 | D03 | 2026-10-21用户逐项裁定7项（见下“D03 执行边界”）；**校验侧（DEVICE-AUTH）已授权并完成实现**，写入侧（绑定接口）本阶段不做 |
-| D04-D13、D15 | 待确认 |
+| D04 | 2026-10-21 逐项裁定（见下“D01 / D04 执行边界”）：服务端写权限矩阵**已落地**；单兵端可见范围拆为独立工作包 DEVICE-SELF，本阶段不做 |
+| R27 配置校验 | 2026-10-21 裁定：显式非正值的 TTL、以及 refresh 未严格长于 access，**启动期直接失败**；未配仍回落默认。**已落地** |
+| D05-D13、D15 | 待确认 |
 | 业务批量实施 | 未授权 |
 | 创建隔离数据库 | 已批准在scds-local-mysql创建scds_next_test及scds_test；不创建新容器，不改开发.env |
 | 安装 VS | 未授权 |
@@ -164,4 +166,35 @@ AuthServiceIT真实提交不伪装为自动回滚。完整app启动验收另分�
 仍未做：`device/me` 留占位501；绑定/换绑/解绑接口未实现；`signing-enabled=false` 的只验签实例上
 `device/login` 仍注册且会因 `requireSigning()` 抛 `IllegalStateException`（500），
 是否改为条件注册（对齐账号端点返回404）属独立决策，本段不改。
+
+### D01 / D04 执行边界（2026-10-21，AUTH-HARDEN）
+
+用户逐项裁定：
+
+| 项 | 裁定 |
+|---|---|
+| D04 写权限矩阵 | **台账/基站（含绑定密钥与 SID 主动失效）= `ADMIN`；想定/编成/演习生命周期/地图/复盘导出 = `DIRECTOR` 及以上；指令 = `OPERATOR` 及以上；链路开关 = `OPERATOR` 及以上**。读一律 `VIEWER` 及以上 |
+| D04 单兵端可见范围 | 用户原选“己方全队（含坐标）”，但 `requirements.md` 写明“当前契约只有单马甲查询入口……不得自行扩大可见范围”。**本轮拆为独立工作包 DEVICE-SELF**，只做账号角色写权限矩阵 |
+| D01 身份归一化 | **先查库取 `account.id` 当限流键**（`AuthService.login` 在校验口令前按输入用户名查一次账号，仅用于定键；事务内持行锁后按 id 重读）。未命中账号用独立命名空间的共享键 `account:unknown`。代价：锁定期内仍会查一次库 |
+| D01 并发预算 | 维持单机阈值（账号 5 次/5 分钟、IP 30 次/5 分钟），补并发预算断言 |
+| R27 TTL 校验 | 显式配成 0 或负值 → **启动失败**；`refresh-token-ttl` 必须严格长于 `access-token-ttl`；未配置（`null`）仍回落默认 |
+
+落地白名单与分段（每段 ≤3 文件）：
+1. `SecurityConfig`、`RolePermissions`、`RolePermissionsTest` —— 服务端写权限矩阵；`RolePermissions` 的
+   `DIRECTOR` 由 `map:read` 校正为 `map:*`（与裁定同源，否则 `/auth/me` 会隐藏 DIRECTOR 本可编辑的地图）。
+2. `RoleWritePermissionIT` —— 越权回归 60 项。
+3. `AuthService`、`LoginThrottle`、`AuthServiceIT` —— D01 身份归一化。
+4. `LoginThrottleTest` —— D01 并发预算断言（+2）。
+5. `AuthJwtProperties`、`AuthJwtPropertiesTest` —— R27 配置校验（+3）。
+6. `docs/design/03-auth.md`、本记录 —— 登记。
+
+同时修正的两处不一致：
+- `RolePermissions` 的 `DIRECTOR` 由 `map:read` 改为 `map:*`：D04 裁定地图**写**权限归 DIRECTOR，
+  原权限点会让指挥台隐藏 DIRECTOR 本可编辑的地图按钮。
+- `LoginThrottle` 的账号口径 subject 语义由“用户名”改为“库内身份”：`t_account.username` 是
+  `utf8mb4_0900_ai_ci`，`Admin` 与 `admin` 在库里是同一行，按原文记失败会让拼写变体把 5 次上限翻倍。
+
+仍未做：单兵端服务端可见范围（DEVICE-SELF，需新增队伍级契约与字段裁剪）；
+`device/me` 仍 501；绑定/换绑接口未实现；只验签实例上 `device/login` 的 500 属独立决策。
+自动测试全绿不等于允许生产发布。
 
