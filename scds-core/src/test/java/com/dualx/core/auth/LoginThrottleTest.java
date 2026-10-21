@@ -8,6 +8,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -188,6 +193,75 @@ class LoginThrottleTest {
         for (int i = 0; i < 4; i++) {
             throttle.recordDeviceFailure(7, IP);
             assertThat(throttle.deviceLockout(7, IP)).isEmpty();
+        }
+    }
+
+    @Test
+    void concurrentFailuresAtTheThresholdStillLockTheAccount() throws Exception {
+        // 并发预算：看点不是「锁得住」，而是「一次更新都没丢」。5 个线程掐着同一个起跑线
+        // 各记一次失败，若桶的读取-累加-判锁不是原子的，计数会停在 4，账号就漏锁了——
+        // 这正是多终端同时打错口令时最危险的失效方式。单轮几乎必然通过，故重复多轮。
+        for (int round = 0; round < 50; round++) {
+            var throttle = new LoginThrottle(new MutableClock());
+            var start = new CountDownLatch(1);
+            try (var executor = Executors.newFixedThreadPool(LoginThrottle.ACCOUNT_MAX_FAILURES)) {
+                var attempts = new ArrayList<Future<?>>();
+                for (int i = 0; i < LoginThrottle.ACCOUNT_MAX_FAILURES; i++) {
+                    attempts.add(executor.submit(() -> {
+                        await(start);
+                        throttle.recordFailure("racer", IP);
+                        return null;
+                    }));
+                }
+                start.countDown();
+                for (Future<?> attempt : attempts) {
+                    attempt.get(15, TimeUnit.SECONDS);
+                }
+            }
+            assertThat(throttle.lockout("racer", IP))
+                    .as("第 %d 轮：%d 次并发失败已到阈值，账号必须被锁", round, LoginThrottle.ACCOUNT_MAX_FAILURES)
+                    .isPresent()
+                    .get()
+                    .extracting(LoginThrottle.Lockout::scope)
+                    .isEqualTo(Scope.ACCOUNT);
+        }
+    }
+
+    @Test
+    void concurrentFailuresAcrossUsernamesStillExhaustTheClientIpBudget() throws Exception {
+        // IP 维度是 30 次的大预算，并发下同样不能少计：每个用户名只失败 1 次（远低于账号阈值），
+        // 锁只可能来自 IP 口径——否则说明有更新丢失，攻击者靠并发就能把 IP 预算刷穿。
+        var throttle = new LoginThrottle(new MutableClock());
+        var start = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(10)) {
+            var attempts = new ArrayList<Future<?>>();
+            for (int i = 0; i < LoginThrottle.CLIENT_IP_MAX_FAILURES; i++) {
+                String username = "victim" + i;
+                attempts.add(executor.submit(() -> {
+                    await(start);
+                    throttle.recordFailure(username, IP);
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (Future<?> attempt : attempts) {
+                attempt.get(15, TimeUnit.SECONDS);
+            }
+        }
+
+        assertThat(throttle.lockout("someone-else", IP)).isPresent()
+                .get()
+                .extracting(LoginThrottle.Lockout::scope)
+                .isEqualTo(Scope.CLIENT_IP);
+        assertThat(throttle.lockout("someone-else", "10.0.0.12")).isEmpty();
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("等待并发起跑线时被中断", interrupted);
         }
     }
 

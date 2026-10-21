@@ -14,6 +14,9 @@ import java.time.Duration;
  * <p>所有字段用包装类型 + 紧凑构造器补默认值，而不是靠 yml 里写全：漏配一项时应当
  * 得到一个明确默认值，而不是让整个上下文因绑定失败而起不来。</p>
  *
+ * <p>但「显式配成 0 或负数」是另一回事：那是配置错误，必须在校验期直接拒绝。
+ * 静默回落到默认值会让现场表现为「登录后令牌立刻过期」这类极难定位的故障（review R27）。</p>
+ *
  * @param issuer          {@code iss} claim；生产每客户显式配置
  * @param signingEnabled  本地三种用途的签发能力；false保留测试/工具用途
  * @param publicKey       验签公钥 PEM 内联文本（与 {@code publicKeyFile} 二选一）
@@ -63,6 +66,25 @@ public record AuthJwtProperties(
         }
         if (deviceTokenTtl == null) {
             deviceTokenTtl = Duration.ofHours(12);
+        }
+        requirePositive(accessTokenTtl, "access-token-ttl");
+        requirePositive(refreshTokenTtl, "refresh-token-ttl");
+        requirePositive(deviceTokenTtl, "device-token-ttl");
+        // refresh 必须严格长于 access：滚动换发依赖「access 先过期、refresh 还有效」这个窗口，
+        // 两者相等或倒挂时前端要么没有换发窗口，要么拿得到一个比它自己的续命凭证还短命的 access。
+        if (refreshTokenTtl.compareTo(accessTokenTtl) <= 0) {
+            throw new IllegalArgumentException(
+                    "scds.auth.jwt.refresh-token-ttl must outlast access-token-ttl.");
+        }
+    }
+
+    /**
+     * 显式配置的值必须为正。只对「配了但配错」报错；{@code null}（漏配）已在上方补默认值，
+     * 走不到这里。报错只带属性名，不回显配置值。
+     */
+    private static void requirePositive(Duration ttl, String key) {
+        if (ttl.isZero() || ttl.isNegative()) {
+            throw new IllegalArgumentException("scds.auth.jwt." + key + " must be positive.");
         }
     }
 }

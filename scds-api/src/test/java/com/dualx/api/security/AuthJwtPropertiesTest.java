@@ -59,18 +59,66 @@ class AuthJwtPropertiesTest {
                 .withPropertyValues("scds.auth.jwt.jwks-uri=https://must-not-contact.invalid/jwks")
                 .run(context -> {
                     assertThat(context).hasFailed();
-                    Throwable failure = context.getStartupFailure();
-                    while (failure.getCause() != null) {
-                        failure = failure.getCause();
-                    }
-                    assertThat(failure).isInstanceOf(IllegalArgumentException.class)
+                    assertThat(rootCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalArgumentException.class)
                             .hasMessage("Local deployment requires PEM keys; remote JWKS is not supported.");
+                });
+    }
+
+    @Test
+    void explicitNonPositiveTtlFailsInsteadOfFallingBackToDefaults() {
+        assertThatThrownBy(() -> ttls(Duration.ZERO, Duration.ofDays(14), Duration.ofHours(12)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("access-token-ttl");
+        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofSeconds(-1), Duration.ofHours(12)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("refresh-token-ttl");
+        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofDays(14), Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("device-token-ttl");
+    }
+
+    @Test
+    void refreshTtlMustOutlastAccessTtl() {
+        // access 与 refresh 相等也不行：滚动换发靠的是「access 先过期、refresh 还有效」的窗口。
+        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofMinutes(30), Duration.ofHours(12)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("refresh-token-ttl")
+                .hasMessageContaining("outlast");
+        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofMinutes(10), Duration.ofHours(12)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("refresh-token-ttl");
+    }
+
+    @Test
+    void ttlMisconfigurationFailsDuringBindingNotAtFirstLogin() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(PropertiesOnly.class)
+                .withPropertyValues("scds.auth.jwt.device-token-ttl=0s")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(rootCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("device-token-ttl");
                 });
     }
 
     private static AuthJwtProperties properties(String jwksUri) {
         return new AuthJwtProperties("scds-local-test", null,
                 "", "", "", "", jwksUri, null, null, null, null);
+    }
+
+    private static AuthJwtProperties ttls(Duration access, Duration refresh, Duration device) {
+        return new AuthJwtProperties("scds-local-test", null,
+                "", "", "", "", "", null, access, refresh, device);
+    }
+
+    private static Throwable rootCause(Throwable failure) {
+        Throwable current = failure;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     @Configuration(proxyBeanMethods = false)
