@@ -78,6 +78,19 @@ public class PlanRepository {
                 .single();
     }
 
+    /**
+     * 是否有想定引用该底图（契约 {@code deleteMap} 的 409 判据）。
+     *
+     * <p>刻意不返回「引用者列表」：删除方只需要知道「能不能删」，而列出来会让调用方
+     * 倾向于把引用者名字拼进报错文案——想定名可变，报错文案一变前端断言就失效。</p>
+     */
+    public boolean existsByMapId(UUID mapId) {
+        return jdbc.sql("SELECT EXISTS(SELECT 1 FROM t_plan WHERE map_id = :mapId)")
+                .param("mapId", mapId.toString())
+                .query(Boolean.class)
+                .single();
+    }
+
     /** @return 影响行数，正常为 1 */
     public int insert(Plan plan) {
         return jdbc.sql("""
