@@ -25,7 +25,12 @@ TokenPair:
   properties:
     accessToken:
       type: string
-      description: JWT。载荷含 sub/roles/tenantId；边缘网关用云管公钥离线验签
+      description: |
+        JWT。载荷含 sub / aud / roles（仅账号令牌）。**刻意不含 tenantId**：
+        本产品是「每客户独立实例」，一台边缘机只服务一个客户，没有多租户维度，
+        凭据里塞一个恒定的租户字段只会误导前端去实现并不存在的隔离逻辑。
+        aud 用来区分令牌用途（scds-edge / scds-refresh / scds-device），不是租户。
+        PRIVATE 形态由边缘实例自签自验；CLOUD 形态由云管签发、边缘用本地公钥离线验签。
     refreshToken:
       type: [string, 'null']
     expiresIn:
