@@ -27,19 +27,6 @@ public class ApiProblemAuthenticationEntryPoint implements AuthenticationEntryPo
 
     private static final Logger log = LoggerFactory.getLogger(ApiProblemAuthenticationEntryPoint.class);
 
-    /**
-     * Spring Security 6.5 里**没有** {@code JwtExpiredException} 这个类型：过期由
-     * {@code JwtTimestampValidator} 报成一个
-     * {@code OAuth2Error(code="invalid_token", description="Jwt expired at <时刻>")}，
-     * 与「签名错」「aud 不认」共用同一个 error code，只有 description 不同。
-     * 因此这里只能按 description 前缀判别——这是本类唯一的脆弱点。
-     *
-     * <p>兜底办法：{@code ApiProblemSecurityEntryPointTest} 用真实过期令牌跑通这条分支，
-     * 升级 Spring Security 后若文案变化，测试会红，而不是静默退化成「一律 AUTH_TOKEN_INVALID」。
-     * 若哪天该文案真的改了，改这一个常量即可。</p>
-     */
-    static final String EXPIRED_DESCRIPTION_PREFIX = "Jwt expired";
-
     private final ObjectMapper objectMapper;
 
     public ApiProblemAuthenticationEntryPoint(ObjectMapper objectMapper) {
@@ -60,16 +47,21 @@ public class ApiProblemAuthenticationEntryPoint implements AuthenticationEntryPo
     }
 
     private static boolean isExpired(AuthenticationException authException) {
+        boolean expired = false;
         for (Throwable cause = authException; cause != null; cause = cause.getCause()) {
             if (cause instanceof JwtValidationException validationException) {
+                if (validationException.getErrors().isEmpty()) {
+                    return false;
+                }
                 for (OAuth2Error error : validationException.getErrors()) {
-                    String description = error.getDescription();
-                    if (description != null && description.startsWith(EXPIRED_DESCRIPTION_PREFIX)) {
-                        return true;
+                    // decoder只为单纯过期输出此码；混合/未知错误一律按INVALID处理。
+                    if (!ApiErrorCode.AUTH_TOKEN_EXPIRED.name().equals(error.getErrorCode())) {
+                        return false;
                     }
+                    expired = true;
                 }
             }
         }
-        return false;
+        return expired;
     }
 }

@@ -10,9 +10,8 @@ package com.dualx.core.error;
  * （口令错、令牌过期、限流……），而 core 不能反向依赖 api。枚举下沉后，core 抛
  * {@link BusinessException}、api 只负责码到 HTTP 状态的一层映射，取值只有这一份定义。</p>
  *
- * <p>末尾四个（{@link #VALIDATION_FAILED} / {@link #RATE_LIMITED} / {@link #INTERNAL_ERROR}
- * / {@link #NOT_IMPLEMENTED}）不在 {@code *_} 业务前缀内，属框架级兜底：
- * 校验失败、限流、未预期异常、骨架期占位接口。</p>
+ * <p>末尾框架级错误码不在业务前缀内，表示校验、MVC 请求失败、限流、
+ * 未预期异常与骨架期占位接口。</p>
  */
 public enum ApiErrorCode {
 
@@ -66,6 +65,16 @@ public enum ApiErrorCode {
     // ===== 框架级兜底 =====
     /** 字段级校验失败，详情见 {@code Problem.errors}。 */
     VALIDATION_FAILED,
+    /** MVC 路由或静态资源不存在（HTTP 404），不代替业务资源错误码。 */
+    ROUTE_NOT_FOUND,
+    /** 请求方法不支持（HTTP 405），响应头保留 Allow。 */
+    METHOD_NOT_ALLOWED,
+    /** 无法提供 Accept 要求的响应类型（HTTP 406）。 */
+    NOT_ACCEPTABLE,
+    /** 上传超过服务器限制（HTTP 413）。 */
+    PAYLOAD_TOO_LARGE,
+    /** 请求 Content-Type 不支持（HTTP 415）。 */
+    UNSUPPORTED_MEDIA_TYPE,
     /** 触发限流（HTTP 429），响应头带 {@code Retry-After}。 */
     RATE_LIMITED,
     /** 未预期异常的统一出口。 */

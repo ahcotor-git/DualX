@@ -7,7 +7,8 @@
 
 # ---------------------------------------------------------------------------
 # 错误模型：RFC 7807 (application/problem+json)，在标准字段上扩展 code / traceId / errors
-# （scds-app 已开启 spring.mvc.problemdetails.enabled=true）
+# 开启 Boot ProblemDetails 并不自动满足扩展字段；必须验证自定义异常出口及 advice 顺序。
+# 2026-10-21 ERR-01 已修复 DTO 默认响应缺 code/traceId，Boot advice 共存回归见 ../../testing.md 第9节。
 # ---------------------------------------------------------------------------
 Problem:
   type: object
@@ -36,7 +37,14 @@ Problem:
         - `REPLAY_*`   复盘（REPLAY_NOT_FOUND / REPLAY_EXPORT_FAILED）
         - `SITUATION_*` 态势（SITUATION_REVISION_TOO_OLD）
         - `VALIDATION_FAILED` 字段级校验失败（详情见 errors）
+        - `ROUTE_NOT_FOUND` MVC 路由或静态资源不存在（HTTP 404，不代替业务资源错误码）
+        - `METHOD_NOT_ALLOWED` 请求方法不支持（HTTP 405，保留 Allow 响应头）
+        - `NOT_ACCEPTABLE` 无法提供 Accept 要求的响应类型（HTTP 406）
+        - `PAYLOAD_TOO_LARGE` 上传超过服务器限制（HTTP 413）
+        - `UNSUPPORTED_MEDIA_TYPE` 请求 Content-Type 不支持（HTTP 415）
         - `RATE_LIMITED` 触发限流（HTTP 429，响应头带 Retry-After）
+        - `INTERNAL_ERROR` 未预期异常（HTTP 500）
+        - `NOT_IMPLEMENTED` 骨架期接口尚未实现（HTTP 501）
       example: EXERCISE_ALREADY_RUNNING
     detail:
       type: string
@@ -103,16 +111,16 @@ TooManyRequests:
     当前仅登录相关端点启用：账号 5 次失败 / 5 分钟（锁 5 分钟），
     IP 30 次失败 / 5 分钟。**只对失败计数，成功即清零**；锁定期内在校验口令
     之前直接拒绝，避免用被锁账号继续消耗 BCrypt 算力。
+  headers:
+    Retry-After:
+      description: 建议的重试等待秒数
+      schema:
+        type: integer
+        format: int32
   content:
     application/problem+json:
       schema:
         $ref: '#/Problem'
-    headers:
-      Retry-After:
-        description: 建议的重试等待秒数
-        schema:
-          type: integer
-          format: int32
 InternalError:
   description: 服务端内部错误
   content:

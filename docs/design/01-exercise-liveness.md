@@ -1,7 +1,10 @@
 # 设计 01 —— 演习存活自愈（僵尸演习）
 
-> 状态：**待评审**　|　前置依赖：无　|　涉及 DDL：V8
+> 状态：**核心原则已确认，尚未实现** | 核查日期：2026-10-21 | 原预留 DDL：V8
 > 关联：本文档只解决「进程异常退出后 `t_exercise` 里的进行中场次永久阻塞新演习」这一个问题，不涉及协议与解算。
+> 当前库已应用 V9，而 V8 从未创建。禁止直接补低版本迁移或偷偷开启 out-of-order；
+> 建议在确认后使用下一递增版本 V10。版本方案尚待确认，本文的 V8 均指原设计预留号。
+> 总体需求、状态和审查入口见 [需求基线](../requirements.md)、[审查清单](../review.md)、[交接快照](../../snapshot.md)。
 
 ---
 
@@ -16,7 +19,7 @@ running_flag  TINYINT GENERATED ALWAYS AS (IF(ended_at IS NULL, 1, NULL)) STORED
 UNIQUE KEY uk_exercise_running (running_flag),
 ```
 
-这条设计本身是对的（见 [V4__exercise.sql](../api/../db/migration/V4__exercise.sql) 文件头注释：不能只靠应用层「先查再插」，中间有竞态窗口）。但它把「进行中」的判定**完全绑定在 `ended_at IS NULL` 上**，而 `ended_at` 只由正常停演路径写入。
+这条设计本身是对的（见 [V4__exercise.sql](../../scds-core/src/main/resources/db/migration/V4__exercise.sql) 文件头注释：不能只靠应用层「先查再插」，中间有竞态窗口）。但它把「进行中」的判定**完全绑定在 `ended_at IS NULL` 上**，而 `ended_at` 只由正常停演路径写入。
 
 于是：进程崩溃 / 断电 / 现场直接拔电源后，`ended_at` 永远为 NULL，库里留下一行永不结束的「进行中」演习。
 
@@ -115,7 +118,14 @@ UPDATE t_exercise
 
 ### 4.4 启动自愈
 
-**时机**：`ApplicationReadyEvent` 之后、开始接受外部调用之前完成。用 `ApplicationRunner` + `@Order` 保证先于任何 `startExercise` 路径执行；同时对 `startExercise` 的唯一索引冲突做兜底（本来就返回 409，不会静默）。
+**时机**：在 `ApplicationRunner` 中执行并完成，再进入 `ApplicationReadyEvent`。
+`@Order` 只决定 Runner 之间的顺序，不能阻止已经监听的 HTTP 端口收请求；
+因此生命周期服务必须有恢复完成门禁，恢复失败时不得开演，运维也不得将实例标记为可接业务。
+`startExercise` 的唯一索引冲突仍映射为 409。
+
+**部署前提**：同一客户库只能由一个业务进程持有。不能把“每客户独立实例”理解成允许两个进程
+同时连接同一库：第二个进程无条件启动收尾会误停第一进程正在运行的演习。
+生产进程管理与启动单实例保护见 [生产环境](../environments.md)；本设计不提供 HA 接管。
 
 **规则**（对 `SELECT ... WHERE ended_at IS NULL` 的唯一一行）：
 
@@ -134,9 +144,13 @@ UPDATE t_exercise
    - 从 `t_exercise_unit` / `t_hit_event` 聚合冻结 `roster_count` / `hit_count` / `dead_count`；
    - 计算每行 `t_exercise_unit.final_status`；
    - 写 `ended_at = now(UTC)`、`end_reason`。
-2. 把该场次残留的 `PENDING` / `SENT` 指令置为 `EXPIRED`，`fail_reason = 'INSTANCE_RESTART'`，`finished_at = now()`。
-   —— 注意是**标记而非删除**，遵守 V4 L113-L114 的约定。
-3. 向 `t_exercise_log` 追加一条系统日志：`log_type = 'START_BATTLE'`？**否**。现有 `ck_exercise_log_type` 只允许 `START_BATTLE/SHOT/DIE/LIVE/INJURE/RELOAD`，**没有容纳系统事件的类型**。这里需要决策，见 §5 待裁定 Q3。
+2. 把该场次残留的 `PENDING` / `SENT` 指令标记为 `EXPIRED`，
+   `fail_reason = 'INSTANCE_RESTART'`、`finished_at = now()`。
+3. **按已确认裁定**：将残留指令的 ID、类型、马甲、原状态、下行原文及原因写入
+   `t_exercise_log` 的 `SYSTEM` 审计记录，再按本场次范围删除残留指令。
+   收尾、存证与删除在同一事务内完成，日志写入失败必须回滚，不允许先删后记。
+   这不是保留队列表行；永久证据由演习日志承载。
+   当前 DDL 与 Java 日志枚举尚不支持 `SYSTEM`，必须先补齐非协议日志类型。
 4. 打一条 WARN 日志，带 `exerciseId`、`owner_instance`、`heartbeat_at`、`ended_at`，便于现场追溯中断时刻。
 
 ### 4.5 第二个入口（运行期心跳失效）
@@ -151,12 +165,12 @@ UPDATE t_exercise
 
 | 层 | 改动 |
 |---|---|
-| `scds-core` 迁移 | 新增 `V8__exercise_liveness.sql`（§4.2 的 DDL） |
-| `scds-core` 领域 | `EndReason` 枚举（`NORMAL` / `CRASH_RECOVERED`）→ 置于 `com.dualx.core.domain`（与 `EndReason` 同类的 `MotionState` 等已在该包） |
-| `scds-core` 仓储 | `ExerciseRepository`：新增 `findRunning()`、`updateHeartbeat(id, instanceId, at)`、`closeRunning(id, endedAt, reason, stats)`；`ExerciseCommandRepository`：`expirePending(exerciseId, reason, at)` |
+| `scds-core` 迁移 | 原拟 V8；当前应确认下一递增版本，包含 §4.2 DDL 与日志 CHECK 扩展 |
+| `scds-domain` 领域 | `EndReason`（`NORMAL` / `CRASH_RECOVERED`）与非协议演习日志类型，后者容纳 `SYSTEM`；不修改冻结的 `scds-protocol.LogType` |
+| `scds-core` 仓储 | `findRunning()` 已存在；新增心跳与按原因收尾；指令仓储新增按场次读取、存证及清理，不能复用无场次条件的全局删除 |
 | `scds-core` 服务 | `ExerciseLifecycleService`（承载 `startExercise` / `stopExercise` / `freezeAndClose` 的共用地基） |
 | `scds-core` 启动 | `ExerciseLivenessRecover`（`ApplicationRunner`，`@Order(10)`）+ `ExerciseHeartbeatTask`（`@Scheduled`） |
-| `scds-app` | 打开 `@EnableScheduling`；新增 `scds.instance-id`、`scds.exercise.liveness.grace-ms` 配置 |
+| `scds-app` | `@EnableScheduling` 已开启；实例标识与自愈配置、恢复门禁尚待实现 |
 | 契约 | 可选：`Exercise` schema 暴露 `endReason`（见 Q2） |
 
 ---
@@ -170,13 +184,10 @@ UPDATE t_exercise
 - **Q2｜`endReason` 是否进契约？**
   推荐：**进**，加到 `Exercise` 与停演响应。否则前端无法把「异常中断」这件事告诉操作员。
 
-- **Q3｜系统事件往哪写？**
-  现状：`t_exercise_log.log_type` 的 CHECK 只有 6 个业务类型，装不下「系统收尾」。
-  三个选项：
-  - (a) 扩展 CHECK 增加 `SYSTEM`（**推荐**）：一处小改，日志面板天然能显示。
-  - (b) 不写日志，只写 WARN 应用日志：库内无痕，现场排障只能翻应用日志。
-  - (c) 写 `t_audit_log`：语义是「人的动作」，系统自身的收尾塞进去会让审计表含义变浑。
-  若取 (a)，`LogType` 枚举（`scds-protocol`）是否也要加 `SYSTEM`？→ **不动协议**：`LogType` 是协议枚举，加值会影响协议层语义；改由契约层（`schemas/common.yaml#/LogType`）与领域层承载。此项需与契约负责人确认。
+- **Q3｜系统事件往哪写？已确认。**
+  扩展 `t_exercise_log` 的 CHECK 增加 `SYSTEM`，存证后删除残留指令。
+  不修改 `scds-protocol.LogType` 的冻结取值；增加领域侧日志类型并显式映射协议类型。
+  Java 领域日志、API DTO、契约与 JDBC 映射须同时对齐，具体拆分在实现前列明影响范围。
 
 - **Q4｜`graceMs` 取值**
   推荐 30000ms（> 心跳 ×10）。仅影响日志措辞，不影响动作。
@@ -188,5 +199,6 @@ UPDATE t_exercise
 1. 手工制造僵尸（`UPDATE t_exercise SET ended_at = NULL WHERE id = 'x'`，并保证 `owner_instance`/`heartbeat_at` 为 NULL）→ 重启应用 → 该行 `ended_at` 被填、`end_reason = 'CRASH_RECOVERED'`、统计三项已冻结，且**新演习能正常开始**。
 2. 正常开演 → 正常停演 → `end_reason = 'NORMAL'`，心跳列停止更新。
 3. 正常开演 → 运行中（心跳每 2s 递增）→ 断言心跳列在 10s 内至少变化 3 次。
-4. 开演后杀进程 → 重启 → 僵尸被收尾，且 `t_exercise_command` 中原 `PENDING`/`SENT` 行变为 `EXPIRED`（**不是被删除**）。
+4. 开演后杀进程 → 重启 → 僵尸被收尾；原 `PENDING`/`SENT` 的 `EXPIRED` 证据存在于 `SYSTEM` 日志，指令表残留被按场次删除；模拟日志写入失败时不得丢失原指令。
 5. 唯一索引仍生效：并发两次 `startExercise` 只允许一个成功。
+6. 恢复未完成时开演被门禁拒绝；对同一客户库的第二进程启动受到单实例保护，不得误停活跃场次。

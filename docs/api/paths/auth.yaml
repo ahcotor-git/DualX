@@ -1,7 +1,8 @@
 # ============================================================================
 # auth —— 账号与设备认证
-# 认证模型：云管签发 JWT（access + refresh），边缘网关用公钥**离线验签**，
-# 因此私有化离线部署也能独立运行；马甲 App 走独立的设备令牌。
+# 账号可由云侧签发 accessToken，或由具备签发能力的 PRIVATE 实例自签自验。
+# refreshToken 由维护本地刷新记录的实例签发；设备令牌挂钩本地绑定与 SID。
+# 离线验签要求本地公钥且 jwks-uri 为空；完整能力边界见 ../../design/03-auth.md。
 # ============================================================================
 
 authLogin:
@@ -38,7 +39,10 @@ authRefresh:
     tags: [auth]
     operationId: refreshToken
     summary: 刷新令牌
-    description: 用 refreshToken 换新的 accessToken（滚动刷新）。refreshToken 失效时返回 `AUTH_TOKEN_EXPIRED`。
+    description: |
+      用 refreshToken 换新的 access/refresh 令牌对（滚动刷新）。
+      到期返回 `AUTH_TOKEN_EXPIRED`；未知、篡改或已撤销返回 `AUTH_TOKEN_INVALID`。
+      已撤销令牌重放将撤销该账号全部 refreshToken。
     security: []
     requestBody:
       required: true
@@ -63,7 +67,9 @@ authLogout:
     tags: [auth]
     operationId: logout
     summary: 退出登录
-    description: 使当前 refreshToken 失效（accessToken 因无状态不可撤销，由短有效期兜底）。
+    description: |
+      无请求体；按账号令牌的 sub 撤销该账号全部 refreshToken（全端退出，已确认）。
+      accessToken 因无状态不可撤销，由短有效期兜底。
     responses:
       '204':
         description: 已退出

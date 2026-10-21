@@ -96,7 +96,7 @@ public class SecurityConfig {
         }
 
         // 指标会泄露内部结构与容量，不对外开放。
-        registry.requestMatchers(HttpMethod.GET, "/actuator/info", "/actuator/metrics")
+        registry.requestMatchers(HttpMethod.GET, "/actuator/info", "/actuator/metrics", "/actuator/metrics/**")
                 .hasRole("ADMIN");
 
         // 设备令牌只能访问设备自己的端点。

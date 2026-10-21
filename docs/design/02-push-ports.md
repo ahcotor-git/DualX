@@ -1,8 +1,10 @@
 # 设计 02 —— 服务端推送端口（态势 / 链路状态）
 
-> 状态：**待评审**　|　前置依赖：无（与 [01](01-exercise-liveness.md) 相互独立，仅在停机收尾处衔接）　|　涉及 DDL：无
+> 状态：**状态所有权原则已确认，推送实现尚未落地** | 核查日期：2026-10-21 | 涉及 DDL：无
 > 关联：解决评审遗留 **D2**（`SituationPublisher` 归属与 revision 语义），并补齐 Ports & Adapters 的**第三条边**。
 > 本文档只定义推送通道的实现结构，不改契约（`docs/api` 已定稿）；契约与实际不符之处单列在 §6。
+> 下文线程、补齐与恢复细节为候选设计，不等于已经实现或逐项获得用户确认。
+> 当前只有 PING/PONG 骨架；[审查清单](../review.md) 与 [测试矩阵](../testing.md) 登记未验证内容。
 
 ---
 
@@ -55,7 +57,7 @@ B 方案（`scds-domain`）已经画出两条边，都是"核心侧定义端口�
 
 | 事实 | 出处 |
 |---|---|
-| 端口目录现有 3 个类型：`DeviceLinkAdmin`（下行）、`HardwareEventSink`（上行）、`SerialPortInfo` | `scds-domain/.../core/port/` |
+| 硬件相关现有 3 个端口/载体；此外已有 `TokenSigner` 与 3 个令牌 claim 载体，总计 7 个源文件 | `scds-domain/.../core/port/` |
 | `LinkStatus`、`LinkKind`、`LinkState` 已在 `com.dualx.core.domain`（中立层） | `scds-domain/.../core/domain/` |
 | `DeviceController` **直接返回** `com.dualx.core.domain.LinkStatus` 与 `com.dualx.core.port.SerialPortInfo`，不套 api DTO | [DeviceController.java](../../scds-api/src/main/java/com/dualx/api/device/DeviceController.java#L103-L111) |
 | `SituationEnvelope` 是 HTTP Poll 响应体与 WS 帧体的**同一个** Java 类型 | [SituationEnvelope.java](../../scds-api/src/main/java/com/dualx/api/dto/situation/SituationEnvelope.java) |
@@ -181,7 +183,7 @@ public interface LinkStatusPushPort {
 | **递增粒度** | **一次"态势变化"+1**，不是"一个字段 +1" | 一次变化 = 同源事件批次处理完毕（例：一个串口帧解出的 1 个马甲状态更新）；同一批产生的所有 `changes` 带**同一个** revision，客户端按 revision 去重即可 |
 | **谁分配** | `SituationStateService` 内**单线程**事件循环 | 分配与快照写入同线程 → 不存在两个并发写者拿到同一 revision，不需要 CAS 重试循环 |
 | **`UnitState.revision`** | 该单元**最后一次**变化的全局 revision | 客户端用它做乐观并发与"这条是不是新的"判断 |
-| **窗口** | 保留最近 `scds.situation.revision-window` 条增量（默认 **1024**），环形缓冲 | 按契约建议的 2s 轮询计，1024 条足以覆盖常见断网窗口；`sinceRevision` 早于窗口下界 → 409 `SITUATION_REVISION_TOO_OLD` |
+| **窗口** | 保留最近 `scds.situation.revision-window` 条增量（候选默认 **1024**），环形缓冲 | 覆盖时间由事件速率决定，不由 Poll 周期决定；100 次变化/s 时约覆盖 10.24s。容量须在真实马甲数和频率下压测；超窗返回 409 |
 | **命中序号** | `HitEvent.seq` 由库生成，与 revision **互不推导** | 两者一个离散事件序、一个态势版本序，混用会在"只有心跳无命中"时出错 |
 | **演习切换** | 开演 / 停演（含 doc 01 的 `CRASH_RECOVERED` 收尾）各推一帧 **`full=true`**，revision **继续递增不回退** | 回退会让客户端无法判断帧的新旧；用全量帧表达"战场清空 / 战场重建"最直观，且不需要新增动作类型 |
 
@@ -197,7 +199,18 @@ public interface LinkStatusPushPort {
 
 `RESYNC`：`{"action":"RESYNC","sinceRevision":N}` 复用**同一套**补齐逻辑；超窗时**直接推一帧 `full=true`**，不新增任何服务端动作类型（信封自带 revision，客户端自然对齐）。这样 `clientToServer` 的枚举保持 `[PING, RESYNC]`，契约不用动。
 
-链路通道（`LinkWebSocketHandler`）简单得多：连接建立时推当前快照 `List<LinkStatus>`，之后每次链路开关变化推一帧 `LinkStatus`。
+**链路同构缺口，尚待确认**：HTTP 契约返回 `List<LinkStatus>`，WS 契约却定义单个 `LinkStatus`。
+因此“首帧发列表、之后发对象”不是同构实现。候选方案是两端均发送完整列表快照，
+并相应调整 `LinkStatusPushPort` 签名；也可定义共同信封，但这两种都需要先确认契约变更。
+在确认前不得把现有两个不同根类型描述为“已经同构”。
+
+**订阅与首帧必须原子衔接**：注册会话、读取快照、补齐订阅期间新增事件须协调。
+不能仅“读快照然后注册”而丢掉中间变化，也不能“先注册再发首帧”导致增量跑在全量之前。
+实现时应通过事件循环屏障或同一发送队列保证首帧与增量的顺序，并补并发测试。
+
+**重启恢复尚有缺口**：只把 revision 归零，客户端携带旧进程的较小 N 重连时，
+新进程可能已增长到 N 以上，数值检查会误认为仍在窗口内。需要确认 epoch 标识，
+或规定所有重连强制全量并限制 sinceRevision 只在同一连接代内使用。见 §6 Q8。
 
 ### 4.6 广播实现（api 侧）
 
@@ -309,20 +322,24 @@ scds:
 |---|---|---|
 | **Q1** | 载荷下沉的目标包名：`com.dualx.core.push` / `com.dualx.core.view` / 直接塞进 `com.dualx.core.domain`？ | **`com.dualx.core.push`**。`domain` 应保持"领域实体"语义，`push` 明确表达"这是对外推送的线载荷" |
 | **Q2** | WS 超窗时的表达：契约写的是 **409 + Problem**，但 WS 在握手成功后无法再返回 HTTP 状态码 | 用 **close code 4000 + reason**；同时**回写契约**补一句"握手后超窗以 close code 表达"。若坚持契约原文，则必须在握手阶段把 `sinceRevision` 作为 query 校验并拒绝升级——但那会让"刚超过窗口"的客户端连不上，体验更差 |
-| **Q3** | revision **不跨进程重启连续**，是否接受？ | **接受**，并在契约 `revision` 描述里补一句"进程重启后重新计数，客户端重连应不带 `sinceRevision` 走全量" |
+| **Q3** | revision **不跨进程重启连续**，是否接受？ | 候选为重启归零；必须同时解决 Q8 的跨代数值碰撞，不得仅补一句说明就宣称恢复正确 |
 | **Q4** | 发送线程模型：**每会话虚拟线程** vs 共享单线程 executor？ | **虚拟线程**。共享单线程下一个慢客户端会拖住全体，与本设计目标第 4 条冲突 |
 | **Q5** | 现场客户端数量上界（指挥台数 + 单兵终端数）？ | 影响队列容量与是否要加会话数上限。需要现场数字 |
 | **Q6** | 是否要 `NoopSituationPushPort`？ | **要**。否则 `scds-core` 的单元测试必须拉起 WS 上下文，切片测试的成本会立刻反噬 |
 | **Q7** | 链路状态是否需要在"值未变"时也周期重推（例如 10s 一次）？ | **不需要**。契约已定义 Poll 兜底，周期重推只会浪费带宽并掩盖真正的推送问题 |
+| **Q8** | 旧进程 revision 与新进程 revision 数值重叠如何识别？ | 比较 epoch，或明确重连全量规则；涉及客户端与契约，须先确认 |
+| **Q9** | 链路 Poll 数组与 WS 对象如何满足同构硬约束？ | 推荐两端统一完整列表快照；改签名、WS schema 及首帧用例前先确认 |
 
 ---
 
 ## 7. 验收判据
 
-1. **同构证明**：WS 连上后立即收到的首帧，其 `revision` 与紧接着 `GET /api/v1/situation`（不带 `sinceRevision`）返回的 `revision` 相等；两处载荷由**同一个 Java 类型**序列化（编译期即可验证，不靠人工比对字段）。
+1. **同构证明**：在停止输入或固定事件屏障的测试中比较 WS 首帧与 HTTP 全量，revision 和内容一致；持续输入时不能要求不同采样时刻的 revision 恒相等。两处使用同一 Java 类型及状态源，链路通道也必须检查 JSON 根类型一致。
 2. **补齐正确**：客户端持有"当前 revision − 3"连接 → 依次收到 3 帧 `full=false`，revision 连续无跳号，最终 revision 与全量一致。
 3. **超窗恢复**：用"当前 revision − 窗口 − 1"连接 → 被拒绝（close 4000）；客户端改为不带 `sinceRevision` 重连后能拿到全量，**不出现卡在旧 revision 的现象**。
 4. **背压隔离**：人为让一个客户端不读取数据（填满其 TCP 缓冲）→ 其他会话的推送延迟不受影响；该客户端恢复后收到一帧 `full=true` 并自动对齐（丢弃计数 > 0，其余会话的计数为 0）。
 5. **保活与泄漏**：连续 30s 不发 `PING` → 服务端主动断开；断开后 registry 中该会话已注销，活跃会话数回到真实值。
 6. **演习切换**：停演（含进程被杀后的 `CRASH_RECOVERED` 收尾）后，客户端收到的下一帧为 `full=true` 且 `running=false`、`units` 为空。
 7. **不阻塞上游**：注入一个"永久阻塞的发送实现"后，core 的事件处理耗时与无推送时相比无可测差异（证明 `publish` 未在调用线程上等待 I/O）。
+8. **订阅无缝衔接**：在注册、快照读取与首帧发送之间注入状态变化，不漏事件、不把旧全量排在新增量之后。
+9. **跨进程恢复**：让新进程 revision 增长到旧 N 以上后再携旧 N 重连，仍必须恢复全量，不能把另一个进程的 revision 当成当前窗口依据。

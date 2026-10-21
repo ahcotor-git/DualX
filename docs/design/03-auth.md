@@ -1,8 +1,10 @@
 # 设计 03 —— 鉴权（云签发 / 边缘离线验签）
 
-> 状态：**待评审**　|　前置依赖：无　|　涉及 DDL：V9
+> 状态：**部分实现，尚未形成 HTTP 鉴权闭环** | 核查日期：2026-10-21 | DDL：V9 已应用
 > 关联：解决评审遗留 **D4**（鉴权落点），并给出 **D5**（`profile` 两个正交维度）在鉴权切面上的答案。
 > 本文档只定义鉴权的实现结构；契约需回写之处单列在 §6。
+> 本次已按已确认决策及真实代码修订。当前缺口见 [审查清单](../review.md)；
+> 309 项测试通过不等于本节所有验收判据通过，见 [测试矩阵](../testing.md)。
 
 ---
 
@@ -10,15 +12,18 @@
 
 ### 1.1 现象
 
-契约把认证模型写得很清楚，但代码里**一个落点都没有**：
+设计初稿提出鉴权无落点的问题。2026-10-21 当前事实如下：
 
 | 应有之物 | 现状 |
 |---|---|
-| Spring Security 依赖 | **全库无**（各 `pom.xml` 既无 `spring-boot-starter-security`，也无 `spring-boot-starter-oauth2-resource-server`、`jjwt`、`nimbus-jose-jwt`） |
-| 免鉴权白名单 | **无任何定义**（`docs/` 全目录搜不到白名单/公钥/JWKS 相关约定） |
+| Spring Security 依赖 | api 已引 resource-server，core 仅引 crypto；版本由 Boot 3.5.7 BOM 管理 |
+| 免鉴权白名单 | `SecurityConfig` 已实现；完整过滤链遍历回归尚缺 |
 | 6 个 `/api/v1/auth/*` 端点 | 全部 `throw new NotImplementedException(...)` → 501 |
-| 所有业务端点 | 全部无鉴权即可访问（骨架期占位，返回 501） |
-| 两个 WebSocket 通道 | **完全无鉴权**，且 `setAllowedOriginPatterns("*")` |
+| 账号核心服务 | `AuthService` 的 login/refresh/logout/me 已实现并通过 17 项真实 MySQL IT，尚未接控制器 |
+| 业务端点 | 已要求账号用途令牌；实际业务写权限尚未铺设，控制器仍是占位 |
+| 两个 WebSocket 通道 | 已要求账号用途令牌；只支持 PING/PONG，真实握手与推送回归尚缺，Origin 仍全放开 |
+| 设备单端在线 | V9 两列与会话仓储已实现；设备登录服务、SID 验证器及主动失效尚缺 |
+| 启动 | 两种签发开关均已真实启动；本地公钥路径正常。物理断网专项未执行 |
 
 ### 1.2 三个没被回答的设计问题
 
@@ -41,13 +46,13 @@
 | 契约声明 `accessToken` 短有效期（建议 30min）；`refreshToken` 长有效期**且可撤销** | openapi.yaml L198-L199、auth.yaml L66 |
 | 契约声明 `logout` 使 refreshToken 失效；accessToken 不可撤销、靠短有效期兜底 | auth.yaml L66 |
 | 契约声明 deviceLogin **重复登录使旧令牌失效（单端在线）** | auth.yaml L93-L95 |
-| `TokenPair.accessToken` 描述含 **`tenantId`** | [domain.yaml](../../docs/api/schemas/domain.yaml#L28) —— 与已裁定的"每客户独立实例"**矛盾，属残留** |
+| TokenPair 不含租户维度，原 `tenantId` 残留已删除 | [domain.yaml](../api/schemas/domain.yaml) |
 | `User.permissions` 是细粒度权限点，前端据此显隐 | domain.yaml L60-L65 |
 | `Role` 固定四个：`ADMIN` / `DIRECTOR` / `OPERATOR` / `VIEWER` | [Role.java](../../scds-domain/src/main/java/com/dualx/core/domain/Role.java)、[V1__auth.sql](../../scds-core/src/main/resources/db/migration/V1__auth.sql#L44) |
 | `t_account.password_hash` 注明 **BCrypt，绝不可逆** | V1__auth.sql L26 |
 | `t_vest.bind_secret_hash` 也是 BCrypt；用 SIM 号作密钥时该列为空，**两者由部署配置决定、不并存** | [V6__device.sql](../../scds-core/src/main/resources/db/migration/V6__device.sql#L15-L18) |
-| `ApiErrorCode` 已有 4 个 `AUTH_*`，**没有任何 403 类错误码** | [ApiErrorCode.java](../../scds-api/src/main/java/com/dualx/api/error/ApiErrorCode.java#L14-L18) |
-| 契约已有 `Forbidden` / `TooManyRequests` 响应声明，但**只写了描述、没有 code 名** | [common.yaml](../../docs/api/schemas/common.yaml#L76-L99) |
+| `ApiErrorCode` 已下沉 domain，含 `AUTH_FORBIDDEN`；core 抛 BusinessException，api 映射 HTTP | [ApiErrorCode.java](../../scds-domain/src/main/java/com/dualx/core/error/ApiErrorCode.java) |
+| Forbidden / TooManyRequests 已登记 code；实际 MVC 参数错误仍有绕过自定义出口的路径 | [common.yaml](../api/schemas/common.yaml)、[审查清单](../review.md) |
 | `TraceIdFilter` 已把 traceId 写进 MDC + request attribute；`ApiExceptionHandler` 从 attribute 取它填 `Problem.traceId` | [TraceIdFilter.java](../../scds-api/src/main/java/com/dualx/api/support/TraceIdFilter.java)、[ApiExceptionHandler.java](../../scds-api/src/main/java/com/dualx/api/error/ApiExceptionHandler.java#L80-L88) |
 | `scds-api` 目前对 `scds-core` 单向依赖 | [scds-api/pom.xml](../../scds-api/pom.xml#L20-L24) |
 
@@ -110,7 +115,7 @@
 **claim 集合**（固定，不随意扩充）：
 
 ```
-iss   scds.edge.id（部署时确定的实例标识）
+iss   scds.auth.jwt.issuer（环境变量 SCDS_JWT_ISSUER，默认 scds-edge）
 sub   账号令牌 = accountId(UUIDv7)；设备令牌 = vestNum
 aud   见上表
 exp / iat / nbf
@@ -125,7 +130,8 @@ sid   仅设备令牌：设备会话 ID（§4.9）
 
 ### 4.3 公钥来源（"离线验签"的真正落地）
 
-**裁定：验签器永远只依赖本地公钥，启动过程绝不联网。**
+**已确认要求**：离线部署启动、验签不得依赖外网。当前满足此要求的配置是本地 PEM 且 `jwks-uri` 为空。
+不能把配置远端 JWKS 的实例也描述成“离线可验签”。
 
 ```yaml
 scds:
@@ -133,29 +139,31 @@ scds:
     jwt:
       issuer:          ${SCDS_JWT_ISSUER:scds-edge}
       signing-enabled: ${SCDS_JWT_SIGNING:true}     # 见 4.3.2
-      public-key:      ${SCDS_JWT_PUBLIC_KEY:}      # PEM 内联（多把则按 kid 依次列出）
+      public-key:      ${SCDS_JWT_PUBLIC_KEY:}      # 单把 X.509 PEM 内联
       public-key-file: ${SCDS_JWT_PUBLIC_KEY_FILE:} # 或从文件读
       private-key:     ${SCDS_JWT_PRIVATE_KEY:}     # 仅 signing-enabled=true 时需要（已 gitignore）
+      private-key-file: ${SCDS_JWT_PRIVATE_KEY_FILE:} # 未加密 PKCS#8 文件
       jwks-uri:        ${SCDS_JWKS_URI:}            # 可选；留空 = 永不联网
       jwks-refresh-ms: 3600000
 ```
 
 装配规则：
 
-- **禁止使用** `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` 自动装配——它在启动时会去拉 JWKS，**无外网即启动失败**，正好违反本设计目标第 2 条。
-- 自己 `@Bean JwtDecoder`：
-  - 配了 `jwks-uri` → `NimbusJwtDecoder.withJwkSetUri(...)`，并挂一个**失败只记日志、不降级为拒绝**的刷新任务；
-  - 否则 → 用本地公钥构造 `JWKSource`（支持多把，按 `kid` 命中）→ `new NimbusJwtDecoder(jwkSource)`。
-- 公钥轮换：`kid` 匹配天然支持「新旧公钥并存」。运维动作 = 把新公钥追加进本地 PEM 链 → 云管再切签名密钥。
+- 自建 `JwtDecoder`，不用 Boot 的 `issuer-uri` OIDC 发现。不能笼统宣称所有 `jwk-set-uri`
+  形态都启动联网；本项目禁用自动路径是为了使公钥来源与联网行为显式、可测。
+- 本地路径：`PemKeys` 读取单把公钥，`ImmutableJWKSet` + RS256 selector +
+  `DefaultJWTProcessor` 装配 `NimbusJwtDecoder`。它没有接受 `JWKSource` 的公开构造器。
+- 本地签发与 JWK 均不设 `kid`；换单把 PEM 要重启，不支持追加 PEM 链平滑轮换。
+- 配了 `jwks-uri` 时**优先选择远端路径**，首次验签可能联网，没有本地降级实现。
+  `jwks-refresh-ms` 目前无消费者，没有文档初稿描述的刷新任务。
+- 若生产需要平滑换钥或断网 JWKS 缓存兜底，先设计新旧钥信任窗口与过期策略，再实现及验证。
 
 #### 4.3.1 PRIVATE 模式谁签发
 
-**边缘实例自己持有签名私钥，自签自验。** 私钥来源二选一，由部署决定：
-
-- 部署时导入（`SCDS_JWT_PRIVATE_KEY`，与 `.env` 同一保护级别）；
-- 首次启动自动生成密钥对，并把**公钥指纹 + 输出路径**打进启动日志，由运维归档。
-
-**绝不在代码里内置默认私钥**——那等于所有客户共用一把钥匙。
+**边缘实例自行持有私钥，自签自验。** 生产由部署方提供每客户独立密钥；应用没有自动生成功能。
+本机开发按已确认方案使用随仓库公开的 `dev-keys/` 固定测试密钥，严禁对外或生产使用。
+`signing-enabled=false` 时 `RsaTokenSigner` 不读私钥且拒绝全部三类签发。
+生成、文件权限及启动路径见 [环境手册](../environments.md)。
 
 #### 4.3.2 签发能力是"能力"开关，不是"环境"开关（D5 的切面）
 
@@ -183,7 +191,10 @@ public interface TokenSigner {
 ```
 
 - `enabled() == false` 时，`POST /api/v1/auth/login|refresh|logout` **不注册**（404），客户端应按 baseUrl 指向的实例能力选择登录端点。
-- `/api/v1/auth/me` 与两个设备端点**两种模式都在**（它们不涉及签发）。
+- `/api/v1/auth/me` 为只读，两种模式都应存在。
+- **设备登录能力冲突尚待确认**：它确实签发 deviceToken，而当前 signer 的 enabled 开关控制
+  三类签发。文档初稿中“设备登录不涉及签发、永远可用”不成立。候选为拆分账号/设备签发能力，
+  或只验签实例不提供设备登录；不能把上述候选当成已经确认的决定。
 - 实现类（`RsaTokenSigner`）落在 `scds-api`（本项目暂无 `scds-infra` 模块，签名与弹簧安全同属"接口适配层的基础设施"）。若日后拆出 `scds-infra`，把它迁过去即可。
 
 ### 4.4 免鉴权白名单（默认拒绝）
@@ -203,6 +214,7 @@ authenticated：
 补充约定：
 
 - **`/actuator/info`、`/actuator/metrics` 需要 `ADMIN`**（指标会泄露内部结构与容量，不对外开放）。
+- 必须覆盖 `/actuator/metrics/**`，当前仅匹配精确根路径，已实测 VIEWER 能读取子路径，见审查 R01。
 - **OPTIONS 预检一律放行**：Flutter 桌面/安卓不发 `Origin`，CORS 实际不生效；但一旦将来接 Web 控制台，预检被拦会导致"连登录都发不出去"这种极难排查的现象。
 - **白名单是"只增不改"清单**：任何新增 `permitAll` 必须回到本文档登记一行。理由——鉴权漏洞几乎从不是"写错了判断"，而是"某次调试顺手放行了一个端点，然后再也没人删"。
 
@@ -243,11 +255,16 @@ http.exceptionHandling(e -> e
 |---|---|---|
 | 无 `Authorization` 头 | 401 | `AUTH_TOKEN_INVALID` |
 | 签名/格式/`aud` 不匹配 | 401 | `AUTH_TOKEN_INVALID` |
-| `exp` 已过（`JwtExpiredException`） | 401 | `AUTH_TOKEN_EXPIRED` |
-| 已认证但角色/权限不足 | 403 | `AUTH_FORBIDDEN` ← **需新增** |
+| `exp` 已过 | 401 | `AUTH_TOKEN_EXPIRED`（目标；当前真实过期令牌误归为 INVALID，见 R02） |
+| 已认证但角色/权限不足 | 403 | `AUTH_FORBIDDEN`（已新增） |
 | 已认证但 `aud` 用错（设备令牌调指挥台接口） | 403 | `AUTH_FORBIDDEN` |
 
 两个 handler 必须**复用 `ApiProblem` 与 `TraceIdFilter` 的 attribute**，保证 `traceId` 与日志一致——否则第 4.6 节之外的那些 401 会变成"没有 traceId 的孤立错误"，现场报障时对不上日志。
+
+当前 EntryPoint 只识别 `JwtValidationException` 的 "Jwt expired" 文案；手搭的 Nimbus processor
+可在 Spring validator 前先拒绝过期 claim。必须用生产 decoder 的真实过期令牌回归，不能只 mock 异常。
+还需强制 `exp/sub/aud` 等必需字段存在、类型正确；当前缺 exp 的合法签名 token 可通过认证。
+MVC 错误须同时检查 Boot ProblemDetails advice 优先级，不能只验证 filter 的 401/403。
 
 ### 4.7 WebSocket 握手鉴权
 
@@ -278,10 +295,20 @@ CREATE TABLE t_refresh_token (
 ```
 
 - **只存 hash**：库被拖走也无法直接冒用令牌。
-- **滚动刷新**：`refresh` 时旧行置 `revoked_at = now`、`replaced_by = 新 id`，再发新令牌。
+- **已确认定位**：对原文算 SHA-256，按唯一 `token_hash` 查行；core 不解析 JWT，
+  不新增 TokenVerifier。库行与 `expires_at` 是刷新凭据的权威。
+- **滚动刷新**：独立 `REQUIRES_NEW` 事务，先锁账号，再锁定读令牌最新状态，
+  旧行撤销、插入新 hash、写 replaced_by 原子提交。签名在进程内先完成以计算 hash，
+  但必须在返回客户端之前落库并成功提交。
+- **已确认退出语义**：logout 无请求体，按 accessToken 的 accountId 撤销该账号全部 refreshToken，
+  不修改请求形状，不再描述为“只撤当前一条”。
 - **重放检测**：若收到的 refreshToken 已被撤销过 → 判定为"令牌被盗后重放"，**撤销该账号整条 refreshToken 链**并返回 `AUTH_TOKEN_INVALID`。这是 RFC 6819 的标准做法，代价是现场偶发"两边同时刷新"会踢掉一方——但这种情况本来就该重登。
 - **存库而非内存**：现场机器可能被断电重启，把 refreshToken 放内存等于"每次断电全体重新登录"，与现场作业方式不符。
-- 清理：过期的行不主动删；由设计 01 的调度器顺带日清一次（`expires_at < now - 7d`），或暂不清理（量级极小）。
+- 重放时撤销该账号全部仍有效的 refreshToken，并先提交再抛 BusinessException，
+  即使调用方外层事务回滚也不能撤销此次处置。并发刷新最终会使新 refreshToken 也失效；
+  已签发 accessToken 仍按无状态短 TTL 规则存在。
+- 清理任务尚未实现。保留期限与历史已撤销 token 重放影响新登录的策略须确认后再加调度，
+  不能因为“量小”而将无限保留视为生产规范。
 
 ### 4.9 设备令牌单端在线（V9）
 
@@ -310,13 +337,14 @@ ALTER TABLE t_vest
 
 - 只对**失败**计数，成功即清零（仅在未锁定状态下）。
 - **锁定期内在校验口令之前直接拒绝**（返回 429）——锁定期不因"这次口令正好对了"而放行，否则攻击者靠撞对一次即可解锁。
-- IP 取值：优先 `X-Forwarded-For` 的最右一跳（现场若接 Nginx 才有意义），否则 `remoteAddr`。
+- IP 取值：默认使用 `remoteAddr`；只有明确配置可信代理、代理覆盖外来转发头且完成信任链验证后
+  才读取转发地址。禁止直接信任任意客户端的 `X-Forwarded-For`。
 - 失败响应统一 `AUTH_BAD_CREDENTIALS`，**不区分账号不存在与密码错误**（契约明确要求）。锁定期的响应用 429。
 - 计数器放在 `scds-core` 的 `LoginThrottle`，时钟可注入，便于单测。
 
 ### 4.11 口令散列
 
-- 用 `BCryptPasswordEncoder`（引入 security starter 后自带），**不要自己实现**。
+- core 用 `spring-security-crypto` 的 `BCryptPasswordEncoder`，不引 Web 安全过滤链。
 - `t_account.password_hash` 与 `t_vest.bind_secret_hash` 都用它（V1/V6 已如此注明）。
 - cost 取默认 10：设备登录在现场可能**集中发生**（一次演习开始，几十台终端同时登录），cost 太高会在登录端点排队，反而影响开演。
 
@@ -336,7 +364,7 @@ ALTER TABLE t_vest
 **`scds-core`**
 
 - `AuthService`（login / refresh / logout / me）
-- `DeviceAuthService`（deviceLogin / deviceSelf）
+- `DeviceAuthService`（deviceLogin）；deviceSelf 按已确认决定本阶段保留 501，等待态势查询
 - `LoginThrottle`、`RolePermissions`、`RefreshTokenRepository`、`VestDeviceSessionRepository`（`t_vest` 两列的读写）
 
 **`scds-api`**
@@ -346,8 +374,9 @@ ALTER TABLE t_vest
 - `RsaTokenSigner implements TokenSigner`（§4.3.2）
 - `ApiProblemAuthenticationEntryPoint` / `ApiProblemAccessDeniedHandler`
 - `DeviceSidValidator`（§4.9 的校验与缓存）
-- `AuthController`：去掉 6 个 501，接 `AuthService` / `DeviceAuthService`
-- `TraceIdFilter` 无需改动（已就位），但**必须在 Security 过滤器之前**生效——需确认其 `Order`（见 §6 Q9）
+- 拆 `AccountAuthController`（按 signing-enabled 条件注册 login/refresh/logout），接核心服务；
+  设备登录单独接服务、me 映射 User DTO，device/me 本阶段保留 501
+- `TraceIdFilter` 已标记 `Ordered.HIGHEST_PRECEDENCE`；真实 401/403 traceId 已实测
 
 **`scds-core` migration**
 
@@ -363,12 +392,17 @@ ALTER TABLE t_vest
 | **Q2** | 需新增错误码 `AUTH_FORBIDDEN`（用于设备令牌越权、角色不足） | **新增**，同时在契约 `common.yaml#/Forbidden` 的描述里登记 code 名（该响应目前只有描述、无 code 名） |
 | **Q3** | `TokenPair.accessToken` 描述里的 `tenantId` 与"每客户独立实例"矛盾 | **删除该词**。`accessToken` 载荷不再有 tenantId（与"不做多租户"的裁定一致） |
 | **Q4** | 三种令牌的有效期：access 30min / refresh 14d / device 12h | 采纳。理由：30min 是契约建议值；14d 覆盖一次集训周期；12h 覆盖单日演习——设备令牌不该跨天存活 |
-| **Q5** | 初始管理员账号从哪来（Flyway 空库起步） | V9 插一条 `admin` 账号，**密码散列由部署脚本生成并写入 `.env`**，不在迁移文件里硬编码任何默认密码。需确认此做法（否则只能硬编码一个 `admin/admin`，属事故级） |
+| **Q5** | 初始管理员账号从哪来 | **已确认并实现**：部署配置 `.env` 明文 `SCDS_ADMIN_USERNAME/PASSWORD`，应用首次启动 BCrypt cost 10 建号；V9 不种账号，已有账号不覆盖。当前本机 .env 尚无管理员项 |
 | **Q6** | 权限点集合是否要整理成完整清单（§4.5 只给了通配级别） | 建议单独出一份 `docs/design/03a-permissions.md` 或在契约里补 `permissions` 枚举；**本设计不阻塞于它**（`permissions` 只影响前端显隐） |
 | **Q7** | WS 是否允许设备令牌连接 | **不允许**（403）。理由见 §4.7：会与设计 02 的均匀广播冲突。若单兵终端确有实时态需求，正解是给它一条按会话裁剪的独立通道，而不是放开现状势 WS |
 | **Q8** | `@PreAuthorize` 是否全面铺开 | **先只加在必要的写接口上**（开演/停演、指挥、链路开关、账号管理）。铺满 70+ 端点会掩盖"哪条规则真的在起作用"，且阶段 4 会频繁改接口 |
-| **Q9** | `TraceIdFilter` 与 Spring Security 过滤链的先后顺序 | 需在落地时确认 `TraceIdFilter` 注册在 Security 之前，否则 401/403 的 `Problem.traceId` 会为空——而 401 恰恰是最需要 traceId 的场景 |
+| **Q9** | `TraceIdFilter` 与 Spring Security 顺序 | **已实现并实测**最高优先级；异步事件 traceId 传播仍属后续需求 |
 | **Q10** | `sid` 校验缓存 TTL 30s | 采纳；但需确认"登出后立即失效"对现场是否足够（缓存键主动失效已覆盖同进程登出，跨进程/断电重启无缓存） |
+| **Q11** | 按 hash 刷新还是 api 先解析 JWT | **已确认甲并实现**：按 token_hash 查库 |
+| **Q12** | logout 撤一条还是全部 | **已确认甲并实现**：该账号全部 refreshToken |
+| **Q13** | 本地开发密钥来源 | **已确认乙并实现**：公开固定测试密钥；生产独立密钥 |
+| **Q14** | device/me 本批是否实现 | **已确认甲**：留 501，等待态势服务 |
+| **Q15** | signing=false 下设备是否仍能登录 | **未裁定**：与当前三类令牌共用 signer 的能力开关冲突，须先确认 |
 
 ---
 
@@ -380,7 +414,13 @@ ALTER TABLE t_vest
 4. **白名单正确**：遍历契约全部路径，逐个不带令牌调用——白名单内 3 个端点不返回 401，其余**一律 401**（不许有"忘了加保护"的漏网端点）。
 5. **令牌重放检测**：同一个 `refreshToken` 连用两次 → 第二次失败，且该账号此前签发的全部 refreshToken 均被撤销。
 6. **设备单端在线**：终端 A 登录后，终端 B 用同一 `vestNum` 登录 → A 的令牌在下一次请求即被拒（不等缓存过期）。
-7. **离线可启动可验签**：断网（无外网）状态下启动 → 成功；用断网前签发的有效令牌访问受保护接口 → 200。**反证**：若误用了 `jwk-set-uri` 自动装配，本项会失败。
+7. **离线可启动可验签**：本地 PEM、jwks-uri 空，物理断网后启动与验签均成功。
+   未实现的受保护接口通过认证后仍应为 501，不拿 200 证明不存在的业务；业务接线后另测成功响应。
 8. **WS 握手**：不带 `Authorization` → 401 且不升级；带设备令牌 → 403；带账号令牌 → 101 且 `session.getPrincipal()` 非空。
 9. **限流**：同一账号连续 5 次错误口令 → 第 6 次返回 429；用正确口令在第 6 次也仍是 429（锁定期不因口令正确而放行）。
-10. **签发能力开关**：`signing-enabled=false` 启动 → `/auth/login` 返回 404，而 `/auth/me` 与 `/auth/device/login` 正常。
+10. **账号签发能力开关**：signing=false 时 login/refresh/logout 不注册且按约定得到 404；
+    必须同时调整过滤链对不存在路由的处理，否则无令牌请求仍是 401。
+    device/login 行为待 Q15 确认，不能将未裁定结果写成通过。
+11. **claim 完整性**：缺 exp/sub、错误类型、未知用途令牌均 401；真实过期令牌归为 EXPIRED。
+12. **MVC 错误形状**：空体、非法 JSON、DTO 校验、multipart 缺失、405/404 均按约定返回
+    Problem 的 code/traceId，不能被 Boot 默认 advice 截走。
