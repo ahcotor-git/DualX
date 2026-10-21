@@ -10,14 +10,26 @@
 # ============================================================================
 server:
   port: 11001
+  # 停机必须优雅：串口链路要在进程退出前释放，UWB 接收缓冲要在退出前 flush。
+  # 直接强杀会让下一次启动抢不到 COM 口（Windows 上尤其明显）。
+  shutdown: graceful
 
 spring:
   application:
     name: scds-next
+  lifecycle:
+    # 单次停机的最长等待；超时即强杀，避免"关不掉"卡住现场收场。
+    timeout-per-shutdown-phase: 20s
   profiles:
-    # 部署形态由 deployment-mode 驱动：CLOUD（云端独立实例）/ PRIVATE（私有化单机）
-    # 本机开发时用命令行覆盖：--spring.profiles.active=local
-    active: ${SCDS_DEPLOYMENT_MODE:private}
+    # ⚠ 这里只表达「运行环境」这一个维度（local / 现场部署 profile）。
+    #   它与下面 scds.deployment-mode 的「部署形态」（CLOUD / PRIVATE）是**两个正交维度**，
+    #   刻意用两个不同的变量驱动。用同一个变量既当 profile 名又当业务开关时，
+    #   本机开发会出现「profile=local 而形态仍是 private」这类错配，且没人能一眼看出。
+    #
+    # 刻意不给默认值：默认值若是 local，会连带把 server.address 锁到 127.0.0.1，
+    # 生产上漏配就等于 11001 无法从外部访问——这种"静默默认"比漏配直接报错危险得多。
+    # 本机开发显式指定：--spring.profiles.active=local（或设 SCDS_PROFILE=local）
+    active: ${SCDS_PROFILE:}
   mvc:
     problemdetails:
       enabled: true
@@ -53,8 +65,13 @@ spring:
     locations: classpath:db/migration
 
 scds:
-  # CLOUD | PRIVATE —— 全系统唯一的形态开关，禁止在代码里散落分支判断
-  deployment-mode: ${SCDS_DEPLOYMENT_MODE:private}
+  # CLOUD | PRIVATE —— 部署**形态**（不是运行环境，也不是能力开关）。
+  # 与「能力开关」刻意分开：签不签发令牌（scds.auth.jwt.signing-enabled）、
+  # 装不装硬件链路（scds.edge.hardware-enabled）各自由能力开关决定，
+  # 禁止在代码里用 deployment-mode 反推能力——PRIVATE 也可以只验签不签发，
+  # CLOUD 也可以在某客户的边缘实例上打开签发（离线演练）。
+  # ⚠ 当前尚无消费者：能力开关落地（设计 03）时才接线，此处先作为运维约定登记。
+  deployment-mode: ${SCDS_DEPLOYMENT_MODE:PRIVATE}
 
   # ===== 协议 A：马甲串口链路 =====
   serial:
