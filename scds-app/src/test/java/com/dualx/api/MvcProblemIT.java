@@ -3,6 +3,7 @@ package com.dualx.api;
 import com.dualx.api.auth.AuthController;
 import com.dualx.api.error.ApiExceptionHandler;
 import com.dualx.api.support.TraceIdFilter;
+import com.dualx.core.auth.AuthService;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,6 +12,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -24,6 +26,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.MockMvcPrint;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.io.ByteArrayResource;
@@ -80,6 +83,12 @@ class MvcProblemIT {
     @Import({ApiExceptionHandler.class, TraceIdFilter.class, AuthController.class,
             Endpoints.class, LegacyValidatedEndpoints.class})
     static class MvcApplication {
+
+        /** 本测试只验证 MVC 错误出口，不建立数据库上下文：账号服务用替身，方法不会被调到。 */
+        @Bean
+        AuthService authService() {
+            return Mockito.mock(AuthService.class);
+        }
     }
 
     @Autowired MockMvc mvc;

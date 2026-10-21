@@ -1,5 +1,6 @@
 package com.dualx;
 
+import com.dualx.api.auth.AccountAuthController;
 import com.dualx.api.auth.AuthController;
 import com.dualx.api.error.ApiExceptionHandler;
 import com.dualx.api.security.AuthJwtProperties;
@@ -129,6 +130,8 @@ class ApplicationStartupIT {
             assertThat(context.getBeansOfType(SecurityConfig.class)).hasSize(1);
             assertThat(context.getBeansOfType(ApiExceptionHandler.class)).hasSize(1);
             assertThat(context.getBeansOfType(AuthController.class)).hasSize(1);
+            // 签发端点随 signing-enabled 条件注册：只验签实例不注册 login/refresh/logout（设计 03 Q1）
+            assertThat(context.getBeansOfType(AccountAuthController.class)).hasSize(signing ? 1 : 0);
             assertThat(context.getBeansOfType(AdminAccountBootstrap.class)).hasSize(1);
             assertThat(context.getBeansOfType(AuthService.class)).hasSize(1);
             assertThat(context.getBean(AdminProperties.class))
@@ -195,8 +198,9 @@ class ApplicationStartupIT {
                 var metric = get(client, base, "/actuator/metrics/jvm.memory.used", admin);
                 assertThat(metric.statusCode()).isEqualTo(200);
                 assertThat(mapper.readTree(metric.body()).path("name").asText()).isEqualTo("jvm.memory.used");
+                // /auth/me 已接核心 AuthService：subject 未入库 → 401，而非占位 501
                 expectProblem(mapper, get(client, base, "/api/v1/auth/me", admin),
-                        501, "NOT_IMPLEMENTED", "/api/v1/auth/me");
+                        401, "AUTH_TOKEN_INVALID", "/api/v1/auth/me");
                 expectProblem(mapper, get(client, base, "/api/v1/full-startup-missing", admin),
                         404, "ROUTE_NOT_FOUND", "/api/v1/full-startup-missing");
             }
