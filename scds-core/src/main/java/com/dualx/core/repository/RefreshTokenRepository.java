@@ -64,6 +64,32 @@ public class RefreshTokenRepository {
     }
 
     /**
+     * 按令牌原文的 SHA-256 十六进制定位（唯一索引 {@code uk_refresh_token_hash}）。
+     *
+     * <p><b>换发令牌靠本方法定位，不解析 JWT。</b>库行才是权威：令牌原文本身就是凭据，
+     * 拿不到原文就构造不出能命中唯一索引的字符串，因此无需再验一次签名；而解析 JWT
+     * 需要在核心侧引入解码器（{@code scds-core} 刻意只依赖 {@code spring-security-crypto}，
+     * 不含 Web 过滤链），代价远大于收益。</p>
+     *
+     * <p>调用方负责先把原文转成十六进制摘要——哈希留在核心侧而不是让仓储接收原文，
+     * 是为了让「库里绝不出现令牌原文」这件事只由一条路径负责。</p>
+     */
+    public Optional<RefreshToken> findByTokenHash(String tokenHash) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM t_refresh_token WHERE token_hash = :tokenHash")
+                .param("tokenHash", tokenHash)
+                .query(RefreshTokenRepository::map)
+                .optional();
+    }
+
+    /** 先锁账号再锁令牌；避免 REPEATABLE READ 快照漏掉等待期间发生的撤销。 */
+    public Optional<RefreshToken> findByTokenHashForUpdate(String tokenHash) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM t_refresh_token WHERE token_hash = :tokenHash FOR UPDATE")
+                .param("tokenHash", tokenHash)
+                .query(RefreshTokenRepository::map)
+                .optional();
+    }
+
+    /**
      * 滚动刷新：作废旧令牌并指向换发出来的新令牌。
      *
      * <p>{@code revoked_at IS NULL} 是刻意的并发闸门：两端同时刷新时只有一个能拿到
