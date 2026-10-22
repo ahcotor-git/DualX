@@ -112,8 +112,9 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | 提交/推送 M2 MAP-BASE 分段 D | 用户当次选择“分两段提交并重试推送”与“下一步 E 楼层点位 + UWB 标定”。**已落地 2 个本地提交**（`43e6b87` D1 底图错误码登记状态表、`91779bd` D2 底图 CRUD 接线）。本轮推送**成功**：`867bd4c..91779bd main -> main`，随后 `git fetch` 确认 `main` 与 `origin/main` 无差异，**上表第 108、109 行所称“远端未更新”至此消解**（A1/A2 至 C 段的累计积压一并入远端）。D 段已跑通全量 `mvn -B -o verify`（718 项，protocol 19 / core 316 / api 102 / app 281）。注：本轮首跑 verify 时 Docker Desktop 已退出（`scds-local-mysql` 为 `Exited (255)`），重启 Docker 与容器后复跑方全绿——真实库用例的失败先查容器再查代码 |
 | 提交/推送 M2 MAP-BASE 分段 E | 用户当次选择“按 3 个语义提交并推送”与“先继续 F 段，推送稍后重试”。**已落地 3 个本地提交**（`d7854c7` 契约、`f99ce9e` 服务接线、`7fb24d2` 用例），叠加 D 段后 `main` 领先 `origin/main` **3 个提交**；推送**因网络失败**（`Recv failure: Connection was reset`），**远端未更新**。E 段已跑通全量 `mvn -o verify`（734 项） |
 | 提交/推送 M2 MAP-BASE 分段 F | 用户当次裁定四项口径（见下「MAP-BASE 分段 F」），并选择“按语义提交并尝试推送”。**已落地 4 个本地提交**（`1dd8880` 契约、`efae3a8` 存储落盘、`0f7b1e5` 文件端点接线、`e690c9c` 用例）。F 段已跑通全量 `mvn -o verify`（**749 项**：protocol 19 / core 346 / api 103 / app 281）。推送**未成功**（`Recv failure: Connection was reset`，EXIT=128），`main` 领先 `origin/main` **7 个提交**，**远端未更新**，不得视为已入远端 |
-| M2 MAP-BASE 分段 G（端到端 IT + 文档回写） | 用户当次选择“进入 G 段”，随后授权“分 2 个语义提交并重试推送”。**已落地 2 个本地提交**（`d2213ff` fix 楼层点位落库形状、`bae10d9` 端到端 IT + F/G 决策回写），叠加 F 段后 `main` 领先 `origin/main` **9 个提交**；推送**因网络失败**（`Failed to connect to github.com:443 after 21141 ms`，EXIT=128），**远端未更新**，不得视为已入远端。G 段已跑通全量 `mvn -o verify`（**751 项**：protocol 19 / core 346 / api 103 / app 283） |
+| M2 MAP-BASE 分段 G（端到端 IT + 文档回写） | 用户当次选择“进入 G 段”，随后授权“分 2 个语义提交并重试推送”。**已落地 2 个本地提交**（`d2213ff` fix 楼层点位落库形状、`107b692` 端到端 IT + F/G 决策回写），叠加 F 段后 `main` 领先 `origin/main` **9 个提交**；推送**因网络失败**（`Failed to connect to github.com:443 after 21141 ms`，EXIT=128），**远端未更新**，不得视为已入远端。G 段已跑通全量 `mvn -o verify`（**751 项**：protocol 19 / core 346 / api 103 / app 283） |
 | M2 测试库残留清理 | G 段首跑失败留下 1 行 `t_map` + 1 行 `t_map_floor`（`cleanUp` 因列名写错而`BadSqlGrammar`，两处 `DELETE` 都未生效），导致 `BaseMapRepositoryIT` 的**全局行数断言**（`expected 1 but was 2`）失败。已按本记录 D14 口径定位到具体 UUID 并**只删自身残留行**（`t_map`/`t_map_floor` 现均为 0），未清库、未删卷、未动其它账号数据 |
+| M3 LIFE-DDL（V10 迁移 + 领域与契约同步） | 用户当次选择“LIFE 分段（演习生命周期 + 自愈）”，随后取消 LIFE 范围追问，视为按 D05 推荐口径推进。**本段只做 DDL 与类型边界**：V10 迁移、`ExerciseEndReason`、领域 `ExerciseLogType`（含 `SYSTEM`）、日志读写的枚举切换、契约补 `SYSTEM` 与 `endReason`。服务与自愈流程**未开始**。全量 `mvn -o verify` 全绿（**757 项**：protocol 19 / core 352 / api 103 / app 283）。**已落地 2 个本地提交**（`4933e4a` 迁移+领域+契约、本次决策回写提交），叠加 G 段后 `main` 领先 `origin/main` **11 个提交**；推送**因网络失败**（`RPC failed; curl 55 Send failure: Connection was reset`，EXIT=1），**远端未更新**，不得视为已入远端。细节见下「LIFE-DDL 执行边界」 |
 
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
@@ -387,5 +388,74 @@ IT 自身也修了两处：`cleanUp` 原写 `DELETE FROM t_map WHERE map_id = :m
 **教训：断言全表行数的 IT 与「会往同一张表写数据的其它 IT」共存时，任何一个 IT 的清理失败
 都会把它人的用例打红；排查顺序应是「先看残留数据是谁留下的」再怀疑代码。**
 本段仍为 501 的 UWB 校准三端点与 `device/me` 不在范围内，未触碰。
+
+### LIFE-DDL 执行边界（2026-10-22，M3 演习存活自愈第一步）
+
+依据 D05（`docs/design/01-exercise-liveness.md`）与用户对「LIFE 分段」的裁定。
+本段**只做「库形状 + 类型边界 + 契约」三件事**，不含任何服务、调度或自愈流程——
+即：把「僵尸演习」这件事在数据层「装得下」，尚不能「做」。
+
+**1. 迁移 V10（`V10__exercise_liveness.sql`）**
+
+| 改动 | 口径 |
+|---|---|
+| `t_exercise.owner_instance` | 持有本场运行权的进程实例标识，`NULL` 表示历史行或创建时未记录 |
+| `t_exercise.heartbeat_at` | 该实例最后一次心跳（UTC），只用于**告警分级与措辞**，不参与接管判据 |
+| `t_exercise.end_reason` | `NORMAL` / `CRASH_RECOVERED`，进行中为 `NULL`，由 `ck_exercise_end_reason` 约束 |
+| `ix_exercise_running_owner (ended_at, owner_instance)` | 支撑「按实例找进行中的行」 |
+| `ck_exercise_log_type` | **重建**为含 `SYSTEM`（原 V4 定义只有 6 个协议值） |
+
+版本号取 **V10**（不是设计文档原文的 V8）：V8 已被跳过且不补历史版本，迁移 `V9__auth_tokens.sql` 已入库，
+按「只增不改、不 out-of-order」口径，下一个可用版本就是 V10。
+
+**互斥 ≠ 存活**：`uk_exercise_running`（生成列 `running_flag` 上的唯一索引）保证**同一时刻至多一场**
+进行中，但它管不住「进程崩了而 `ended_at` 没写上」——那行仍然占着那个唯一位置，新的开演会被
+`EXERCISE_ALREADY_RUNNING` 拒绝。`owner_instance` / `heartbeat_at` 回答的是另一个正交问题：
+**这行还有没有人在管**。这也是为什么自愈必须先收尾再放行新开演，而不是简单删行。
+
+**2. `SYSTEM` 为什么不加进 `scds-protocol.LogType`**
+
+`scds-protocol.LogType` 是**带字节 code（0~5）的协议帧类型**，属冻结边界；给它加一个没有帧的值，
+等于让协议库去表达一件协议里不存在的事（影响上游固件对接方）。因此：
+
+- 协议侧**不动**；
+- 新增领域枚举 `com.dualx.core.domain.ExerciseLogType` = 协议 6 值 + `SYSTEM`，
+  以 `of(LogType)` / `protocol()` 显式双向映射，不靠名字巧合；`protocol()` 对 `SYSTEM` **抛异常**
+  而不是返回假值——调用方拿到异常说明这条路走错了；
+- `ExerciseLogEntry.logType`、`ExerciseLogRepository` 的 JDBC 映射与 `scds-api` 的
+  `dto.situation.ExerciseLogEntry.type` 同步切到该枚举（D05 Q3 的「须同时对齐」）；
+- 单测 `ExerciseLifecycleTypesTest` 守「协议枚举冻结为 6 值」，IT
+  `ExerciseLogRepositoryIT.append_systemEntry_survivesTheDatabaseCheckConstraint`
+  真写库再读回——**库侧 CHECK 与 Java 枚举是两处独立声明，单测只能证明枚举里写得下**。
+
+**3. 契约**
+
+- `common.yaml → LogType` 枚举补 `SYSTEM`，并注明它**没有 `x-codes` 条目**（不对应任何协议帧），
+  客户端遇到它不可假设必有 `vestNum` / `downlinkHex`（D05 Q2 / Q3）。
+- `domain.yaml → Exercise` 补 `endReason`（进行中为 null / 缺席），
+  `paths/exercise.yaml` 的 `stopExercise` 200 响应补同名字段。
+- `endReason` 进契约的理由：否则前端无法把「异常中断」告诉操作员，
+  而僵尸场次**仍出现在复盘列表**（D05 Q1），列表要能按此打标签。
+
+**本段暴露的一处遗漏**：V10 需要同步的迁移清单断言有**两处**（`scds-core` 的
+`TestDatabaseGuardTest` 与 `scds-app` 的 `ApplicationStartupIT`），
+首跑 `mvn -o verify` 只改了前者，`ApplicationStartupIT` 报
+`containsExactly("1"…"7","9")` 失败（2 条，因参数化 signing true/false）。
+**教训：`flyway_schema_history` 的版本清单断言不止一处，新增迁移后应全局搜 `installed_rank` 而不是只改手边那个。**
+
+**本段结果**：全量 `mvn -o verify` → **BUILD SUCCESS，757 项全绿**
+（protocol 19 / core 352 / api 103 / app 283；core 由 G 段 346 增至 352 =
+`ExerciseLifecycleTypesTest` 5 条 + `ExerciseLogRepositoryIT` 新增 1 条）。
+`t_exercise` 无数据迁移动作（三列均可空），**未清库、未删卷、未改既有账号**。
+
+**本段未做（属 LIFE 后续）**：`ExerciseLifecycleService`、`ExerciseLivenessRecover`（`ApplicationRunner`，`@Order(10)`）、
+`ExerciseHeartbeatTask`（`@Scheduled`）、`scds.instance-id` 与恢复门禁、
+心跳/按原因收尾/按场次清理残留指令的仓储方法、`Exercise` 领域与 API DTO 的 `endReason`、
+`ExerciseController` 14 个 501 端点接线、`ApiExceptionHandler` 补登记
+`EXERCISE_NOT_RUNNING`(409) / `EXERCISE_PLAN_NOT_FOUND`(404) / `EXERCISE_ROSTER_EMPTY`(400)。
+LIFE 的 PLAN / STATE / 硬件三项前置亦均未就绪（后两者仍为 501，`scds-gateway` 尚无 Java 源码）。
+
+**提交与推送**：本段落地 2 个本地提交（`4933e4a` + 本次决策回写提交），`main` 领先 `origin/main` **11 个提交**；
+推送失败于 `RPC failed; curl 55 Send failure: Connection was reset`（EXIT=1），**远端未更新**。
 
 
