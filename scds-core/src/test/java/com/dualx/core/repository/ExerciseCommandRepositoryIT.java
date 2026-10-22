@@ -40,6 +40,13 @@ class ExerciseCommandRepositoryIT {
         return commands.findPending(10).getFirst().id();
     }
 
+    /** 某场次的 PENDING 行（按入队时间升序）。全局的 {@link #findPending(int)} 需先按场次筛出。 */
+    private List<ExerciseCommand> pendingOf(UUID exerciseId) {
+        return commands.findPending(10).stream()
+                .filter(c -> c.exerciseId().equals(exerciseId))
+                .toList();
+    }
+
     @Test
     void enqueue_andFindById_roundTripsAllColumns() {
         UUID exerciseId = UuidV7.generate();
@@ -196,5 +203,76 @@ class ExerciseCommandRepositoryIT {
         // PENDING（等重连）与 SENT（等回执）都必须留存
         assertThat(commands.findPending(10)).extracting(ExerciseCommand::vestNum).containsExactly(1004);
         assertThat(commands.countByState(ExerciseCommandState.SENT)).isEqualTo(1);
+    }
+
+    @Test
+    void findResidualByExerciseId_returnsOnlyInFlightOfThatExerciseInIdOrder() {
+        UUID busy = UuidV7.generate();
+        UUID other = UuidV7.generate();
+        commands.enqueue(queued(busy, 1001, "DIE", QUEUED_1));
+        commands.enqueue(queued(busy, 1002, "DIE", QUEUED_2));
+        commands.enqueue(queued(busy, 1003, "DIE", QUEUED_3));
+        commands.enqueue(queued(busy, 1004, "DIE", QUEUED_4));
+        commands.enqueue(queued(other, 2001, "DIE", QUEUED_1));
+
+        List<ExerciseCommand> rows = pendingOf(busy);
+        long pending = rows.get(0).id();
+        long sent = rows.get(1).id();
+        long acked = rows.get(2).id();
+        long failed = rows.get(3).id();
+        commands.markSent(sent, SENT_AT, "00");
+        commands.markSent(acked, SENT_AT, "00");
+        commands.markAcked(acked, DONE_AT);
+        commands.markFinished(failed, ExerciseCommandState.FAILED, DONE_AT, "链路异常");
+
+        // 只回本场次的在途行；ACKED（已拿到回执）与 FAILED 都不算残留
+        assertThat(commands.findResidualByExerciseId(busy))
+                .extracting(ExerciseCommand::id).containsExactly(pending, sent);
+        assertThat(commands.findResidualByExerciseId(other))
+                .extracting(ExerciseCommand::vestNum).containsExactly(2001);
+    }
+
+    @Test
+    void markExpiredByExerciseId_expiresInFlightButKeepsAcked() {
+        UUID busy = UuidV7.generate();
+        UUID other = UuidV7.generate();
+        commands.enqueue(queued(busy, 1001, "DIE", QUEUED_1));
+        commands.enqueue(queued(busy, 1002, "DIE", QUEUED_2));
+        commands.enqueue(queued(busy, 1003, "DIE", QUEUED_3));
+        commands.enqueue(queued(other, 2001, "DIE", QUEUED_1));
+
+        List<ExerciseCommand> rows = pendingOf(busy);
+        long pending = rows.get(0).id();
+        long sent = rows.get(1).id();
+        long acked = rows.get(2).id();
+        commands.markSent(sent, SENT_AT, "00");
+        commands.markSent(acked, SENT_AT, "00");
+        commands.markAcked(acked, DONE_AT);
+        long otherPending = pendingOf(other).getFirst().id();
+
+        assertThat(commands.markExpiredByExerciseId(busy, DONE_AT, "INSTANCE_RESTART")).isEqualTo(2);
+
+        assertThat(commands.findById(pending).orElseThrow().state()).isEqualTo(ExerciseCommandState.EXPIRED);
+        assertThat(commands.findById(sent).orElseThrow().state()).isEqualTo(ExerciseCommandState.EXPIRED);
+        assertThat(commands.findById(sent).orElseThrow().failReason()).isEqualTo("INSTANCE_RESTART");
+        assertThat(commands.findById(sent).orElseThrow().finishedAt()).isEqualTo(DONE_AT);
+        // 那次下发其实成功了，作废它会抹掉事实
+        assertThat(commands.findById(acked).orElseThrow().state()).isEqualTo(ExerciseCommandState.ACKED);
+        assertThat(commands.findById(otherPending).orElseThrow().state()).isEqualTo(ExerciseCommandState.PENDING);
+    }
+
+    @Test
+    void deleteByExerciseId_removesInFlightRowsThatGlobalCleanupLeavesBehind() {
+        UUID busy = UuidV7.generate();
+        UUID other = UuidV7.generate();
+        commands.enqueue(queued(busy, 1001, "DIE", QUEUED_1));
+        commands.enqueue(queued(other, 2001, "DIE", QUEUED_2));
+
+        // 全局清理只动终态，重启残留的 PENDING 正是它故意留下的
+        assertThat(commands.deleteFinished()).isZero();
+        assertThat(commands.deleteByExerciseId(busy)).isEqualTo(1);
+
+        assertThat(commands.findResidualByExerciseId(busy)).isEmpty();
+        assertThat(commands.findResidualByExerciseId(other)).hasSize(1);
     }
 }

@@ -151,6 +151,64 @@ public class ExerciseCommandRepository {
                 .update();
     }
 
+    /**
+     * 某场演习的**在途**指令（PENDING / SENT），按 id 升序。
+     *
+     * <p>实例重启后的收尾按「先读、再存证、再作废、再删除」的顺序走，读取必须限定到本场次——
+     * 与 {@link #findPending(int)} 的全局口径不同，那是派发线程「有什么发什么」的视角。
+     * 按 id 升序是为了让存证日志里的行序可复现，排障时不会每次都不一样。
+     */
+    public List<ExerciseCommand> findResidualByExerciseId(UUID exerciseId) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM t_exercise_command"
+                        + " WHERE exercise_id = :exerciseId AND state IN (:pending, :sent) ORDER BY id")
+                .param("exerciseId", exerciseId.toString())
+                .param("pending", ExerciseCommandState.PENDING.name())
+                .param("sent", ExerciseCommandState.SENT.name())
+                .query(ExerciseCommandRepository::map)
+                .list();
+    }
+
+    /**
+     * 把某场演习的在途指令整体作废（PENDING / SENT → EXPIRED）。
+     *
+     * <p>守卫 {@code state IN (PENDING, SENT)} 与逐条 {@link #markFinished} 同义：已拿到回执的 ACKED
+     * 不会被重启收尾改写——那次下发其实成功了，作废它会抹掉事实。
+     *
+     * @return 影响行数，即被作废的在途指令数
+     */
+    public int markExpiredByExerciseId(UUID exerciseId, Instant finishedAt, String failReason) {
+        return jdbc.sql("""
+                        UPDATE t_exercise_command
+                           SET state = :expired, finished_at = :finishedAt, fail_reason = :failReason
+                         WHERE exercise_id = :exerciseId AND state IN (:pending, :sent)
+                        """)
+                .param("expired", ExerciseCommandState.EXPIRED.name())
+                .param("finishedAt", SqlTime.toDb(finishedAt))
+                .param("failReason", failReason)
+                .param("exerciseId", exerciseId.toString())
+                .param("pending", ExerciseCommandState.PENDING.name())
+                .param("sent", ExerciseCommandState.SENT.name())
+                .update();
+    }
+
+    /**
+     * 删除某场演习的全部指令行（含终态）。
+     *
+     * <p>刻意不复用无场次条件的 {@link #deleteFinished()}：那个是「此刻的队列里没有终态行」的日常清理，
+     * 而这里是**按场次收尾**——重启后残留的 PENDING / SENT 正是 {@code deleteFinished} 故意留下的，
+     * 用全局方法根本删不掉它们。
+     *
+     * <p>调用方必须**先完成存证**（把指令 ID、类型、马甲、原状态、下行原文写入
+     * {@code t_exercise_log}）再调用本方法，且两者同一事务：删掉之后这些字节就只剩日志里那一份了。
+     *
+     * @return 影响行数
+     */
+    public int deleteByExerciseId(UUID exerciseId) {
+        return jdbc.sql("DELETE FROM t_exercise_command WHERE exercise_id = :exerciseId")
+                .param("exerciseId", exerciseId.toString())
+                .update();
+    }
+
     public long countByState(ExerciseCommandState state) {
         return jdbc.sql("SELECT COUNT(*) FROM t_exercise_command WHERE state = :state")
                 .param("state", state.name())
