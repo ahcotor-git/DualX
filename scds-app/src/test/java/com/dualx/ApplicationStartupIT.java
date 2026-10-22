@@ -156,7 +156,7 @@ class ApplicationStartupIT {
             context.getBean(Flyway.class).validate();
             assertThat(jdbc.sql("SELECT version FROM flyway_schema_history "
                     + "WHERE success=1 ORDER BY installed_rank").query(String.class).list())
-                    .containsExactly("1", "2", "3", "4", "5", "6", "7", "9");
+                    .containsExactly("1", "2", "3", "4", "5", "6", "7", "9", "10");
 
             TokenSigner signer = context.getBean(TokenSigner.class);
             JwtDecoder decoder = context.getBean(JwtDecoder.class);

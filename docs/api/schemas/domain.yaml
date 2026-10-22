@@ -266,6 +266,13 @@ Exercise:
       type: integer
       format: int32
       description: 心跳在 5000ms 窗口内的马甲数；无演习进行中时缺席
+    endReason:
+      type: [string, 'null']
+      enum: [NORMAL, CRASH_RECOVERED]
+      description: |
+        本场结束的原因：`NORMAL` 有人主动停演；`CRASH_RECOVERED` 进程异常退出后由启动自愈补写收尾
+        （此时 `endedAt` 晚于实际中断时刻，是「发现时刻」而非「中断时刻」）。
+        进行中为 null / 缺席。前端应据此把异常中断的场次打上标签——现场数据仍完整保留，不可隐藏。
 
 StartExerciseRequest:
   type: object

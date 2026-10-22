@@ -381,6 +381,12 @@ exerciseCurrent:
                 replayId:
                   type: [string, 'null']
                   description: 复盘记录 ID，可用于立即跳转复盘
+                endReason:
+                  type: string
+                  enum: [NORMAL, CRASH_RECOVERED]
+                  description: |
+                    本场结束原因。走本端点停演恒为 `NORMAL`；`CRASH_RECOVERED` 只会出现在
+                    启动自愈补写的场次里（其终止时刻是进程重启后的发现时刻）。
       '401':
         $ref: '../schemas/common.yaml#/Unauthorized'
       '403':

@@ -1,8 +1,8 @@
 package com.dualx.core.repository;
 
 import com.dualx.core.domain.ExerciseLogEntry;
+import com.dualx.core.domain.ExerciseLogType;
 import com.dualx.core.support.SqlTime;
-import com.dualx.protocol.LogType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -93,7 +93,7 @@ public class ExerciseLogRepository {
                 rs.getLong("seq"),
                 UUID.fromString(rs.getString("exercise_id")),
                 SqlTime.fromDb(rs.getObject("at", LocalDateTime.class)),
-                LogType.valueOf(rs.getString("log_type")),
+                ExerciseLogType.valueOf(rs.getString("log_type")),
                 rs.getObject("vest_num", Integer.class),
                 rs.getString("operator_name"),
                 rs.getString("detail"),

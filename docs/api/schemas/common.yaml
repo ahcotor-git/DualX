@@ -211,8 +211,14 @@ HitPart:
 
 LogType:
   type: string
-  description: 演习日志类型（对应 scds-protocol 的 `LogType`）
-  enum: [START_BATTLE, SHOT, DIE, LIVE, INJURE, RELOAD]
+  description: |
+    演习日志条目类型。
+
+    前 6 个取值对应 `scds-protocol` 的协议帧 `LogType`（带字节 code，**冻结**，不得增删）；
+    `SYSTEM` 是服务端自造的系统事件（如实例重启后自愈收尾的残留指令存证），
+    **不对应任何协议帧**，因此没有 `x-codes` 条目。客户端遇到 `SYSTEM` 应按系统提示样式展示，
+    不可假设其必有 `vestNum` 或 `downlinkHex`。
+  enum: [START_BATTLE, SHOT, DIE, LIVE, INJURE, RELOAD, SYSTEM]
   x-codes:
     START_BATTLE: 0
     SHOT: 1

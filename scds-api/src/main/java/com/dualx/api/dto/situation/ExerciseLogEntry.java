@@ -1,11 +1,15 @@
 package com.dualx.api.dto.situation;
 
-import com.dualx.protocol.LogType;
+import com.dualx.core.domain.ExerciseLogType;
 
 import java.time.Instant;
 
 /**
  * 演习日志流水（契约 situation.yaml → {@code ExerciseLogEntry}），指挥台右侧滚动日志。
+ *
+ * <p>{@code type} 用 {@link ExerciseLogType}（比协议帧类型多一个 {@code SYSTEM}），
+ * 与契约 {@code common.yaml → LogType} 的取值集合一致：自愈收尾写的那条系统存证也要能展示给
+ * 操作员，用协议枚举就装不下它。协议上报的条目仍由 {@code ExerciseLogType.of} 转换而来。
  *
  * @param seq         日志序号，客户端以其做增量拉取（sinceSeq）
  * @param at          记录时刻
@@ -18,7 +22,7 @@ import java.time.Instant;
 public record ExerciseLogEntry(
         long seq,
         Instant at,
-        LogType type,
+        ExerciseLogType type,
         Integer vestNum,
         String operator,
         String detail,
