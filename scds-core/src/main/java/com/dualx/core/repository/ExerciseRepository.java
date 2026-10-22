@@ -2,6 +2,7 @@ package com.dualx.core.repository;
 
 import com.dualx.core.domain.BattleMode;
 import com.dualx.core.domain.Exercise;
+import com.dualx.core.domain.ExerciseEndReason;
 import com.dualx.core.support.PageRequest;
 import com.dualx.core.support.SqlTime;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -106,23 +107,71 @@ public class ExerciseRepository {
     }
 
     /**
-     * 停演：置 {@code ended_at} 并冻结结局统计。
+     * 停演：置 {@code ended_at}、冻结结局统计并记下结束原因。
      *
      * <p>守卫 {@code ended_at IS NULL} 一举两得：重复停演幂等返回 0；并发停演只有一个赢家。
      * 若换成「先查是否进行中、再更新」，两个请求之间就有竞态窗口。
      *
+     * <p>正常停演与启动自愈的收尾**必须共用本方法**（后者传
+     * {@link ExerciseEndReason#CRASH_RECOVERED}），否则两套冻结逻辑会各自漂移。
+     *
+     * @param reason 结束原因。调用方须显式给出——留默认值等于让「异常中断」悄悄记成「正常停演」
      * @return 影响行数。1 = 本次停演生效；0 = 场次不存在或已结束
      */
-    public int markEnded(UUID id, Instant endedAt, int hitCount, int deadCount) {
+    public int markEnded(UUID id, Instant endedAt, int hitCount, int deadCount, ExerciseEndReason reason) {
         return jdbc.sql("""
                         UPDATE t_exercise
-                           SET ended_at = :endedAt, hit_count = :hitCount, dead_count = :deadCount
+                           SET ended_at = :endedAt, hit_count = :hitCount, dead_count = :deadCount,
+                               end_reason = :endReason
                          WHERE id = :id AND ended_at IS NULL
                         """)
                 .param("endedAt", SqlTime.toDb(endedAt))
                 .param("hitCount", hitCount)
                 .param("deadCount", deadCount)
+                .param("endReason", reason.name())
                 .param("id", id.toString())
+                .update();
+    }
+
+    /**
+     * 占用本场运行权并落下首个心跳（开演时调用）。
+     *
+     * <p>{@code owner_instance} 是「这行还有没有人在管」的唯一凭据，与
+     * {@code uk_exercise_running}（至多一场）正交：后者管不住进程崩了却没写 {@code ended_at} 的行。
+     *
+     * <p>同一实例重复调用是幂等的（只是刷新心跳）；跨实例抢同一行也会「成功」，
+     * 因为此时应当由**启动自愈**先收尾旧场次，而不是靠这里静默拒绝——
+     * 静默拒绝只会让两个实例都以为自己持权。
+     *
+     * @return 影响行数。0 = 场次不存在或已结束，调用方应视为异常（刚插入就查不到，说明前提已破）
+     */
+    public int claim(UUID id, String instanceId, Instant at) {
+        return jdbc.sql("""
+                        UPDATE t_exercise
+                           SET owner_instance = :ownerInstance, heartbeat_at = :heartbeatAt
+                         WHERE id = :id AND ended_at IS NULL
+                        """)
+                .param("ownerInstance", instanceId)
+                .param("heartbeatAt", SqlTime.toDb(at))
+                .param("id", id.toString())
+                .update();
+    }
+
+    /**
+     * 续心跳。守卫带 {@code owner_instance}，不可省：少了它，一个已被自愈收尾（或已换手）的实例
+     * 仍能靠心跳把行「续活」，活跃性判定就失去意义。
+     *
+     * @return 影响行数。0 = 这已不是本实例进行中的场次
+     */
+    public int heartbeat(UUID id, String instanceId, Instant at) {
+        return jdbc.sql("""
+                        UPDATE t_exercise
+                           SET heartbeat_at = :heartbeatAt
+                         WHERE id = :id AND ended_at IS NULL AND owner_instance = :ownerInstance
+                        """)
+                .param("heartbeatAt", SqlTime.toDb(at))
+                .param("id", id.toString())
+                .param("ownerInstance", instanceId)
                 .update();
     }
 

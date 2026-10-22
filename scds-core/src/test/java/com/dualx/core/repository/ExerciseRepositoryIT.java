@@ -2,15 +2,19 @@ package com.dualx.core.repository;
 
 import com.dualx.core.domain.BattleMode;
 import com.dualx.core.domain.Exercise;
+import com.dualx.core.domain.ExerciseEndReason;
 import com.dualx.core.support.PageRequest;
+import com.dualx.core.support.SqlTime;
 import com.dualx.core.support.UuidV7;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -23,6 +27,9 @@ class ExerciseRepositoryIT {
 
     @Autowired
     private ExerciseRepository exercises;
+
+    @Autowired
+    private JdbcClient jdbc;
 
     private static final Instant START = Instant.parse("2026-10-20T08:00:00.000Z");
     private static final Instant END_1 = Instant.parse("2026-10-20T09:00:00.000Z");
@@ -86,7 +93,7 @@ class ExerciseRepositoryIT {
         UUID first = UuidV7.generate();
         exercises.insert(new Exercise(first, UuidV7.generate(), "it_ex_上一场", null, BattleMode.TRAIN,
                 START, null, 4, 0, 0, null, null));
-        assertThat(exercises.markEnded(first, END_1, 0, 0)).isEqualTo(1);
+        assertThat(exercises.markEnded(first, END_1, 0, 0, ExerciseEndReason.NORMAL)).isEqualTo(1);
 
         UUID second = UuidV7.generate();
         exercises.insert(new Exercise(second, UuidV7.generate(), "it_ex_下一场", null, BattleMode.TRAIN,
@@ -101,7 +108,7 @@ class ExerciseRepositoryIT {
         exercises.insert(new Exercise(id, UuidV7.generate(), "it_ex_冻结", null, BattleMode.TRAIN,
                 START, null, 6, 0, 0, null, null));
 
-        assertThat(exercises.markEnded(id, END_2, 9, 3)).isEqualTo(1);
+        assertThat(exercises.markEnded(id, END_2, 9, 3, ExerciseEndReason.NORMAL)).isEqualTo(1);
 
         Exercise ended = exercises.findById(id).orElseThrow();
         assertThat(ended.endedAt()).isEqualTo(END_2);
@@ -117,17 +124,17 @@ class ExerciseRepositoryIT {
         UUID id = UuidV7.generate();
         exercises.insert(new Exercise(id, UuidV7.generate(), "it_ex_重复停演", null, BattleMode.TRAIN,
                 START, null, 2, 0, 0, null, null));
-        assertThat(exercises.markEnded(id, END_1, 1, 1)).isEqualTo(1);
+        assertThat(exercises.markEnded(id, END_1, 1, 1, ExerciseEndReason.NORMAL)).isEqualTo(1);
 
         // 守卫 ended_at IS NULL 使重复停演幂等
-        assertThat(exercises.markEnded(id, END_2, 99, 99)).isZero();
+        assertThat(exercises.markEnded(id, END_2, 99, 99, ExerciseEndReason.CRASH_RECOVERED)).isZero();
         assertThat(exercises.findById(id).orElseThrow().endedAt()).isEqualTo(END_1);
         assertThat(exercises.findById(id).orElseThrow().hitCount()).isEqualTo(1);
     }
 
     @Test
     void markEnded_unknownId_affectsNoRow() {
-        assertThat(exercises.markEnded(UuidV7.generate(), END_1, 0, 0)).isZero();
+        assertThat(exercises.markEnded(UuidV7.generate(), END_1, 0, 0, ExerciseEndReason.NORMAL)).isZero();
     }
 
     @Test
@@ -185,12 +192,90 @@ class ExerciseRepositoryIT {
         assertThat(exercises.findEnded(null, null, null, PageRequest.of(3, 2))).isEmpty();
     }
 
+    /**
+     * 结束原因记在 {@code end_reason} 上。领域 {@code Exercise} 暂未映射该列，
+     * 故此处直接读列——本用例要保的正是「库里的值对不对」，与 Java 侧是否已映射无关。
+     */
+    @Test
+    void markEnded_recordsTheReasonSoReplayListCanFlagAbnormalEnds() {
+        UUID normal = ended("it_ex_正常停演", START, END_1);
+        UUID crashed = UuidV7.generate();
+        exercises.insert(new Exercise(crashed, UuidV7.generate(), "it_ex_异常中断", null, BattleMode.TRAIN,
+                START, null, 2, 0, 0, null, null));
+        assertThat(exercises.markEnded(crashed, END_2, 0, 0, ExerciseEndReason.CRASH_RECOVERED)).isEqualTo(1);
+
+        assertThat(endReasonOf(normal)).isEqualTo("NORMAL");
+        assertThat(endReasonOf(crashed)).isEqualTo("CRASH_RECOVERED");
+    }
+
+    @Test
+    void claim_recordsOwnerAndFirstHeartbeat() {
+        UUID id = UuidV7.generate();
+        exercises.insert(new Exercise(id, UuidV7.generate(), "it_ex_占用", null, BattleMode.TRAIN,
+                START, null, 4, 0, 0, null, null));
+
+        assertThat(exercises.claim(id, "instance-a", START)).isEqualTo(1);
+
+        assertThat(ownerOf(id)).isEqualTo("instance-a");
+        assertThat(heartbeatOf(id)).isEqualTo(START);
+    }
+
+    @Test
+    void claim_whenAlreadyEnded_affectsNoRow() {
+        UUID id = ended("it_ex_已结束不可占用", START, END_1);
+
+        // 已结束的行不该再被谁认领为「我的进行中场次」
+        assertThat(exercises.claim(id, "instance-a", END_2)).isZero();
+        assertThat(ownerOf(id)).isNull();
+    }
+
+    @Test
+    void heartbeat_advancesOnlyForTheOwningInstance() {
+        UUID id = UuidV7.generate();
+        exercises.insert(new Exercise(id, UuidV7.generate(), "it_ex_心跳", null, BattleMode.TRAIN,
+                START, null, 4, 0, 0, null, null));
+        exercises.claim(id, "instance-a", START);
+
+        assertThat(exercises.heartbeat(id, "instance-b", END_1)).isZero();
+        assertThat(heartbeatOf(id)).isEqualTo(START);
+
+        assertThat(exercises.heartbeat(id, "instance-a", END_1)).isEqualTo(1);
+        assertThat(heartbeatOf(id)).isEqualTo(END_1);
+    }
+
+    @Test
+    void heartbeat_afterEnded_affectsNoRow() {
+        UUID id = ended("it_ex_收尾后不再续心跳", START, END_1);
+        exercises.claim(id, "instance-a", START);
+
+        // claim 对已结束的行本来就是 0，故 owner 为空；心跳同样不该续上
+        assertThat(exercises.heartbeat(id, "instance-a", END_2)).isZero();
+        assertThat(heartbeatOf(id)).isNull();
+    }
+
+    private String endReasonOf(UUID id) {
+        return jdbc.sql("SELECT end_reason FROM t_exercise WHERE id = :id").param("id", id.toString())
+                .query(String.class).optional().orElse(null);
+    }
+
+    private String ownerOf(UUID id) {
+        return jdbc.sql("SELECT owner_instance FROM t_exercise WHERE id = :id").param("id", id.toString())
+                .query(String.class).optional().orElse(null);
+    }
+
+    private Instant heartbeatOf(UUID id) {
+        return jdbc.sql("SELECT heartbeat_at FROM t_exercise WHERE id = :id").param("id", id.toString())
+                .query(LocalDateTime.class).optional()
+                .map(SqlTime::fromDb)
+                .orElse(null);
+    }
+
     /** 插入一场已结束的演习（插入即停演），返回其 id。 */
     private UUID ended(String planName, Instant startedAt, Instant endedAt) {
         UUID id = UuidV7.generate();
         exercises.insert(new Exercise(id, UuidV7.generate(), planName, null, BattleMode.TRAIN,
                 startedAt, null, 3, 0, 0, null, null));
-        exercises.markEnded(id, endedAt, 0, 0);
+        exercises.markEnded(id, endedAt, 0, 0, ExerciseEndReason.NORMAL);
         return id;
     }
 }

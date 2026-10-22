@@ -3,6 +3,7 @@ package com.dualx.core.map;
 import com.dualx.core.domain.BaseMap;
 import com.dualx.core.domain.BattleMode;
 import com.dualx.core.domain.Exercise;
+import com.dualx.core.domain.ExerciseEndReason;
 import com.dualx.core.domain.MapFloor;
 import com.dualx.core.domain.MapType;
 import com.dualx.core.domain.Plan;
@@ -452,7 +453,8 @@ class MapLedgerServiceIT {
      */
     private void startRunningExercise(UUID mapId) {
         exercises.findRunning().ifPresent(running ->
-                exercises.markEnded(running.id(), Instant.now(), running.hitCount(), running.deadCount()));
+                exercises.markEnded(running.id(), Instant.now(), running.hitCount(), running.deadCount(),
+                        ExerciseEndReason.NORMAL));
         exercises.insert(new Exercise(UuidV7.generate(), UuidV7.generate(), "进行中的想定", mapId,
                 BattleMode.TRAIN, Instant.now(), null, 3, 0, 0, null, null));
     }
