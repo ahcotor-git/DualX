@@ -519,3 +519,72 @@ LIFE 的 PLAN / STATE / 硬件三项前置亦均未就绪（后两者仍为 501�
   `EXERCISE_NOT_RUNNING`(409) / `EXERCISE_PLAN_NOT_FOUND`(404) / `EXERCISE_ROSTER_EMPTY`(400)：
   被 PLAN / STATE / HW-LINK 三项前置阻塞（想定与态势仍为 501，`scds-gateway` 尚无 Java 源码）。
 
+### PLAN 分段（一）执行边界（2026-10-23，M2 想定）
+
+依据 M2 工作包 PLAN（`docs/implementation-plan.md`：想定 CRUD、编成整体替换、CSV/XLSX 模板和整文件导入，
+前置 LEDGER、MAP-BASE、D04）与用户对「PLAN 想定」的裁定。本段把 `exercise.yaml` 的想定 9 个端点
+从 501 占位接到 `PlanService`，并按「每个原子任务 ≤3 文件」分成 6 段推进。
+
+| 段 | 内容 |
+|---|---|
+| T1 | `ApiErrorCode` 新增 `PLAN_NOT_FOUND`(404) / `PLAN_IN_USE`(409)；`ApiExceptionHandler.statusOf` 逐项登记；`common.yaml` 的 `Problem.code` 补两行 |
+| T2 | `PlanRosterRepository.countByPlanIds`（成批补齐 `Plan.rosterCount`，避免逐行 COUNT 的 N+1；空入参提前返回，`IN ()` 是语法错） |
+| T3 | `PlanService`（list/get/create/update/delete/roster/replaceRoster + 三条编成校验）与 `PlanServiceIT`（17 项） |
+| T4 | `PlanRosterSheet`（自研最小 XLSX + CSV 编解码）与 `PlanImportIT`（16 项）；`PlanService` 追加 `downloadTemplate`/`importPlan`/`planName` |
+| T5 | `ExerciseController` 想定 9 端点接线（4 个当前演习端点仍为 501） |
+| T6 | `PlanHttpIT`（2 项端到端）与本文档回写 |
+
+**1. 模板口径（用户裁定）**：**中文表头 + 示例行**。表头 `马甲编号/姓名/队伍/血量/弹夹1/弹夹2/轮询模式`；
+必需列只有 `马甲编号` 与 `队伍`，其余整列可缺席（缺席即取契约默认 100/30/30/AUTO）。队伍与轮询模式
+中英文都认（`RED/红/红队`、`AUTO/自动`）。模板第 2 行的示例行，导入时**只跳过第一个数据行且必须整行逐格全等**——
+操作员删不删示例行都能导入，而后面真有人填出一模一样的内容也不会被静默吞掉。CSV 写出带 UTF-8 BOM：
+不带 BOM 的中文表头在 Windows 版 Excel 里按 GBK 打开是乱码，而这份模板恰恰是给 Excel 填的。
+
+**2. 导入口径（用户裁定）**：**只导编成，其余用默认值**——`battleMode`=TRAIN、`mapId`/`remark` 留空，
+导入后在编辑页补；想定名优先用表单 `name`，没给才退回文件名（去路径、去扩展名）。
+
+**3. 不引新依赖**：XLSX 用 JDK 自带 `java.util.zip` + `javax.xml.stream` 手写（XLSX 就是一个装着 XML 的 zip），
+写用 `inlineStr`、读兼容 `sharedStrings`（操作员用 Excel 另存一次就会改成共享表形式）；CSV 手写 RFC 4180 子集。
+不引 POI / commons-csv。**M5 的 EXPORT 复用同一取向**。
+
+**4. 两处只有实现后才看得见的坑**
+- **格式按字节嗅探，不看扩展名与请求 `Content-Type`**：`PK\x03\x04` 即 XLSX，含 NUL 即二进制（旧版 `.xls`），
+  其余按 CSV 文本解。`PlanHttpIT` 的分片刻意声明 `application/octet-stream`。
+- **解析器必须禁 DTD 与外部实体**（`SUPPORT_DTD=false` / `IS_SUPPORTING_EXTERNAL_ENTITIES=false`）：
+  上传的文件来自外部，不禁掉就等于给「模板」开了一条读文件或打内网的路。
+
+**5. 契约的「不产生部分写入」靠事务边界保证**：解析 → 三条校验 → `plans.insert` → `replaceByPlanId`
+全在一个 `@Transactional` 内。校验排在写之前，才不会出现「删了旧的、新的没过校验」那种在现场表现为
+「编成忽然空了」的中间态。这是本段唯一加 `@Transactional` 的三处之一（另两处：删想定连带删编成、导入落库）。
+
+**6. `t_plan_roster` 无外键，一致性由应用层背书**：删除想定在同一事务内顺带清编成（否则留下指向死想定的行，
+而那张表没有任何入口能再被读到）；反向不做——不因编成存在而拒绝删除想定。
+
+**7. 接线后必须同步的两个既有骨架测试（本段实际踩到）**
+- `ApiSkeletonSmokeIT`：想定路径参数从占位串 `p1` 换成**语法合法的 UUID**。理由与底图 `MAP_ID` 同一取向——
+  接线后「拼不出来的 planId」被折叠成 404，而该测试的判据恰是「非 404」，用占位串会让已注册路由看起来像没注册。
+- `RoleWritePermissionIT`：其切片 `PermissionApplication` 排掉了 DataSource，需补 `PlanService` 替身
+  （与 `MapLedgerService` 等同一写法，一律抛占位异常）。
+
+**8. 本段结果**：全量 `mvn -o verify` → **BUILD SUCCESS，812 项全绿**
+（LIFE 段基线 777 → 本段末 812，新增 `PlanServiceIT` 17 + `PlanImportIT` 16 + `PlanHttpIT` 2 = 35）。
+未清库、未删卷、未改既有账号、未动已应用迁移（无新迁移需求）。
+`SecurityConfig` **本段未修改**——想定 / 编成的写权限规则在 D04 时已就位（POST `/api/v1/plans`、
+`/api/v1/plans/import`；PUT `/api/v1/plans/*`、`/api/v1/plans/*/roster`；DELETE `/api/v1/plans/*`）。
+
+**9. 一件必须记下的事实：代码已就绪但尚未提交**
+
+本段 6 段的改动**全部停在本地工作树**（未提交、未推送），故本文档不列提交号。落地前工作树为脏，
+清单见下一段会话的开始处。
+
+**本段未做（附理由）**：
+
+- **`PLAN_IN_USE` 的 HTTP 场景靠库层夹具铺出来**：`startExercise` 仍是 501，没有开演入口就造不出
+  「想定正在演习中」的真场景。`PlanHttpIT` 直接插一行进行中的 `t_exercise`（并在用例内收尾），
+  为的是验证新登记的 `PLAN_IN_USE` 确实折成 409 而不是落 500。**这条夹具在 `startExercise` 接线后应替换为真实调用。**
+- **当前演习 4 个端点（`getCurrentExercise` / `startExercise` / `stopExercise` / `listCurrentExerciseLogs`）
+  仍为 501**：属 LIFE 后续，需接 `ExerciseLifecycleService` 与网关下行。
+- **`Exercise.heartbeatAt` 未并入领域对象**：`ExerciseRepository.findRunningLiveness` 仍单独读，
+  理由见该方法注释（本次接线不需要它）。
+- **客户端（M6）与 STATE / HW-LINK 未开始**：PLAN 的消费方是 Windows 指挥台，属 M6。
+
