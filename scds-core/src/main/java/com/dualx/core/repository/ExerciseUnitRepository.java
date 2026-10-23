@@ -53,6 +53,22 @@ public class ExerciseUnitRepository {
                 .single();
     }
 
+    /**
+     * 终局冻结为阵亡（{@code DIE}）的人数，停演冻结 {@code t_exercise.dead_count} 用。
+     *
+     * <p>只数**已冻结的终局**，不从头绪证据（致命命中、判死指令）反推：阵亡是运行态判定，
+     * 权威来源是态势状态机；这里只负责把它的结论数一数。故崩溃自愈时（终局尚为 NULL）
+     * 本值必为 0，那是如实反映「未冻结」，不是统计错误。
+     */
+    public long countDeadByExerciseId(UUID exerciseId) {
+        return jdbc.sql("SELECT COUNT(*) FROM t_exercise_unit"
+                        + " WHERE exercise_id = :exerciseId AND final_status = :dead")
+                .param("exerciseId", exerciseId.toString())
+                .param("dead", VestStatus.DIE.name())
+                .query(Long.class)
+                .single();
+    }
+
     /** 开演时快照一行。终局列留空（final_status 为 NULL，计数为库默认 0），停演时冻结。 */
     public int insert(ExerciseUnit unit) {
         return jdbc.sql("""
