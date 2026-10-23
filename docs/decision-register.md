@@ -458,4 +458,64 @@ LIFE 的 PLAN / STATE / 硬件三项前置亦均未就绪（后两者仍为 501�
 **提交与推送**：本段落地 2 个本地提交（`4933e4a` + 本次决策回写提交），`main` 领先 `origin/main` **11 个提交**；
 推送失败于 `RPC failed; curl 55 Send failure: Connection was reset`（EXIT=1），**远端未更新**。
 
+### LIFE 分段（一）执行边界（2026-10-23，M3 收尾地基 + 启动自愈）
+
+依据 D05（`docs/design/01-exercise-liveness.md`）与用户对「LIFE 分段（演习生命周期 + 自愈）」的裁定。
+本段把「僵尸演习」从 LIFE-DDL 的**装得下**推进到**能自动收尾**，共 5 个提交：
+
+| 提交 | 内容 |
+|---|---|
+| `1e95480` | 仓储补运行权占用与活跃性：`markEnded` 记原因、`claim`、`heartbeat`（守卫带 `owner_instance`） |
+| `3571dce` | `ExerciseCommandRepository` 补按场次收尾：`findResidualByExerciseId` / `markExpiredByExerciseId` / `deleteByExerciseId` |
+| `7aa1a93` | `ExerciseLifecycleService.freezeAndClose`（冻结结局 + 作废残留 + 存证，单事务）与 `ExerciseUnitRepository.countDeadByExerciseId` |
+| `44adb97` | `ExerciseLivenessRecover`（`ApplicationRunner`，`@Order(10)`）与 `ExerciseRepository.findRunningLiveness` |
+| `677cc25` | `ExerciseHeartbeatTask`（`@Scheduled(fixedDelay=2000)`）与 `InstanceProperties`（`scds.instance-id`） |
+
+**1. `dead_count` 的口径（本段唯一的业务裁定）**
+
+崩溃时内存态已丢失，无从知道「谁是阵亡」。定为**只数态势状态机已冻结的终局**
+（`t_exercise_unit.final_status = 'DIE'`），不从致命命中或判死指令反推：阵亡是运行态判定，
+权威来源是 STATE 状态机，`freezeAndClose` 只负责把它的结论数一数。因此**崩溃自愈的场次
+`dead_count` 通常为 0**——那是如实反映「终局尚未冻结」，不是统计错误。
+正常停演与自愈**共用同一份代码**，只靠 `ExerciseEndReason` 区分，避免两套冻结口径各自漂移。
+
+**2. 收尾为什么必须是一个事务**
+
+`findPending` 是**全局**口径（不带 `exercise_id`）。若在「冻结结局」与「按场次清空残留指令」
+之间中断，那些 `PENDING`/`SENT` 会被派发给**下一场**演习的马甲。
+故顺序固定为「先读原文 → 写 SYSTEM 存证 → 标记 EXPIRED → 按场次删除」，同一事务：
+先删后记一旦失败，下行原文就永久消失。
+
+**3. 一处必须记下的实现事实：作废标记在收尾后不可观测**
+
+设计 §4.4 第 2 步要求把残留指令标记 `EXPIRED` + `fail_reason='INSTANCE_RESTART'`，
+第 3 步又要求按场次删除残留指令——两步在同一事务内连续执行，结果是**队列表里看不到 `EXPIRED` 行**，
+`fail_reason` 只是事务内的中间态，**永久证据只有 `t_exercise_log` 的 SYSTEM 记录**。
+首版 IT 把断言打在 `fail_reason` 上（`expected "INSTANCE_RESTART" but was null`），
+改为「本场次队列行数归零 + SYSTEM 日志含 `INSTANCE_RESTART` 与下行原文」。
+这不是实现偏离设计，而是设计的必然结果：队列表不保留历史，证据由日志承载。
+
+**4. 自愈规则与失败姿态**
+
+- **只要启动时发现「进行中」的行，一律收尾**，包括「就是本实例、心跳还很新」的快速重启（§4.1：态势模型、
+  链路句柄、UWB 标定上下文都只在内存里，且现场物理状态已前进，接管不可能）。
+  `graceMs` 本段未实现——按设计它只影响日志措辞与告警分级、不改变动作，日志里已带出 `heartbeat_at` 供现场对时。
+- 恢复失败**不吞异常**：启动直接失败，比「起来了却开不了演」更早被运维发现，是门禁的最强形态。
+- 心跳任务**绝不自动收尾**（§4.5）：写入失败只记 ERROR；真在跑的场次被误停的代价远大于僵尸多存活一段。
+  可观测指标待议题 05 定案，本段不引入 Micrometer 计数。
+- 无进行中场次时心跳只做一次轻量查询即返回，不写库、不空转写 IO。
+
+**5. 本段结果**：全量 `mvn -o verify` → **BUILD SUCCESS，777 项全绿**
+（LIFE-DDL 段基线 757 → 本段末 777）。`t_exercise` 无数据迁移动作，**未清库、未删卷、未改既有账号**。
+推送：`677cc25` 已成功推送，`main` 与 `origin/main` **一致（领先 0）**。
+
+**本段未做（属 LIFE 后续，附理由）**：
+
+- **恢复完成门禁**：与 `startExercise` 同批落地才成立——没有开演入口，就没有可被拒绝的动作。
+- **`Exercise` 领域与 API DTO 的 `endReason`**：契约已在 LIFE-DDL 段落补齐，但领域映射**推迟到端点接线时**：
+  当前无任何消费者（`ExerciseController` 14 个端点仍为 501），而 `Exercise` 是 record，加组件会牵动
+  4 个测试类的构造调用——提前做只是无收益的构造点改动。
+- **`ExerciseController` 14 个 501 端点接线 + `ApiExceptionHandler` 补登记**
+  `EXERCISE_NOT_RUNNING`(409) / `EXERCISE_PLAN_NOT_FOUND`(404) / `EXERCISE_ROSTER_EMPTY`(400)：
+  被 PLAN / STATE / HW-LINK 三项前置阻塞（想定与态势仍为 501，`scds-gateway` 尚无 Java 源码）。
 
