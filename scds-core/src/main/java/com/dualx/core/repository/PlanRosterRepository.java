@@ -12,7 +12,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 想定编成仓储（{@code t_plan_roster}）。{@code id} 是自增代理键，
@@ -51,6 +53,28 @@ public class PlanRosterRepository {
                 .param("planId", planId.toString())
                 .query(Long.class)
                 .single();
+    }
+
+    /**
+     * 一次取回多份想定的人数，供想定列表组装 {@code rosterCount}。
+     *
+     * <p>刻意成批：列表页逐行 {@code COUNT} 就是 N+1，而每页最多 200 行（契约
+     * {@code SizeParam}）。入参为空时不发查询，直接回空表——空 {@code IN ()} 是语法错误。
+     *
+     * @return planId → 人数；没有编成的想定**不出现在结果里**，由调用方补 0
+     */
+    public Map<UUID, Long> countByPlanIds(List<UUID> planIds) {
+        if (planIds.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.sql("SELECT plan_id, COUNT(*) AS roster_count FROM t_plan_roster"
+                        + " WHERE plan_id IN (:planIds) GROUP BY plan_id")
+                .param("planIds", planIds.stream().map(UUID::toString).toList())
+                .query((rs, rowNum) -> Map.entry(UUID.fromString(rs.getString("plan_id")),
+                        rs.getLong("roster_count")))
+                .list()
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     /** @return 影响行数，正常为 1 */

@@ -82,6 +82,27 @@ public enum ApiErrorCode {
      */
     MAP_IN_USE,
 
+    // ===== PLAN_* 想定 =====
+    /**
+     * 想定不存在（HTTP 404，契约 {@code getPlan} / {@code updatePlan} / {@code deletePlan}
+     * 与编成读写的公共前置）。
+     *
+     * <p>刻意不复用 {@link #EXERCISE_PLAN_NOT_FOUND}：那个码属开演语境（它描述的是
+     * 「开演所引用的想定查不到」这一条失败路径），而本码描述的是想定资源本身的读取失败。
+     * 两者状态同为 404，但现场处置不同——前者是「这场演习的想定被人删了」，
+     * 后者是「你点的这个想定不在」。与地图域 {@link #MAP_NOT_FOUND} 同一取向。</p>
+     */
+    PLAN_NOT_FOUND,
+    /**
+     * 该想定正在演习中，禁止修改 / 删除 / 改编成（HTTP 409，契约 {@code updatePlan} /
+     * {@code deletePlan} / {@code replaceRoster}）。
+     *
+     * <p>与 {@link #EXERCISE_ALREADY_RUNNING} 成对但不同义：后者是「开演被拒」，本码是
+     * 「想定被占着不能改」。演习运行中改想定会让 {@code t_exercise} 里的名/图快照与
+     * 想定本体不一致，现场看到的两处数据会互相打脸，因此必须拒绝而不是静默放过。</p>
+     */
+    PLAN_IN_USE,
+
     // ===== REPLAY_* 复盘 =====
     REPLAY_NOT_FOUND,
     REPLAY_EXPORT_FAILED,

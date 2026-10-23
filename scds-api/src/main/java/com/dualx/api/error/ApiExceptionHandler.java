@@ -263,6 +263,13 @@ public class ApiExceptionHandler {
             case MAP_UWB_META_INCOMPLETE -> HttpStatus.BAD_REQUEST;
             case MAP_IN_USE -> HttpStatus.CONFLICT;
 
+            // ── 想定域（M2 PLAN）────────────────────────────────────────────────
+            // 与地图域同形：想定查不到是 404；正被进行中的演习占着（改/删/改编成）是 409。
+            // 与 EXERCISE_PLAN_NOT_FOUND 分码：那个属开演语境，前端在「打开想定详情」
+            // 这一条路径上拿到的应当是 PLAN_NOT_FOUND。
+            case PLAN_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case PLAN_IN_USE -> HttpStatus.CONFLICT;
+
             // ── 受保护文件（M2 MAP-BASE，D09-②）────────────────────────────────
             // 签名错与已过期共用一个码、一个状态：客户端处置动作相同（回详情接口取新 URL）。
             // 与 AUTH_TOKEN_INVALID 的 401 分属两个信任域，文件签名失效不该要求重新登录。
