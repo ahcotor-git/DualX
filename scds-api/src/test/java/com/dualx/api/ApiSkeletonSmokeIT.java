@@ -19,6 +19,7 @@ import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.port.FileStore;
 import com.dualx.core.port.FileUrlSigner;
+import com.dualx.core.plan.PlanService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -66,6 +67,14 @@ class ApiSkeletonSmokeIT {
      * 变成同一个状态码，测试随之为已接线端点丧失鉴别力。故填一个语法合法的 UUID。</p>
      */
     private static final String MAP_ID = "018f4a2b-0000-7000-8000-000000000001";
+
+    /**
+     * 想定路由的 {@code {planId}} 取值，理由同 {@link #MAP_ID}。
+     *
+     * <p>想定 CRUD 接线后，控制器把「拼不出来的 planId」折叠成 {@code PLAN_NOT_FOUND}（404）——
+     * 与本测试「非 404」的判据正好撞车（占位串 {@code p1} 会让已注册路由看起来像没注册）。</p>
+     */
+    private static final String PLAN_ID = "018f4a2b-0000-7000-8000-000000000002";
 
     @BeforeAll
     static void setUpMockMvc() {
@@ -128,10 +137,20 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 想定 / 编成 / 模板导入已接核心 PlanService：同上，替身一律抛占位异常，
+        // 使已接线的 9 个想定端点在本测试里同样表现为 501。真实链路（三条编成校验、
+        // 想定名口径、整文件导入的事务边界、演习中 409）由 PlanServiceIT / PlanImportIT
+        // 与 scds-app 的 PlanHttpIT 覆盖。
+        PlanService planService = Mockito.mock(PlanService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService),
-                        new ExerciseController(),
+                        new ExerciseController(planService),
                         new CommandController(),
                         new SituationController(),
                         new DeviceController(vestLedgerService, anchorLedgerService),
@@ -177,11 +196,11 @@ class ApiSkeletonSmokeIT {
                 route("POST", "/api/v1/plans"),
                 route("GET", "/api/v1/plans/template"),
                 route("POST", "/api/v1/plans/import"),
-                route("GET", "/api/v1/plans/p1"),
-                route("PUT", "/api/v1/plans/p1"),
-                route("DELETE", "/api/v1/plans/p1"),
-                route("GET", "/api/v1/plans/p1/roster"),
-                route("PUT", "/api/v1/plans/p1/roster"),
+                route("GET", "/api/v1/plans/" + PLAN_ID),
+                route("PUT", "/api/v1/plans/" + PLAN_ID),
+                route("DELETE", "/api/v1/plans/" + PLAN_ID),
+                route("GET", "/api/v1/plans/" + PLAN_ID + "/roster"),
+                route("PUT", "/api/v1/plans/" + PLAN_ID + "/roster"),
                 route("GET", "/api/v1/exercise/current"),
                 route("POST", "/api/v1/exercise/current"),
                 route("DELETE", "/api/v1/exercise/current"),

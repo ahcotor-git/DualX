@@ -17,6 +17,7 @@ import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.port.FileUrlSigner;
+import com.dualx.core.plan.PlanService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -123,6 +124,14 @@ class RoleWritePermissionIT {
         @Bean
         MapLedgerService mapLedgerService() {
             return stub(MapLedgerService.class);
+        }
+
+        // 想定 / 编成 / 模板导入已接核心 PlanService（要四个仓储，各自要 JdbcClient），
+        // 本切片已排掉 DataSource。放行的想定请求因此稳定返回 501；
+        // 路径参数仍走控制器自己的 UUID 解析，填不合法的 id 会得到 404——都不是 401/403。
+        @Bean
+        PlanService planService() {
+            return stub(PlanService.class);
         }
 
         // 底图详情要签 imageUrl。签名端口不碰数据库，本可给真实实现，但它依赖
