@@ -60,6 +60,29 @@ public class ExerciseRepository {
     }
 
     /**
+     * 进行中场次的活跃性信息，供启动自愈与心跳诊断使用。
+     *
+     * <p>为什么不复用 {@link #findRunning()}：领域 {@link Exercise} 尚未映射
+     * {@code owner_instance} 与 {@code heartbeat_at}，而自愈的告警日志要记下
+     * 「中断前是谁在跑、最后一次活着是什么时候」，现场才能追溯中断时刻。
+     * 这两列并入领域对象后，本方法可退回为对 {@code Exercise} 的取值。
+     *
+     * <p>两个字段都可为 {@code null}：V10 之前留下的行、以及开演后尚未 {@link #claim} 的行即是如此。
+     */
+    public Optional<RunningLiveness> findRunningLiveness() {
+        return jdbc.sql("SELECT id, owner_instance, heartbeat_at FROM t_exercise WHERE ended_at IS NULL")
+                .query((rs, rowNum) -> new RunningLiveness(
+                        UUID.fromString(rs.getString("id")),
+                        rs.getString("owner_instance"),
+                        SqlTime.fromDb(rs.getObject("heartbeat_at", LocalDateTime.class))))
+                .optional();
+    }
+
+    /** 进行中场次的实例归属与最后一次心跳；列可空，故两值都可能为 {@code null}。 */
+    public record RunningLiveness(UUID exerciseId, String ownerInstance, Instant heartbeatAt) {
+    }
+
+    /**
      * 已结束的场次，即复盘列表。
      *
      * @param keyword 想定名快照的模糊匹配，null 表示不过滤
