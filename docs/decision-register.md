@@ -118,7 +118,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | M3 LIFE-DDL（V10 迁移 + 领域与契约同步） | 用户当次选择“LIFE 分段（演习生命周期 + 自愈）”，随后取消 LIFE 范围追问，视为按 D05 推荐口径推进。**本段只做 DDL 与类型边界**：V10 迁移、`ExerciseEndReason`、领域 `ExerciseLogType`（含 `SYSTEM`）、日志读写的枚举切换、契约补 `SYSTEM` 与 `endReason`。服务与自愈流程**未开始**。全量 `mvn -o verify` 全绿（**757 项**：protocol 19 / core 352 / api 103 / app 283）。**已落地 2 个本地提交**（`4933e4a` 迁移+领域+契约、本次决策回写提交），叠加 G 段后 `main` 领先 `origin/main` **11 个提交**；推送**因网络失败**（`RPC failed; curl 55 Send failure: Connection was reset`，EXIT=1），**远端未更新**，不得视为已入远端。细节见下「LIFE-DDL 执行边界」 |
 
 | 提交/推送 M3 HW-LINK（H0~H7） | 用户当次授权“提交推送并继续”。**已落地 3 个语义提交并成功推送**（`18a1358` 设计+决策回写、`c85df04` 网关实现+单测、`450794b` 端点接线+端到端 IT），`git push` 输出 `4efd272..450794b  main -> main`，工作树干净。H7 的 `HwLinkHttpIT` 5 例全通过（`Skipped: 0`），全量 `mvn test` 通过（scds-app 290 例，8 模块 BUILD SUCCESS）。细节见下「D06 / D10 执行边界」的实施进度与提交状态 |
-| D06 / D10（STATE 前置） | 2026-10-24 用户逐项裁定 4 项（见下「STATE 分段（一）执行边界」）：**做**增量环形窗口（不做 epoch/跨代）；5000ms 在线判定用**定时扫描产生跳变**；事件处理用**单消费者事件循环**；无硬件验证**复用 `scds.gateway.mode=simulator`**。**仅裁定口径与分段方案，S1~S8 均未开始** |
+| D06 / D10（STATE 前置） | 2026-10-24 用户逐项裁定 4 项（见下「STATE 分段（一）执行边界」）：**做**增量环形窗口（不做 epoch/跨代）；5000ms 在线判定用**定时扫描产生跳变**；事件处理用**单消费者事件循环**；无硬件验证**复用 `scds.gateway.mode=simulator`**。**仅裁定口径与分段方案，S1~S8 均未开始**（后续进度见下「STATE 分段（一）执行边界」的实施进度：现 S1~S6 已完成） |
 
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
@@ -712,7 +712,7 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 **本段未做**：`watchSituation`（WS）与 `SituationPushPort`/`LinkStatusPushPort`（PUSH-MODEL/PUSH-WS，依赖 D07/D08）；
 `epoch`/跨代恢复（D08）；COMMAND 指令状态机；CALIBRATION；REPLAY；EXPORT。
 
-**实施进度（2026-10-24）**：**S1~S5 已完成，S4/S5 零件已接线（S4b）**。
+**实施进度（2026-10-24）**：**S1~S6 已完成，其中 S4/S5 零件已接线（S4b）、S6 编排已落地**。
 
 - **S1（S1a~S1c 载荷下沉）**：`CombatRole`/`UnitState` 已搬入 `com.dualx.core.push`，api 旧类已删，
   引用方（`SituationEnvelope`/`SituationController`/`DeviceSelf`）已改指向（`241383d`）。
@@ -795,8 +795,25 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 5. **收尾先落库**：`endExercise` 在清内存态前调 `trackWriter.flush()`，末段轨迹不丢在缓冲里；
    与 `freezeOutcome` 的先后（先写终局再 flush）属 S6 的编排，本段只保证「清内存态前先落库」。
 
-**仍未闭合**：`SituationStateService` 还没有 Spring 装配点（三个零件与全部 `scds.state.*` 参数**没有生产者**），
-故本段只在 core 单测内证明接线正确；装配绑定随 S6/S8 落地。未装配前**不得宣称轨迹与增量已在生产路径上产出**。
+**S6（与 LIFE 衔接，已完成）**：`SituationSessionBinder` 已落地（`scds-core`），把「开演装载编成」与
+「停演写终局」两个跨包动作收在一处，使 `SituationStateService` 保持纯状态机：
 
-S6~S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
+1. **开演**：`onExerciseStarted(Exercise)` 按 `exercise.planId()` 读**想定编成**后调 `beginExercise`。
+   ⚠ **与设计 06 §4.6 原话「从 `t_exercise_unit` 读编成」不一致**：`t_exercise_unit` 是终局台账，
+   只有 `vest_num/name/team/final_status/...`，**没有**初始 `hp/ammo/mode` 三列；而 `beginExercise` 要的正是
+   带这三项的 `RosterEntry`（= `t_plan_roster` 的领域记录）。两份编成在开演时同源（演习快照由 `startExercise`
+   从想定编成而来），故取**字段更全的一方**读，**不新造默认值**。该偏离以代码类注释与本节为准，留待回写 §4.6。
+2. **停演**：`onExerciseStopping(UUID)` 先校验请求 id 与内存态装载的演习一致（无演习、或 id 不匹配时**不写库**
+   并 warn），再 `endExercise()`（内部 flush 轨迹）→ 逐个 `exerciseUnits.freezeOutcome(...)`。**必须在 LIFE 的
+   `freezeAndClose` 之前调用**：后者读的正是 `t_exercise_unit.final_status`（`countDeadByExerciseId`），
+   顺序反了会把阵亡记成 0。
+3. **flush 位置**：设计 06 §4.6 写「先写终局、再 flush 轨迹」，本实现把 flush 收进 `endExercise()`（即终局**之前**）。
+   理由是 flush 位置不影响任何读者（`freezeAndClose` 读 `t_exercise_unit` + `t_hit_event`，**不读**
+   `t_track_sample`），收进 `endExercise` 可让「停演必 flush」不依赖调用方纪律；两者仍都在 `freezeAndClose` 之前完成。
+
+**仍未闭合**：`SituationStateService` 与 `SituationSessionBinder` 都还没有 Spring 装配点（三个零件、
+`SituationSessionBinder` 与全部 `scds.state.*` 参数**没有生产者**），故 S4b/S6 只在 core 单测内证明接线与编排正确；
+装配绑定随 S8 落地。未装配前**不得宣称轨迹与增量已在生产路径上产出**，也不得宣称开演/停演已在生产路径上驱动态势。
+
+S7~S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
 

@@ -153,11 +153,19 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 
 ### 4.6 与 LIFE 的衔接（不含指令状态机）
 
-- **开演**：LIFE 的 `startExercise` 成功后调用 STATE 装载 —— 从 `t_exercise_unit` 读编成到内存态
-  （初始 `OFFLINE`、`position=null`、`positionSource=NONE`、`revision` 从当时值起算），记录 `startedAt` 作为 `tMs` 原点。
+- **开演**：LIFE 的 `startExercise` 成功后调用 STATE 装载 —— 按 `exercise.planId()` 从 **`t_plan_roster`**（想定编成）
+  读编成到内存态（初始 `OFFLINE`、`position=null`、`positionSource=NONE`、装载时 `revision` **归零**），
+  记录 `startedAt` 作为 `tMs` 原点。
+  > **S6 落地修正**：本节原写「从 `t_exercise_unit` 读编成」，但该表是终局台账，**没有**初始 `hp/ammo/mode` 三列，
+  > 而装载要的正是带这三项的 `RosterEntry`（即 `t_plan_roster` 的领域记录）。两份编成在开演时同源
+  > （演习快照由 `startExercise` 从想定编成而来），故改读想定编成，**不新造默认值**。
+  > 另：`revision` 依 §4.5 在装载时**归零**，非「从当时值起算」。
 - **停演**：在 LIFE 调 `freezeAndClose` **之前**，STATE 先对全体单位写一次终局
   （复用 `ExerciseUnitRepository.freezeOutcome`：存活写 `LIVE`、阵亡写 `DIE` + `dead_at` + 终值 `kills/hitsDealt`），
   **再 flush 轨迹缓冲**。顺序反了会让 `freezeAndClose` 读到 0 阵亡（它读的是库里的终局）。
+  > **S6 落地时的实现口径**：flush 收进 `endExercise()`（即写终局**之前**）——flush 位置不影响任何读者
+  > （`freezeAndClose` 读 `t_exercise_unit` + `t_hit_event`，**不读** `t_track_sample`），收进去可让
+  > 「停演必 flush」不依赖调用方纪律；两者仍都在 `freezeAndClose` 之前完成。
 - STATE **不感知**「流程/提交/补偿」这类事务语义（D11 属 LIFE / COMMAND），只提供幂等的装载/收尾入口。
 
 ### 4.7 配置项与仿真（D10 口径，未闭合声明）
@@ -197,7 +205,7 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 | **S4** | 采样判定 + 批量落库 | `scds-core` 新增 `TrackSampler`、`TrackBatchWriter`、单测 |
 | **S5** | revision 环形窗口与增量窗口 | `scds-core` 新增 `SituationRevisionLog`、单测 |
 | **S4b**（实际执行时补段） | S4/S5 接线：把采样、批量落库、环形窗口接入状态变化点与装载/收尾入口 | `scds-core` 改 `SituationStateService`、其单测 |
-| **S6** | 与 LIFE 衔接：装载编成、停演终局（顺序见 §4.6） | `scds-core` 新增 `SituationSessionBinder`、单测 |
+| **S6**（已落地） | 与 LIFE 衔接：装载编成、停演终局（顺序见 §4.6） | `scds-core` 新增 `SituationSessionBinder`、单测 |
 | **S7** | core 读侧 `SituationQuery`：全量/增量/单马甲/队伍汇总/命中列表 + 超窗语义 | `scds-core` 新增 `SituationQuery`、单测 |
 | **S8** | 端到端 IT（仿真注入帧 → 读侧断言） | `scds-app` 新增 `SituationStateIT` |
 
