@@ -13,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -118,11 +119,44 @@ public class HitEventRepository {
                 .single();
     }
 
+    /**
+     * 致死**回填**（设计 06 §4.3）：把某马甲最近一条尚未判致死的命中改成 {@code lethal = 1}。
+     *
+     * <p>{@code ff05} 不带击中强度（PROTOCOL.md §6.7 已作废），致死只能在**心跳**判出 hp=0 时倒推：
+     * 命中先落库 {@code lethal=false}；同一演习内该马甲转入阵亡时，回填它最近一条
+     * {@code lethal=false} 的命中，使「击杀数」与「命中数」在同一口径上（同一事务由调用方保证）。</p>
+     *
+     * @return 被回填那条命中的 {@code shooterNum}；该马甲没有待判命中时为 {@link Optional#empty()}。
+     *         调用方据此给开枪者记一次击杀。
+     */
+    public Optional<Integer> markMostRecentLethal(UUID exerciseId, int hitVestNum) {
+        Optional<PendingLethal> pending = jdbc.sql(
+                        "SELECT seq, shooter_num FROM t_hit_event"
+                                + " WHERE exercise_id = :exerciseId AND hit_vest_num = :hitVestNum"
+                                + " AND lethal = 0 ORDER BY seq DESC LIMIT 1")
+                .param("exerciseId", exerciseId.toString())
+                .param("hitVestNum", hitVestNum)
+                .query((rs, rowNum) -> new PendingLethal(rs.getLong("seq"), rs.getInt("shooter_num")))
+                .optional();
+        if (pending.isEmpty()) {
+            return Optional.empty();
+        }
+        PendingLethal row = pending.get();
+        jdbc.sql("UPDATE t_hit_event SET lethal = 1 WHERE seq = :seq")
+                .param("seq", row.seq())
+                .update();
+        return Optional.of(row.shooterNum());
+    }
+
     /** 删除某场演习的全部命中（仅随整场演习删除时调用）。 */
     public int deleteByExerciseId(UUID exerciseId) {
         return jdbc.sql("DELETE FROM t_hit_event WHERE exercise_id = :exerciseId")
                 .param("exerciseId", exerciseId.toString())
                 .update();
+    }
+
+    /** {@link #markMostRecentLethal} 的一次定位结果：待回填行的 seq 与其开枪者。 */
+    private record PendingLethal(long seq, int shooterNum) {
     }
 
     private static HitEvent map(ResultSet rs, int rowNum) throws SQLException {
