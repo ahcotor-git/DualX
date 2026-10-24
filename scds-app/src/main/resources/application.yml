@@ -145,6 +145,26 @@ scds:
     # UWB 连续坐标生效后，旧的 ff06 室内点位帧必须被丢弃
     uwb-mode: enabled
 
+  # ===== 硬件链路网关（设计 05 §4.6，D10 口径）=====
+  # simulator 仅供开发与自动测试（进程内注入帧、不占串口、不监听 12001）；
+  # **生产必须显式 real**，仿真通过不得写成现场通过。
+  gateway:
+    mode: real
+    # 按 t_link_config.enabled 在启动时自动开链路；与 HTTP 手动开链路并存。
+    # 目前无消费者（随配置接口/LIFE 段落地），保持 false。
+    auto-open-on-startup: false
+    serial:
+      # 沿用旧系统发送队列上限，**不是生产容量结论**；配置 <1 直接启动失败。
+      send-queue-capacity: 10
+      # REJECT：队列满即把失败返回调用方（判死/判活/充弹丢一条就是现场事故）。
+      # 另一选项 DROP_LOW_PRIORITY（丢轮询/状态类低优先帧）；默认取哪个待现场操作口径确认。
+      send-queue-overflow: REJECT
+    uwb:
+      # 容量候选值，**尚未接入** Netty 启动参数（它仍用固定的 4 / Netty 默认线程数），
+      # 待 D10 容量验证后再接，避免把未验证值写进启动路径。
+      tcp-backlog: 4
+      worker-threads: 0
+
 management:
   endpoints:
     web:

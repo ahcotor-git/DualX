@@ -16,8 +16,9 @@ import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
-import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.plan.PlanService;
+import com.dualx.core.port.DeviceLinkAdmin;
+import com.dualx.core.port.FileUrlSigner;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -132,6 +133,14 @@ class RoleWritePermissionIT {
         @Bean
         PlanService planService() {
             return stub(PlanService.class);
+        }
+
+        // 链路端点已接领域端口 DeviceLinkAdmin（真实现要真串口 / Netty 监听 12001）。
+        // 本切片只问「授权层放不放行」，故给替身：放行的开关请求因此稳定返回 400（请求体校验
+        // 或端口自身校验）或 501，都不是 401/403，不影响判据。
+        @Bean
+        DeviceLinkAdmin deviceLinkAdmin() {
+            return stub(DeviceLinkAdmin.class);
         }
 
         // 底图详情要签 imageUrl。签名端口不碰数据库，本可给真实实现，但它依赖

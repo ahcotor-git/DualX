@@ -17,6 +17,7 @@ import com.dualx.core.auth.DeviceAuthService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileStore;
 import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.plan.PlanService;
@@ -147,13 +148,23 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 链路端点已接线到领域端口 DeviceLinkAdmin（真实现是 scds-gateway 的真链路或仿真适配器）。
+        // 本测试不启 Spring 上下文，也不碰硬件：替身一律抛占位异常，使链路端点在这里稳定表现为
+        // 400（请求体校验）/501（端口被调到），而不是 404。真实链路开关、409 与 12001 硬约束由
+        // RealDeviceLinkAdminTest / LinkRegistryTest 与 scds-app 的 HwLinkHttpIT 覆盖。
+        DeviceLinkAdmin deviceLinkAdmin = Mockito.mock(DeviceLinkAdmin.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService),
                         new ExerciseController(planService),
                         new CommandController(),
                         new SituationController(),
-                        new DeviceController(vestLedgerService, anchorLedgerService),
+                        new DeviceController(vestLedgerService, anchorLedgerService, deviceLinkAdmin),
                         // standalone 不装配 Spring 上下文，ObjectMapper 只能自备：本测试里
                         // 底图相关的 JSON 进出都会被替身的占位异常截断，用默认配置即可。
                         new MapController(mapLedgerService, new ObjectMapper(), fileUrlSigner),

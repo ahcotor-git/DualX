@@ -97,6 +97,16 @@ class ApiExceptionHandlerBusinessTest {
             throw new BusinessException(ApiErrorCode.EXERCISE_ALREADY_RUNNING, "演习进行中");
         }
 
+        @GetMapping("/boom/link-already-open")
+        void linkAlreadyOpen() {
+            throw new BusinessException(ApiErrorCode.DEVICE_LINK_ALREADY_OPEN, "链路已开启：SERIAL_VEST");
+        }
+
+        @GetMapping("/boom/link-serial-busy")
+        void linkSerialBusy() {
+            throw new BusinessException(ApiErrorCode.DEVICE_LINK_SERIAL_BUSY, "串口已被 UWB_SERIAL 占用：COM7");
+        }
+
         @GetMapping("/boom/map-not-found")
         void mapNotFound() {
             throw new BusinessException(ApiErrorCode.MAP_NOT_FOUND, "底图不存在");
@@ -167,10 +177,13 @@ class ApiExceptionHandlerBusinessTest {
             "/boom/vest-already-bound| 409 | DEVICE_VEST_ALREADY_BOUND",
             "/boom/vest-not-bound    | 409 | DEVICE_VEST_NOT_BOUND",
             "/boom/exercise-running  | 409 | EXERCISE_ALREADY_RUNNING",
+            // 链路两码同为 409、不同码：契约要求两种冲突可区分（「谁占着」），故逐项登记而非折成一个。
+            "/boom/link-already-open | 409 | DEVICE_LINK_ALREADY_OPEN",
+            "/boom/link-serial-busy  | 409 | DEVICE_LINK_SERIAL_BUSY",
             "/boom/map-not-found     | 404 | MAP_NOT_FOUND",
             "/boom/map-in-use        | 409 | MAP_IN_USE",
     })
-    @DisplayName("台账域与地图域错误码逐项按契约登记状态，不按前缀猜（DEVICE_* 里既有 404 又有 409）")
+    @DisplayName("台账域、链路域与地图域错误码逐项按契约登记状态，不按前缀猜（DEVICE_* 里既有 404 又有 409）")
     void ledgerCodesMapToTheirContractStatus(String path, int expectedStatus, String expectedCode) throws Exception {
         mockMvc.perform(MockMvcRequestBuilders.get(path.trim()))
                 .andExpect(status().is(expectedStatus))

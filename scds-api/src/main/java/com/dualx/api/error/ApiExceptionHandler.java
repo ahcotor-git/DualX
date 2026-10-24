@@ -253,6 +253,12 @@ public class ApiExceptionHandler {
             case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND,
                  EXERCISE_ALREADY_RUNNING -> HttpStatus.CONFLICT;
 
+            // ── 硬件链路（HW-LINK，D06）──────────────────────────────────────────
+            // 两个码同为 409、含义不同：「谁占着」——`DEVICE_LINK_ALREADY_OPEN` 是同一条逻辑链路的
+            // 重复开启请求，`DEVICE_LINK_SERIAL_BUSY` 是物理资源冲突（串口被本进程另一条链路持有，
+            // 或打开时被系统拒绝）。前端按 code 分流，不依赖 title 文案。
+            case DEVICE_LINK_ALREADY_OPEN, DEVICE_LINK_SERIAL_BUSY -> HttpStatus.CONFLICT;
+
             // ── 地图域（M2 MAP-BASE）────────────────────────────────────────────
             // 底图台账：查不到是 404；被想定引用/演习在用是 409
             // （冲突是「现在不能删」，不是参数错误——契约 paths/map.yaml 的 deleteMap 即 409）。

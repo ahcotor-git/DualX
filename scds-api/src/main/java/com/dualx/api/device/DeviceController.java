@@ -11,10 +11,14 @@ import com.dualx.api.dto.device.VestDevicePage;
 import com.dualx.api.dto.device.VestDeviceUpsertRequest;
 import com.dualx.api.dto.device.VestLinkStatus;
 import com.dualx.api.error.NotImplementedException;
+import com.dualx.core.domain.LinkConfig;
+import com.dualx.core.domain.LinkKind;
+import com.dualx.core.domain.LinkState;
 import com.dualx.core.domain.LinkStatus;
 import com.dualx.core.domain.Vest;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
+import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.SerialPortInfo;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
@@ -47,10 +51,16 @@ import java.util.List;
  * {@link AnchorLedgerService}。本层只做契约形状的搬运（DTO ↔ 领域对象），
  * 业务判断全在服务层——把「能不能绑」写进控制器，会让同一规则在 REST 与 WS 两条入口上各写一遍。</p>
  *
- * <p><b>仍是占位（501）</b>：{@code GET .../link}、{@code GET /links}、
- * {@code GET /links/serial-ports} 与串口/UWB 开关。这些是链路运行态，真值在 gateway 进程里
- * （串口与 UWB 的端口/协议硬约束也在那里），而 gateway 目前尚无源码，没有可调用的端口——
- * 现在填返回值只能造假。开关的交付范围本身还是开放问题（requirements Q-LINK-LIFECYCLE）。</p>
+ * <p><b>链路运行态</b>：{@code GET /links}、{@code GET /links/serial-ports} 与串口/UWB 开关
+ * 走领域端口 {@link DeviceLinkAdmin}（实现在 {@code scds-gateway}）。真值在网关进程里——
+ * 串口独占、UWB 两种接入方式互斥、端口硬约束 12001、重开冲突 409 全部由网关判定，
+ * 本层只做「请求 → {@link LinkConfig}」的搬运与分流，<b>不复制任何一条链路规则</b>：
+ * 在控制器里再判一次「能不能开」，会让 REST 与后续 WS 两条入口各持一份口径。</p>
+ *
+ * <p><b>仍是占位（501）</b>：{@code GET .../link}。它返回的是<b>每马甲</b>在线态
+ * （{@code lastHeartbeatAt}/{@code lastFrameType}/{@code framesTotal}），权威来源是 core 的
+ * 状态机（契约要求与态势域 {@code VestStatus} 一致），不是链路级状态；在 STATE 工作包就绪前
+ * 保持 501，不用链路计数冒充每马甲计数（设计 05 §5）。</p>
  *
  * <p>链路状态推送走 WebSocket {@code /ws/v1/devices/links}（见 {@code com.dualx.api.ws}），
  * 与 {@code GET /api/v1/devices/links} 构成双通道，不在本控制器内重复实现。</p>
@@ -61,10 +71,12 @@ public class DeviceController {
 
     private final VestLedgerService vests;
     private final AnchorLedgerService anchors;
+    private final DeviceLinkAdmin links;
 
-    public DeviceController(VestLedgerService vests, AnchorLedgerService anchors) {
+    public DeviceController(VestLedgerService vests, AnchorLedgerService anchors, DeviceLinkAdmin links) {
         this.vests = vests;
         this.anchors = anchors;
+        this.links = links;
     }
 
     // ── 马甲台账 ────────────────────────────────────────────────────────────
@@ -147,32 +159,41 @@ public class DeviceController {
 
     @GetMapping("/api/v1/devices/links")
     public List<LinkStatus> getLinks() {
-        throw new NotImplementedException("getLinks");
+        return links.snapshot();
     }
 
     @GetMapping("/api/v1/devices/links/serial-ports")
     public List<SerialPortInfo> listSerialPorts() {
-        throw new NotImplementedException("listSerialPorts");
+        return links.listSerialPorts();
     }
 
     @PostMapping("/api/v1/devices/links/serial")
     public LinkStatus openVestSerial(@RequestBody @Valid LinkOpenSerialRequest request) {
-        throw new NotImplementedException("openVestSerial");
+        return links.openSerial(toSerialConfig(request));
     }
 
     @DeleteMapping("/api/v1/devices/links/serial")
     public LinkStatus closeVestSerial() {
-        throw new NotImplementedException("closeVestSerial");
+        return links.closeSerial();
     }
 
     @PostMapping("/api/v1/devices/links/uwb")
     public LinkStatus openUwbLink(@RequestBody @Valid LinkOpenUwbRequest request) {
-        throw new NotImplementedException("openUwbLink");
+        // 只做分流：两种接入方式互斥（另一种已开 → 409 DEVICE_LINK_ALREADY_OPEN）与
+        // 端口硬约束 12001（给了别的端口 → 400 VALIDATION_FAILED）都由网关判定。
+        // SERIAL 缺 serialPortName 同样由网关折成 400，本层不复制这条校验。
+        return switch (request.dataSource()) {
+            case TCP_SERVER -> links.openUwbTcpServer(toUwbTcpConfig(request));
+            case SERIAL -> links.openUwbSerial(toUwbSerialConfig(request));
+        };
     }
 
     @DeleteMapping("/api/v1/devices/links/uwb")
     public LinkStatus closeUwbLink() {
-        throw new NotImplementedException("closeUwbLink");
+        // 契约的关闭端点不带 dataSource，而两种 UWB 模式互斥（至多一条处于 OPENING/OPEN）。
+        // 因此取当前 active 的那条关闭并返回；两条都未开时按 TCP_SERVER 返回 CLOSED 状态。
+        // 刻意不去猜「上次是哪条」——运行态本就只有一条能开，猜需要额外状态且不改变结果。
+        return isSerialActive() ? links.closeUwbSerial() : links.closeUwbTcpServer();
     }
 
     // ── 契约形状的搬运 ──────────────────────────────────────────────────────
@@ -191,5 +212,41 @@ public class DeviceController {
     /** 领域 {@code Anchor} 带创建/修改时刻，契约的 {@code Anchor} 不带——只搬契约里有的字段。 */
     private static Anchor toAnchor(com.dualx.core.domain.Anchor anchor) {
         return new Anchor(anchor.anchorId(), anchor.name(), anchor.xPx(), anchor.yPx(), anchor.enabled());
+    }
+
+    /**
+     * 串口开关请求 → 链路配置。
+     *
+     * <p>{@code enabled=false} 刻意写死：这是「本次 HTTP 手动开链路」，与「按
+     * {@code t_link_config.enabled} 开机自动打开」是两件事；{@code createdAt/updatedAt}
+     * 留空同理——运行态开关不落库，链路配置的持久化归配置接口，不归开关端点。</p>
+     */
+    private static LinkConfig toSerialConfig(LinkOpenSerialRequest request) {
+        return new LinkConfig(LinkKind.SERIAL_VEST, request.portName(), request.baudRate(),
+                Boolean.TRUE.equals(request.flowControlRtsCts()), null, null, false, null, null, null);
+    }
+
+    /** UWB TCP_SERVER：{@code host/port} 可空（网关按 0.0.0.0 / 12001 兜底），端口硬约束由网关判。 */
+    private static LinkConfig toUwbTcpConfig(LinkOpenUwbRequest request) {
+        return new LinkConfig(LinkKind.UWB_TCP_SERVER, null, null, false,
+                request.host(), request.port(), false, null, null, null);
+    }
+
+    /** UWB SERIAL：只用 {@code serialPortName}；波特率走网关默认 460800（与马甲串口 115200 不同）。 */
+    private static LinkConfig toUwbSerialConfig(LinkOpenUwbRequest request) {
+        return new LinkConfig(LinkKind.UWB_SERIAL, request.serialPortName(), null, false,
+                null, null, false, null, null, null);
+    }
+
+    /**
+     * 当前是否 UWB 串口模式处于 {@code OPENING}/{@code OPEN}。
+     *
+     * <p>{@code ERROR} 不计入 active——与 {@code LinkSlot.active()} 同一判据，
+     * 否则「打开失败留下的 ERROR」会被误判成「正在用串口模式」。</p>
+     */
+    private boolean isSerialActive() {
+        return links.snapshot().stream()
+                .anyMatch(status -> status.kind() == LinkKind.UWB_SERIAL
+                        && (status.state() == LinkState.OPENING || status.state() == LinkState.OPEN));
     }
 }
