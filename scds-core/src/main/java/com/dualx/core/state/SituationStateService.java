@@ -496,6 +496,15 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         return revision;
     }
 
+    /**
+     * 增量窗口读取（S7 读侧 {@code SituationQuery} 的底层原语）：{@code sinceRevision} 之后的
+     * 单元级变化，按 revision 升序；{@code sinceRevision} 超出保留窗口时为空 Optional
+     * （调用方据此返回 409 {@code SITUATION_REVISION_TOO_OLD}）。
+     */
+    public Optional<List<UnitState>> changesSince(long sinceRevision) {
+        return revisionLog.changesSince(sinceRevision);
+    }
+
     /** 某马甲的累计命中数。 */
     public int hitsDealt(int vestNum) {
         return hitsDealt.getOrDefault(vestNum, 0);
