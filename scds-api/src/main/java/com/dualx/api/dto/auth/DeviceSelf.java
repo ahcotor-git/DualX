@@ -1,6 +1,6 @@
 package com.dualx.api.dto.auth;
 
-import com.dualx.api.dto.situation.UnitState;
+import com.dualx.core.push.UnitState;
 import com.dualx.protocol.Team;
 
 /**

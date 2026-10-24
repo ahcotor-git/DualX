@@ -1,4 +1,4 @@
-package com.dualx.api.dto.situation;
+package com.dualx.core.push;
 
 import com.dualx.core.domain.GeoPoint;
 import com.dualx.core.domain.MotionState;
@@ -11,6 +11,11 @@ import java.time.Instant;
 
 /**
  * 单个参演单元（马甲 / 武器 / 载具）的实时状态（契约 situation.yaml → {@code UnitState}）。
+ *
+ * <p>这是**线载荷**：HTTP Poll 响应与 WS 帧体共用同一个 Java 类型（设计 02 §4.3）。
+ * 原住 {@code com.dualx.api.dto.situation}，为让 core 能直接持有与构造它而下沉到中立的
+ * {@code com.dualx.core.push}。注意与 {@code com.dualx.core.domain.HitEvent}（库实体）不同：
+ * 本类字段形状由契约决定，不得为「统一」而增删。</p>
  *
  * <p><b>阵亡冻结硬约束</b>：单元阵亡后必须冻结在最后有效坐标，后续上报的坐标（含 UWB 解算）
  * 一律丢弃；此处的 {@code position} / {@code motion} 不再变化，{@code motion = FROZEN}。</p>
