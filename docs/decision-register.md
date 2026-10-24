@@ -101,7 +101,8 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | R27 配置校验 | 2026-10-21 裁定：显式非正值的 TTL、以及 refresh 未严格长于 access，**启动期直接失败**；未配仍回落默认。**已落地** |
 | D09 | 2026-10-21 用户裁定：本地受保护目录 + domain 存储端口；短时效可重复签名 + 原格式返回。见下“D09 / D15 执行边界”。**仅裁定口径，实现属 M2 MAP-BASE** |
 | D15 | 2026-10-21 用户裁定：保留 `xPx/yPx` 只修描述；无演习/离线/阵亡/危险物按统一口径。见下节。**仅裁定口径，实现后续分段** |
-| D05-D08、D10-D13 | 待确认 |
+| D06 / D10 | 2026-10-23 用户逐项裁定（4 项，见下「D06 / D10 执行边界」）：UWB SERIAL **首版一并交付**；已开重开**对齐契约返回 409**；**做**无硬件仿真适配器（profile 显式开启）；D10 **先落可配置项并标注未验证**。**仅裁定口径与分段方案，`scds-gateway` 尚无源码，实现未开始** |
+| D05、D07、D08、D11-D13 | 待确认 |
 | 业务批量实施 | 未授权 |
 | 创建隔离数据库 | 已批准在scds-local-mysql创建scds_next_test及scds_test；不创建新容器，不改开发.env |
 | 安装 VS | 未授权 |
@@ -587,4 +588,64 @@ LIFE 的 PLAN / STATE / 硬件三项前置亦均未就绪（后两者仍为 501�
 - **`Exercise.heartbeatAt` 未并入领域对象**：`ExerciseRepository.findRunningLiveness` 仍单独读，
   理由见该方法注释（本次接线不需要它）。
 - **客户端（M6）与 STATE / HW-LINK 未开始**：PLAN 的消费方是 Windows 指挥台，属 M6。
+
+### D06 / D10 执行边界（2026-10-23，HW-LINK 前置决策）
+
+依据 [设计 05](design/05-hw-link.md)（本段新增）。这是**开工前的分段方案**，不是实现：
+`scds-gateway` 目前**只有 `pom.xml`，零 Java 源码**，`DeviceLinkAdmin` 与 `HardwareEventSink` 两个端口均无实现。
+
+**用户逐项裁定（4 项）**
+
+| 项 | 裁定 |
+|---|---|
+| UWB SERIAL 首版范围 | **首版一并交付 SERIAL**（不是只做 TCP_SERVER）。端口新增 `openUwbSerial`/`closeUwbSerial`；两种 UWB 模式互斥，任一已开时另一种 `open` 返回 409 `DEVICE_LINK_ALREADY_OPEN` |
+| 已开重开语义（R15 核心冲突） | **对齐契约返回 409**，改掉 `DeviceLinkAdmin` 里「已打开则先关闭再重开」的注释，**契约不动**。理由：客户端要能区分「我要开的已经在开」与「中途断过又重连」 |
+| 无硬件仿真适配器 | **做**，`scds.gateway.mode=simulator` 显式开启；供开发与自动测试验证状态机、上下行与端点接线。生产必须显式切回 `real`，**仿真通过不得写成现场通过** |
+| D10 容量参数 | **先落可配置项 + 明确标注未验证**：协议已冻结常量（200ms 轮询、5000ms 在线窗口、12001、115200、UWB 串口 460800）照搬；队列容量、Netty 线程数等用设计候选值并全部走 `scds.gateway.*` 配置，文档写明**不是生产容量结论**，待现场人数/基站/客户端/帧率/SLA 与 RPO/RTO 数据再定 |
+
+**本段新增的分段方案**
+
+设计文档 [design/05-hw-link.md](design/05-hw-link.md) 把 HW-LINK 拆为 H0~H7 共 8 段（每段 ≤3 文件）：
+
+| 段 | 内容 |
+|---|---|
+| H0 | 本决策收口（0 代码） |
+| H1 | R15 语义收口：端口注释对齐 409 + 新增 `openUwbSerial`/`closeUwbSerial` + 契约描述同步 |
+| H2 | `LinkRegistry` + 链路状态机与计数（纯 Java，可单测） |
+| H3 | 马甲串口适配器（jSerialComm：打开/关闭/读线程→`SerialFramer`→sink、200ms 轮询、有界发送队列） |
+| H4 | UWB 适配器（Netty TCP_SERVER + 串口 SERIAL，共用同一 `UwbFramer`） |
+| H5 | `GatewayProperties` + 仿真模式 `SimulatedLinkAdapter` |
+| H6 | `DeviceController` 接线（6 条：`getLinks`/`listSerialPorts`/开关串口/开关 UWB） |
+| H7 | 端到端 IT（真实回环 TCP 12001 + 仿真串口，走完整生产入口） |
+
+**方案里三处必须记明的判断**
+
+1. **`getVestLink` 本工作包不接线，保持 501**。契约里它返回的是**每马甲**在线态
+   （`lastHeartbeatAt`/`lastFrameType`/`framesTotal`，且明文写「与态势域 VestStatus 一致」），
+   权威来源是 core 的状态机而非链路级状态。在 STATE 就绪前，**不得用链路计数冒充每马甲计数**。
+   因此 H6 接线的是 6 条而非常被误数的 7 条。
+2. **上行链路当前没有消费者**：`HardwareEventSink` 的实现属 STATE（未开工）。在它有实现前，
+   app 装配提供一个**显式的日志型 sink**并在启动时打 WARN，用日志暴露边界，而不是让帧静默消失。
+   这不是可省略的说明，而是本工作包的完成定义上限——「网关能解帧」≠「态势可用」。
+3. **`ff06` 的丢弃留在 core**：协议 §1.4④ 要求 UWB 生效时丢弃旧室内定位帧，但这是业务开关，
+   网关保持哑管道（照常上报），由 STATE 侧按 UWB 是否生效决定丢弃。
+
+**本段未做**（H0 收口时的状态）：`watchLinks` 的 WS 推送与 `LinkStatusPushPort`（依赖 D07 的数组/对象同构口径）；
+UWB 标定三端点（仍 501）；`scds-gateway` 的任何代码。
+
+**实施进度（2026-10-23 晚）**：H1~H7 已完成——`scds-gateway` 现有 10 个主源码类
+（`LinkRegistry`/`LinkSlot`/`SerialChannel`/`JSerialChannel`/`SerialVestLink`/`UwbTcpServerLink`/
+`UwbSerialLink`/`GatewayProperties`/`SimulatedLinkAdapter`/`RealDeviceLinkAdmin`），
+装配层落在 `scds-app` 的 `com.dualx.config`（`GatewayConfig` + `LoggingHardwareEventSink`），
+`DeviceController` 的 6 条链路端点已接线、`getVestLink` 仍 501。
+H7 的端到端 IT 为 `scds-app` 的 `HwLinkHttpIT`（5 例）：仿真上下文验全部链路语义，
+real 上下文在硬约束 12001 上做真实回环并核对 `framesTotal`/`fdCount` 后验证端口释放。
+上句「`scds-gateway` 的任何代码」描述的是 H0 收口时的状态，已不再成立；
+H6 的拆分与两处偏差、H7 的覆盖映射见 [design/05-hw-link.md](design/05-hw-link.md) §5 实施记录。
+全量 `mvn test` 通过（scds-app 290 例，8 模块 BUILD SUCCESS）。
+
+**本工作包仍不能证明**（不等于可宣称已验收）：真串口 115200 与马甲固件对拍、真实 UWB 盒子经
+12001 的连续坐标、D10 容量与长稳/RPO/RTO——全部属现场验收。
+
+**提交状态**：H0~H7 的全部文件（`docs/`、`scds-gateway`、`scds-api`、`scds-app`）**未提交、未推送**，待用户授权。
 
