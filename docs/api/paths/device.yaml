@@ -461,7 +461,12 @@ linkSerial:
     tags: [device]
     operationId: openVestSerial
     summary: 开启马甲串口链路
-    description: '替代旧 `/serialPort/open`（含室内虚拟串口）。协议 A 为 ASCII 文本 HEX，默认 115200 波特率。'
+    description: |
+      替代旧 `/serialPort/open`（含室内虚拟串口）。协议 A 为 ASCII 文本 HEX，默认 115200 波特率。
+      链路**已处于开启中/已开启**时返回 409，**不隐式先关闭再重开**——客户端要能区分
+      「要开的链路已经在开」与「链路中途断过又重连」；需要重连请先调用关闭端点。
+      `DEVICE_LINK_SERIAL_BUSY` 与 `DEVICE_LINK_ALREADY_OPEN` 的区别是「谁占着」：
+      前者是物理串口被本进程另一条链路持有或打开被系统拒绝，后者是同一条逻辑链路的重复开启请求。
     requestBody:
       required: true
       content:
@@ -494,6 +499,7 @@ linkSerial:
     tags: [device]
     operationId: closeVestSerial
     summary: 关闭马甲串口链路
+    description: 幂等：链路未开启时也返回成功，没有副作用。
     responses:
       '200':
         description: 链路状态
@@ -514,8 +520,10 @@ linkUwb:
     operationId: openUwbLink
     summary: 开启 UWB 链路
     description: |
-      二选一：TCP_SERVER（本机监听，**端口硬约束 12001**）或 SERIAL。
+      二选一：TCP_SERVER（本机监听，**端口硬约束 12001**）或 SERIAL（用 `serialPortName` 指定串口）。
       UWB 生效后，协议 A 的旧室内定位帧 ff06 必须被丢弃（避免与连续坐标互相污染）。
+      **两种接入方式互斥**：任一模式已开启时，另一种模式的开启请求返回 409
+      `DEVICE_LINK_ALREADY_OPEN`（不隐式切换），切换接入方式必须先关闭当前模式。
     requestBody:
       required: true
       content:
@@ -536,7 +544,7 @@ linkUwb:
       '403':
         $ref: '../schemas/common.yaml#/Forbidden'
       '409':
-        description: 端口被占用 / 链路已开启（`DEVICE_LINK_SERIAL_BUSY` / `DEVICE_LINK_ALREADY_OPEN`）
+        description: 链路已开启（含另一种 UWB 接入方式已开）或端口被占用（`DEVICE_LINK_ALREADY_OPEN` / `DEVICE_LINK_SERIAL_BUSY`）
         content:
           application/problem+json:
             schema:
@@ -548,6 +556,7 @@ linkUwb:
     tags: [device]
     operationId: closeUwbLink
     summary: 关闭 UWB 链路
+    description: 幂等：关闭当前已开启的 UWB 接入方式（TCP_SERVER 或 SERIAL），未开启时也返回成功。
     responses:
       '200':
         description: 链路状态
