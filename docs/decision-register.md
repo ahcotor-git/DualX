@@ -712,7 +712,7 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 **本段未做**：`watchSituation`（WS）与 `SituationPushPort`/`LinkStatusPushPort`（PUSH-MODEL/PUSH-WS，依赖 D07/D08）；
 `epoch`/跨代恢复（D08）；COMMAND 指令状态机；CALIBRATION；REPLAY；EXPORT。
 
-**实施进度（2026-10-24）**：**S1~S4 已完成**。
+**实施进度（2026-10-24）**：**S1~S5 已完成**。
 
 - **S1（S1a~S1c 载荷下沉）**：`CombatRole`/`UnitState` 已搬入 `com.dualx.core.push`，api 旧类已删，
   引用方（`SituationEnvelope`/`SituationController`/`DeviceSelf`）已改指向（`241383d`）。
@@ -727,6 +727,9 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
   四类理由，按此优先级短路；每马甲上次采样点、`reset()` 供装载新演习时清底）+ `TrackBatchWriter`
   （内存缓冲，够 `batchSize` 或过 `flushIntervalMs` 由写手线程一次 `insertAll`，停演强制 `flush()`）；
   21 例纯单测（仓储 mock + 可控时基）。全量 `mvn -o test` 全绿。
+- **S5（增量环形窗口）**：`SituationRevisionLog` 已落地——保留最近 `scds.situation.revision-window` 条
+  **单元级**变化（`ArrayDeque` 尾插、满则去头并记已淘汰 revision），`changesSince(N)` 返回 revision &gt; N 的
+  升序变化、`tooOld(N)` 判超窗、`clear()` 供演习切换清窗；9 例纯单测。全量 `mvn -o test` 全绿。
 
 **S3 的口径与未闭合缺口**（不得当成已实现）：
 
@@ -762,5 +765,27 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
    与采样参数（`scds.state.sample-interval-ms` / `sample-displacement-indoor` / `-outdoor`）**均无默认值**，
    由装配层绑定，D10 未闭合前不得据其宣称容量达标。
 
-S5~S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
+**S5 的口径与未接线**（不得当成已接线）：
+
+1. **超窗判据是「`sinceRevision` 小于已淘汰的最新 revision」，不是「小于窗口内最旧的 revision」**：
+   revision 只在单元变化时递增、是**稀疏**的，窗口内最旧的条目可能远大于 `sinceRevision`；
+   中间被淘汰的条目若都不大于 `sinceRevision`，客户端并没有漏掉它需要的东西。
+   例：容量 3、已淘汰 revision 5、保留 8/9/12 → `since=5` 可补齐（`5 ≥ 5`），`since=4` 才超窗。
+2. **「已是最新」与「超窗」必须可区分**：`changesSince` 用 `Optional` 表达——空列表 = 已是最新（HTTP 200 空增量），
+   空 `Optional` = 超窗（409 `SITUATION_REVISION_TOO_OLD`）。混用会让新连接被无理由拒绝。
+3. **窗口不去重**：同一个马甲在窗口内可有多条（它在不同 revision 上各变化过一次）；增量载荷要不要按
+   `vestNum` 压成最后一条，属 S7 组装信封的口径，本段不预设（压与不压都收敛到同一终态）。
+4. **演习切换必须 `clear()`**：装载新演习时 revision 归零（设计 06 §4.5），不清窗会让上一场的条目以更大的
+   revision 留在窗口里、被客户端当成「更新的变化」；切换本身由 `full=true` 帧表达（设计 02 §4.4）。
+   ⚠ **两处设计在此冲突**：设计 02 §4.4 写「演习切换 revision **继续递增不回退**」，设计 06 §4.5 写
+   「装载时**归零**」。本段依**设计 06** 执行（它是对 STATE 包的专门裁定），冲突留待 PUSH-MODEL 收口。
+5. **S5 尚未接线**：与 S4 同样，白名单只有本类 + 单测，`SituationRevisionLog` 还没被
+   `SituationStateService.publish()` 调用（接线要动第三个类，越段）。
+
+**接线缺口（S4/S5 共同，必须在后续段闭合）**：`TrackSampler`、`TrackBatchWriter`、`SituationRevisionLog`
+三个类目前**都只是可单测的零件，尚未接入** `SituationStateService` 的状态变化点与装载/收尾入口；
+闭合需一个专门的接线段（改 `SituationStateService` + 其单测 + 装配层，约 3 个文件），未接线前
+**不得宣称轨迹与增量已产出**。
+
+S6~S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
 
