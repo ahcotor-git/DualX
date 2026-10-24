@@ -712,7 +712,31 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 **本段未做**：`watchSituation`（WS）与 `SituationPushPort`/`LinkStatusPushPort`（PUSH-MODEL/PUSH-WS，依赖 D07/D08）；
 `epoch`/跨代恢复（D08）；COMMAND 指令状态机；CALIBRATION；REPLAY；EXPORT。
 
-**实施进度**：**S1（S1a~S1c 载荷下沉）已完成**——`CombatRole`/`UnitState` 已搬入 `com.dualx.core.push`，
-api 旧类已删，引用方（`SituationEnvelope`/`SituationController`/`DeviceSelf`）已改指向；`mvn -o test` 全绿（290 通过）。
-S2~S8 **未开始**；`HardwareEventSink` 仍无实现，四个态势端点与 `getVestLink` 仍为 501。
+**实施进度（2026-10-24）**：**S1~S3 已完成**。
+
+- **S1（S1a~S1c 载荷下沉）**：`CombatRole`/`UnitState` 已搬入 `com.dualx.core.push`，api 旧类已删，
+  引用方（`SituationEnvelope`/`SituationController`/`DeviceSelf`）已改指向（`241383d`）。
+- **S2（有界事件队列）**：`StateEvent`（上行帧/链路变化/离线扫描同一队列事实）+ `StateEventQueue`
+  （非阻塞 `offer`、`REJECT`/`DROP_LOW_PRIORITY` 两种满队列策略、丢弃与拒收计数可观测）（`43e6dc8`）。
+- **S3（单一所有者核心）**：`SituationStateService` 已落地——实现 `HardwareEventSink`（只入队，不阻塞读线程）
+  + 唯一写手平台线程（`scds-state-writer`）串行处理；在线/离线判定（5000ms）、阵亡冻结与判活、
+  命中落库与致死回填（`HitEventRepository.markMostRecentLethal`）、每马甲命中/击杀计数、revision 单写。
+  17 例纯单测（仓储 mock + 可控时钟，不起线程）（`c4060ea`）。
+  全量 `mvn -o test` 全绿。
+
+**S3 的口径与未闭合缺口**（不得当成已实现）：
+
+1. **心跳只刷新在线窗口基，不计入 revision**：否则 200ms 一轮的 `ff03` 会让全量单元每拍都「变」，
+   S5 的 `scds.situation.revision-window`（1024 条）瞬间被刷空，增量通道失去意义。status 跳变才 +1。
+2. **`combatRole` 恒为 `null`**：编号区间→`CombatRole` 的划分仍未裁定（见上文第 5 条）；
+   `weaponKind` 已按 `WeaponKind.fromNum` 填。
+3. **UWB 坐标解算与 `ff06` 室内定位未接入**：二者需要地图域 `uwb_meta` + `UwbSolver`，属后续分段；
+   当前 `UwbFrame` 只计数（`uwbFramesUnhandled`）、`ff06` 只打 DEBUG，室内坐标不产生。
+4. **GPS 只落 WGS-84**：`GeoPoint.lng/lat`（BD-09）的换算规则是 `requirements.md` 里未闭合的
+   **Q-LEGACY-RULE**，本段不臆造，留空。
+5. **`signalQuality` 未填**：其来源是 UWB 解算的可用基站数，随第 3 条一并延后。
+6. **停演终局只到内存出口**：S3 的 `endExercise()` 返回 `UnitOutcome` 列表，
+   真正调 `ExerciseUnitRepository.freezeOutcome` 落库的编排属 S6。
+
+S4~S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
 
