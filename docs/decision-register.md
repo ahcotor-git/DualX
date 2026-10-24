@@ -673,9 +673,30 @@ H6 的拆分与两处偏差、H7 的覆盖映射见 [design/05-hw-link.md](desig
 **本段新增的分段方案**
 
 设计文档 [design/06-state.md](design/06-state.md) 把 STATE 拆为 S1~S8 共 8 段（每段 ≤3 文件）：
-S1 只读载体与查询端口 → S2 有界队列与单消费者循环 → S3 单一所有者核心（在线/冻结/命中/计数）
+S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`，拆 S1a/S1b/S1c）
+→ S2 有界队列与单消费者循环 → S3 单一所有者核心（在线/冻结/命中/计数）
 → S4 采样判定与批量落库 → S5 revision 环形窗口与增量 → S6 与 LIFE 衔接（装载编成、停演终局）
-→ S7 HTTP 接线（4 端点 + `getVestLink`）→ S8 端到端 IT。
+→ S7 core 读侧 `SituationQuery` → S8 core 端到端 IT。
+
+**载荷与读侧归属收口（2026-10-24，对齐设计 02）**
+
+分段方案初稿曾拟在 `scds-domain` 另造 `SituationSnapshot`/`UnitSituation`/`SituationDelta`，
+并把 `SituationQuery` 做成 domain 端口；开工前核查发现这与既有
+[设计 02](design/02-push-ports.md) §4.3/§5 冲突——后者已裁定把
+`SituationEnvelope`/`UnitState`/`TeamSummary`/`HitEvent`/`CombatRole` **下沉**到 `com.dualx.core.push`、
+`SituationQuery` 落在 **scds-core**，并明确否决「双模型 + 映射函数」乙案。
+两套并行会留下重复类型与一次多余搬迁，故收口如下（用户已跳过该提问，按既有设计自决）：
+
+1. STATE 只下沉**状态所有者真正持有**的两个类型 `CombatRole`、`UnitState`（S1a~S1c）。
+   其余 `SituationEnvelope`/`TeamSummary`/`HitEvent`（线载荷）仍按设计 02 在 **M4** 下沉。
+2. `SituationQuery` 是 **core 读侧**（不是 domain 端口）；STATE 交付它，M4 直接接线，不新增映射层。
+3. **HTTP 4 端点、`getVestLink`、WS 通道与背压补齐属 M4**（[实施计划](implementation-plan.md) M4
+   「domain 载荷和推送 SPI、Poll 查询、链路同构」）。STATE 门禁不变（单一状态所有者、有界事件处理、
+   5000ms、冻结、命中与批量轨迹），S7/S8 判据在 core 层证明。
+4. revision 窗口键沿用设计 02 既有 `scds.situation.revision-window`（原拟 `scds.state.revision-window` **作废**）；
+   其余状态侧参数仍用新前缀 `scds.state.*`。
+5. `combatRole` 的 `WEAPON`/`VEHICLE` 划分与编号空隙归属**未裁定**：本段只做**原样搬迁**，
+   不新造推导规则，S3 填值前先裁定。
 
 **方案里四处必须记明的判断**
 
@@ -691,5 +712,7 @@ S1 只读载体与查询端口 → S2 有界队列与单消费者循环 → S3 �
 **本段未做**：`watchSituation`（WS）与 `SituationPushPort`/`LinkStatusPushPort`（PUSH-MODEL/PUSH-WS，依赖 D07/D08）；
 `epoch`/跨代恢复（D08）；COMMAND 指令状态机；CALIBRATION；REPLAY；EXPORT。
 
-**实施进度**：S1~S8 **均未开始**（本段只做决策收口与分段方案）。
+**实施进度**：**S1（S1a~S1c 载荷下沉）已完成**——`CombatRole`/`UnitState` 已搬入 `com.dualx.core.push`，
+api 旧类已删，引用方（`SituationEnvelope`/`SituationController`/`DeviceSelf`）已改指向；`mvn -o test` 全绿（290 通过）。
+S2~S8 **未开始**；`HardwareEventSink` 仍无实现，四个态势端点与 `getVestLink` 仍为 501。
 

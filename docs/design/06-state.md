@@ -49,6 +49,7 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 | 收尾口径 | `ExerciseLifecycleService.freezeAndClose` 的阵亡数取 `countDeadByExerciseId`（**读库**），故单位终局必须在此之前落库 |
 | 架构取向 | 「谁持有状态谁调 PushPort」；态势 revision **单写事件循环** + 环形窗口（[architecture.md](../architecture.md) §7） |
 | 依赖方向 | `scds-api` → `scds-core` 直连（同 `ExerciseController` 用 `PlanService`）；`scds-gateway` 零 Spring 依赖，只认 domain 端口 |
+| 线载荷位置 | `UnitState`/`CombatRole`/`SituationEnvelope`/`TeamSummary`/`HitEvent` 现住 `com.dualx.api.dto.situation`；[设计 02](02-push-ports.md) §4.3 已裁定下沉到 `com.dualx.core.push`，并明确否决「双模型 + 映射函数」乙案。STATE 只先下沉**状态所有者真正持有**的 `UnitState` + `CombatRole` |
 
 ---
 
@@ -62,11 +63,15 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 4. **阵亡冻结**：阵亡后坐标与 `motion=FROZEN` 冻结，判活才解除。
 5. **命中与计数**：命中落 `t_hit_event`，维护 `kills` / `hitsDealt`（每马甲与每队）。
 6. **批量轨迹**：四类 `sampleReason` 判定 + 批量落 `t_track_sample`。
-7. **HTTP 读路径**：`getSituation` / `getVestState` / `getTeamSummary` / `listHits` 与 `getVestLink` 接线。
+7. **core 读侧**：`getSituation` / `getVestState` / `getTeamSummary` / `listHits` 的读模型与语义
+   （全量/增量/超窗 409/无演习 `running=false`），HTTP 接线属 M4。
 
 **非目标（本工作包不做）**
 
 - 不做 `watchSituation`（WS）与 `SituationPushPort` / `LinkStatusPushPort`（属 PUSH-WS / PUSH-MODEL，依赖 D07/D08）。
+- **不做 HTTP 接线**：`SituationController` 4 端点与 `DeviceController.getVestLink` 属 M4
+  （[实施计划](../implementation-plan.md) M4「domain 载荷和推送 SPI、Poll 查询、链路同构」）。
+- 不搬线载荷 `SituationEnvelope` / `TeamSummary` / `HitEvent`（M4 按 [设计 02](02-push-ports.md) 下沉）。
 - 不做 `epoch`/跨代恢复（D08）：本包的 revision 环形窗口只保证**同代**增量。
 - 不做 COMMAND（8 类指令的下行与回执状态机）——本包只**消费**指令造成的状态后果（判活解除冻结等由 COMMAND 下发、STATE 记账）。
 - 不做 CALIBRATION（UWB 标定三端点）、REPLAY、EXPORT。
@@ -137,7 +142,7 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 ### 4.5 revision 与增量环形窗口（D07/D08 边界）
 
 - `revision` 由事件线程**单写**，任何单元变化 `+1`；`UnitState.revision` 记录「该单元最后一次变化的 revision」。
-- 环形窗口保留最近 `scds.state.revision-window`（默认 **1024**，D10 候选值）条**单元级**变化。
+- 环形窗口保留最近 `scds.situation.revision-window`（默认 **1024**，**沿用 [设计 02](02-push-ports.md) §5 的既有键**）条**单元级**变化。
 - `getSituation`：
   - 不带 `sinceRevision` → 全量（`full=true`，`units` 有效）；
   - 带 `N` 且 `N` 在窗口内 → 增量（`full=false`，`changes` / `removedVestNums` / `hits`）；
@@ -167,7 +172,7 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 | `scds.state.sample-interval-ms` | 待定 | 定时采样周期 |
 | `scds.state.sample-displacement-*` | 待定 | 位移阈值（室内像素 / 室外米各一） |
 | `scds.state.track-batch-size` / `track-flush-interval-ms` | 待定 | 轨迹批量落库 |
-| `scds.state.revision-window` | 1024 | 增量环形窗口条数 |
+| `scds.situation.revision-window` | 1024 | 增量环形窗口条数（**沿用 [设计 02](02-push-ports.md) 既有键，不用 `scds.state.*`**） |
 
 > ⚠ **D10 未闭合声明**：上表数值是**设计候选**，不是容量结论。现场人数/基站/客户端/帧率/SLA 与
 > RPO/RTO 未给出前，不得据本表宣称容量达标；§7 的容量项一律标注「待现场验证」。
@@ -184,18 +189,26 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 
 | 段 | 内容 | 文件（白名单） |
 |---|---|---|
-| **S1** | 只读载体与查询端口：快照/单元/增量记录 + `SituationQuery` | `scds-domain` 新增 `SituationSnapshot`/`UnitSituation`/`SituationDelta`、`SituationQuery` |
+| **S1a** | 载荷下沉（域侧）：`CombatRole`、`UnitState` 原样搬入 `com.dualx.core.push` | `scds-domain` 新增 `core/push/CombatRole`、`core/push/UnitState` |
+| **S1b** | 载荷下沉（改引用 + 删旧）：两个引用方改指向 domain 新类型，同时删掉 api 旧 `UnitState` | `scds-api` 删 `dto/situation/UnitState`、改 `dto/situation/SituationEnvelope`、改 `dto/auth/DeviceSelf` |
+| **S1c** | 载荷下沉（清理）：api 旧 `CombatRole` 已无引用，删除 | `scds-api` 删 `dto/situation/CombatRole` |
 | **S2** | 有界事件队列 + 单消费者循环（纯 Java，可单测） | `scds-core` 新增 `StateEventQueue`、单测 |
 | **S3** | 单一所有者核心：心跳/在线/冻结/命中/每马甲计数（注入时钟） | `scds-core` 新增 `SituationStateService`、`HitEventRepository` 增回填方法、单测 |
 | **S4** | 采样判定 + 批量落库 | `scds-core` 新增 `TrackSampler`、`TrackBatchWriter`、单测 |
-| **S5** | revision 环形窗口与增量查询 | `scds-core` 新增 `SituationRevisionLog`、单测 |
+| **S5** | revision 环形窗口与增量窗口 | `scds-core` 新增 `SituationRevisionLog`、单测 |
 | **S6** | 与 LIFE 衔接：装载编成、停演终局（顺序见 §4.6） | `scds-core` 新增 `SituationSessionBinder`、单测 |
-| **S7** | HTTP 接线：`SituationController` 4 端点 + `DeviceController.getVestLink` | `SituationController`、`DeviceController`、骨架测试同步 |
-| **S8** | 端到端 IT（仿真注入帧 → 断言两端点族） | `scds-app` 新增 `SituationHttpIT` |
+| **S7** | core 读侧 `SituationQuery`：全量/增量/单马甲/队伍汇总/命中列表 + 超窗语义 | `scds-core` 新增 `SituationQuery`、单测 |
+| **S8** | 端到端 IT（仿真注入帧 → 读侧断言） | `scds-app` 新增 `SituationStateIT` |
+
+> **本包不接 HTTP/WS**：`SituationController` 4 端点、`DeviceController.getVestLink`、WS 通道，
+> 以及 `SituationEnvelope` / `TeamSummary` / `HitEvent` 的线载荷下沉，均属 **M4 PUSH-MODEL / PUSH-WS**
+> （[设计 02](02-push-ports.md)）。本包交付到 **core 读侧**为止，S7/S8 的判据在 core 层证明。
+> 这是与 [设计 02](02-push-ports.md) §4.3 的口径收口：不新造 `SituationSnapshot`/`UnitSituation`/`SituationDelta`，
+> 也不把 `SituationQuery` 做成 domain 端口——两套并行会留下重复类型与一次多余搬迁。
 
 **S7 的一处必须记明**：`getVestLink` 的字段跨了两层来源 ——
-`online` / `lastHeartbeatAt` / `lastFrameType` / 每马甲 `framesTotal` 属 **STATE**（本包），
-而 `DeviceController` 现有的 6 条链路端点的计数属**链路级**（HW-LINK）。
+`online` / `lastHeartbeatAt` / `lastFrameType` / 每马甲 `framesTotal` 属 **STATE**（本包，core 读侧提供），
+而 `DeviceController` 现有的 6 条链路端点的计数属**链路级**（HW-LINK）；HTTP 接线在 M4 完成。
 两处**不得互相冒充**：链路 `framesTotal` 不因某马甲多发帧而变，每马甲 `framesTotal` 也不因链路重开而清零（除停演重置）。
 
 ---
@@ -208,6 +221,7 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 | D08 跨代 | `epoch` 与跨重启续传：本包 revision 只保证同代增量 |
 | D10 容量 | 队列容量、批量大小、采样周期与位移阈值需现场数据；本包只落可配置项并标注未验证 |
 | 命中致死口径 | §4.3 的**回填**是本包自定口径（原基线无判定表）；若现场另有定则只改这一处 |
+| `combatRole` 推导 | `WEAPON`/`VEHICLE` 在 1801~4800 内如何划分（`WeaponKind` 有 12 段）、以及编号空隙（如 2001~2200、3401~3800）归哪一类，**未裁定**。S1 只做**原样搬迁**，S3 填值前须先裁定，不擅自造规则 |
 | 真硬件验收 | 真串口/UWB 盒子的在线与冻结行为必须在现场对拍，自动测试不能替代 |
 
 ---
@@ -223,8 +237,8 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 - [ ] 命中落库字段逐字段正确（含 `shooterIsSoldier` / `shooterWeaponKind` / 危险物编号）
 - [ ] `kills` / `hitsDealt` 与命中表一致；队伍汇总与编成一致
 - [ ] 四类 `sampleReason` 各自可触发一次；停演时缓冲被 flush
-- [ ] `getSituation` 全量/增量/超窗 409 `SITUATION_REVISION_TOO_OLD` 三条分支
-- [ ] 无演习 → 200 + `running=false`（D15-⑥）；`getVestState` 未知马甲 → 404
+- [ ] 读侧全量/增量/超窗 409 `SITUATION_REVISION_TOO_OLD` 三条分支（HTTP 状态码由 M4 映射，本包验语义与 `code`）
+- [ ] 无演习 → 读侧 `running=false` + 空 `units`（D15-⑥）；未知马甲 → 读侧未命中（M4 映射 404）
 - [ ] 队列溢出按策略处理且不阻塞调用方；`real` 模式上行帧仍走同一路径
 
 **现场待验收（本工作包不能证明）**
