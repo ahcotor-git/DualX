@@ -712,7 +712,7 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 **本段未做**：`watchSituation`（WS）与 `SituationPushPort`/`LinkStatusPushPort`（PUSH-MODEL/PUSH-WS，依赖 D07/D08）；
 `epoch`/跨代恢复（D08）；COMMAND 指令状态机；CALIBRATION；REPLAY；EXPORT。
 
-**实施进度（2026-10-24）**：**S1~S3 已完成**。
+**实施进度（2026-10-24）**：**S1~S4 已完成**。
 
 - **S1（S1a~S1c 载荷下沉）**：`CombatRole`/`UnitState` 已搬入 `com.dualx.core.push`，api 旧类已删，
   引用方（`SituationEnvelope`/`SituationController`/`DeviceSelf`）已改指向（`241383d`）。
@@ -723,6 +723,10 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
   命中落库与致死回填（`HitEventRepository.markMostRecentLethal`）、每马甲命中/击杀计数、revision 单写。
   17 例纯单测（仓储 mock + 可控时钟，不起线程）（`c4060ea`）。
   全量 `mvn -o test` 全绿。
+- **S4（采样判定 + 批量落库）**：`TrackSampler`（降采样判定：EVENT / STATE_CHANGE / DISPLACEMENT / TIMER
+  四类理由，按此优先级短路；每马甲上次采样点、`reset()` 供装载新演习时清底）+ `TrackBatchWriter`
+  （内存缓冲，够 `batchSize` 或过 `flushIntervalMs` 由写手线程一次 `insertAll`，停演强制 `flush()`）；
+  21 例纯单测（仓储 mock + 可控时基）。全量 `mvn -o test` 全绿。
 
 **S3 的口径与未闭合缺口**（不得当成已实现）：
 
@@ -738,5 +742,25 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 6. **停演终局只到内存出口**：S3 的 `endExercise()` 返回 `UnitOutcome` 列表，
    真正调 `ExerciseUnitRepository.freezeOutcome` 落库的编排属 S6。
 
-S4~S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
+**S4 的口径与未接线**（不得当成已接线）：
+
+1. **理由优先级短路**：EVENT（由调用方在事件点显式指定）→ STATE_CHANGE（`status` 或 `motion` 与上次采样不同）
+   → DISPLACEMENT（位移越阈值）→ TIMER（距上次采样达周期）。**首次观察记 STATE_CHANGE**——一个单元第一次
+   进入采样视野时没有可比基准，算作状态确立最贴近事实。
+2. **位移阈值的单位**：室内的阈值作用于 `GeoPoint.xPct/yPct` 的归一化平面距离（列名即 0~1，设计 06 §4.7 表里
+   写「室内像素」指的是同一对参数，**以 `GeoPoint` 列定义为准**）；室外用 WGS-84 上两点的大地距离（米）。
+   两侧不可比（一侧无坐标、室内↔室外切换）时按「有位移」处理，宁可多记不可漏记。
+3. **落库失败策略（本包自定，非裁定项）**：失败的一批**留在缓冲里等下次重试**，记 ERROR 与计数，态势状态
+   照常演进（不回滚内存态）；缓冲设硬上限，持续失败时丢弃**最旧**的一批并计数，保证内存有界。
+   已知取舍：JDBC batch 若异常发生在批次中途，重试会产生少量重复行（`t_track_sample.id` 自增，无法用主键去重）——
+   宁可偶发重复也不静默丢点；现场若证明重复不可接受，只改这一处失败策略。
+4. **没有独立的 flush 定时线程**：间隔判定在写手线程每次 `add` 时顺带完成（设计 06 §4.4 要求「由事件线程
+   一次 `insertAll`」），帧流停下的场景由停演收尾的强制 `flush()` 兜底；多一个定时线程只会多一处并发面。
+5. **S4 尚未接线**：S4 白名单只有 `TrackSampler`/`TrackBatchWriter` 与单测，因此这两个类**还没有被
+   `SituationStateService` 的状态变化点调用**（接线要动第三个类，越段）。接线与 `TrackSampler.reset()` 的调用
+   属 S6 的装载/收尾编排。三个容量参数（`scds.state.track-batch-size` / `track-flush-interval-ms` / 缓冲硬上限）
+   与采样参数（`scds.state.sample-interval-ms` / `sample-displacement-indoor` / `-outdoor`）**均无默认值**，
+   由装配层绑定，D10 未闭合前不得据其宣称容量达标。
+
+S5~S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
 
