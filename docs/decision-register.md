@@ -117,6 +117,9 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | M2 测试库残留清理 | G 段首跑失败留下 1 行 `t_map` + 1 行 `t_map_floor`（`cleanUp` 因列名写错而`BadSqlGrammar`，两处 `DELETE` 都未生效），导致 `BaseMapRepositoryIT` 的**全局行数断言**（`expected 1 but was 2`）失败。已按本记录 D14 口径定位到具体 UUID 并**只删自身残留行**（`t_map`/`t_map_floor` 现均为 0），未清库、未删卷、未动其它账号数据 |
 | M3 LIFE-DDL（V10 迁移 + 领域与契约同步） | 用户当次选择“LIFE 分段（演习生命周期 + 自愈）”，随后取消 LIFE 范围追问，视为按 D05 推荐口径推进。**本段只做 DDL 与类型边界**：V10 迁移、`ExerciseEndReason`、领域 `ExerciseLogType`（含 `SYSTEM`）、日志读写的枚举切换、契约补 `SYSTEM` 与 `endReason`。服务与自愈流程**未开始**。全量 `mvn -o verify` 全绿（**757 项**：protocol 19 / core 352 / api 103 / app 283）。**已落地 2 个本地提交**（`4933e4a` 迁移+领域+契约、本次决策回写提交），叠加 G 段后 `main` 领先 `origin/main` **11 个提交**；推送**因网络失败**（`RPC failed; curl 55 Send failure: Connection was reset`，EXIT=1），**远端未更新**，不得视为已入远端。细节见下「LIFE-DDL 执行边界」 |
 
+| 提交/推送 M3 HW-LINK（H0~H7） | 用户当次授权“提交推送并继续”。**已落地 3 个语义提交并成功推送**（`18a1358` 设计+决策回写、`c85df04` 网关实现+单测、`450794b` 端点接线+端到端 IT），`git push` 输出 `4efd272..450794b  main -> main`，工作树干净。H7 的 `HwLinkHttpIT` 5 例全通过（`Skipped: 0`），全量 `mvn test` 通过（scds-app 290 例，8 模块 BUILD SUCCESS）。细节见下「D06 / D10 执行边界」的实施进度与提交状态 |
+| D06 / D10（STATE 前置） | 2026-10-24 用户逐项裁定 4 项（见下「STATE 分段（一）执行边界」）：**做**增量环形窗口（不做 epoch/跨代）；5000ms 在线判定用**定时扫描产生跳变**；事件处理用**单消费者事件循环**；无硬件验证**复用 `scds.gateway.mode=simulator`**。**仅裁定口径与分段方案，S1~S8 均未开始** |
+
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
 后续批准只更新对应条目，不能把本清单一次性标为全部批准。
@@ -647,5 +650,46 @@ H6 的拆分与两处偏差、H7 的覆盖映射见 [design/05-hw-link.md](desig
 **本工作包仍不能证明**（不等于可宣称已验收）：真串口 115200 与马甲固件对拍、真实 UWB 盒子经
 12001 的连续坐标、D10 容量与长稳/RPO/RTO——全部属现场验收。
 
-**提交状态**：H0~H7 的全部文件（`docs/`、`scds-gateway`、`scds-api`、`scds-app`）**未提交、未推送**，待用户授权。
+**提交状态（2026-10-24 更新）**：H0~H7 的全部文件**已按 3 个语义提交并入远端**——
+`18a1358` docs(hw-link)、`c85df04` feat(gateway)、`450794b` feat(device)；
+`git push` 输出 `4efd272..450794b  main -> main`，推送成功，工作树干净。
+
+---
+
+### STATE 分段（一）执行边界（2026-10-24，M3 态势状态所有者）
+
+依据 [设计 06](design/06-state.md)（本段新增）。这是**开工前的分段方案**，不是实现：
+`HardwareEventSink` 仍无实现，四个态势端点与 `getVestLink` 仍为 501。
+
+**用户逐项裁定（4 项，均取推荐口径）**
+
+| 项 | 裁定 |
+|---|---|
+| revision 增量范围 | **做增量环形窗口**：单写 revision + 内存环形窗口 + `sinceRevision` 增量 + 超窗 409 `SITUATION_REVISION_TOO_OLD`；窗口容量走配置。**不做 epoch/跨代**（D08 留 PUSH-MODEL） |
+| 5000ms 在线判定驱动 | **定时扫描产生跳变**：按可配置周期（默认 1000ms，必须 < 5000）扫描最后心跳，越界即 `LIVE→OFFLINE` 并留一条 `STATE_CHANGE` 采样点。不用读取时惰性判定（轨迹里必须有离散的离线时刻） |
+| 事件处理线程模型 | **单消费者事件循环**：有界队列 + 1 个工作线程单写全部态势态，内部无锁；容量/溢出走 `scds.state.*` 配置（D10 候选值，标注未验证）。不引入虚拟线程（D10 要求先实测选型） |
+| 无硬件验证与容量口径 | **复用 `scds.gateway.mode=simulator`** 注入帧做端到端 IT，不新增第二套开关；状态侧容量、采样周期、位移阈值全部走 `scds.state.*` 并标注「非生产容量结论」 |
+
+**本段新增的分段方案**
+
+设计文档 [design/06-state.md](design/06-state.md) 把 STATE 拆为 S1~S8 共 8 段（每段 ≤3 文件）：
+S1 只读载体与查询端口 → S2 有界队列与单消费者循环 → S3 单一所有者核心（在线/冻结/命中/计数）
+→ S4 采样判定与批量落库 → S5 revision 环形窗口与增量 → S6 与 LIFE 衔接（装载编成、停演终局）
+→ S7 HTTP 接线（4 端点 + `getVestLink`）→ S8 端到端 IT。
+
+**方案里四处必须记明的判断**
+
+1. **不需要新迁移**：`t_track_sample`(V5)、`t_hit_event`(V4)、`t_exercise_unit`(V4) 与所需列/索引已存在。
+2. **命中致死采用「回填」口径（本包自定，非裁定项）**：`ff05` 不携带强度（PROTOCOL.md §6.7），
+   阵亡权威是马甲自报 `hp`，故命中先落 `lethal=false`，该马甲转入 `DIE` 时回填其最近一条命中为 `true`。
+   原基线没有这张判定表；若现场另有定则只改这一处。
+3. **停演顺序不可换**：STATE 必须先写全体单位终局再 flush 轨迹，最后才由 LIFE 调 `freezeAndClose`——
+   后者读的是库里的 `final_status`（`countDeadByExerciseId`），顺序反了会读到 0 阵亡。
+4. **`getVestLink` 的字段跨两层来源**：`online`/`lastHeartbeatAt`/`lastFrameType`/每马甲 `framesTotal` 属 STATE，
+   而现有 6 条链路端点的计数属**链路级**（HW-LINK）；两处不得互相冒充。
+
+**本段未做**：`watchSituation`（WS）与 `SituationPushPort`/`LinkStatusPushPort`（PUSH-MODEL/PUSH-WS，依赖 D07/D08）；
+`epoch`/跨代恢复（D08）；COMMAND 指令状态机；CALIBRATION；REPLAY；EXPORT。
+
+**实施进度**：S1~S8 **均未开始**（本段只做决策收口与分段方案）。
 
