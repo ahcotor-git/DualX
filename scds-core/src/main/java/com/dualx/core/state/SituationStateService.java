@@ -46,9 +46,15 @@ import java.util.concurrent.atomic.AtomicLong;
  * （{@link #start()} 起的 {@code scds-state-writer} 平台线程）逐条 {@link #dispatch(StateEvent)}
  * 处理。查询侧读的是各单元已发布的不可变 {@link UnitState} 视图（volatile 发布），无需加锁。</p>
  *
- * <p><b>本段（S3）交付</b>：在线/离线判定（5000ms 窗口）、阵亡冻结与判活、命中落库与
- * 致死回填、每马甲命中/击杀计数、revision 单写。轨迹采样与批量落库属 S4；revision 环形窗口属 S5；
+ * <p><b>已交付</b>：在线/离线判定（5000ms 窗口）、阵亡冻结与判活、命中落库与致死回填、每马甲命中/击杀
+ * 计数、revision 单写（S3）；并把 S4/S5 的三个零件**接线**到状态变化点——轨迹采样
+ * （{@link TrackSampler} + {@link TrackBatchWriter}）与增量环形窗口（{@link SituationRevisionLog}）。
  * 与 LIFE 的装载/停演编排属 S6；core 读侧查询属 S7。</p>
+ *
+ * <p><b>采样口径</b>（设计 06 §4.4）：每次单元变化都过一次观察点判定
+ * （{@code STATE_CHANGE > DISPLACEMENT > TIMER}，见 {@link TrackSampler#onObservation}）；命中、阵亡、
+ * 判活另记一条必记的 {@code EVENT}。心跳值未变时走 {@code refresh}——它仍过一次观察点（否则静止单元
+ * 永远拿不到 {@code TIMER} 采样），但**不计 revision、不进环形窗口**。</p>
  *
  * <p><b>本段明确不做的边界</b>（不得当成已实现）：</p>
  * <ul>
@@ -72,6 +78,12 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private final StateEventQueue queue;
     private final HitEventRepository hitEvents;
     private final Clock clock;
+    /** 轨迹降采样判定（S4），只由写手线程使用。 */
+    private final TrackSampler trackSampler;
+    /** 轨迹批量落库（S4）：采样点先进缓冲，够批/到间隔/停演时落库。 */
+    private final TrackBatchWriter trackWriter;
+    /** 增量环形窗口（S5）：{@code publish} 时记一条单元级变化，供读侧按 {@code sinceRevision} 补齐。 */
+    private final SituationRevisionLog revisionLog;
 
     /** 全部参演单元；结构性变更只在装载/停演时发生，值变更只在写手线程。 */
     private final Map<Integer, Unit> units = new ConcurrentHashMap<>();
@@ -96,10 +108,15 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private volatile Thread writer;
     private volatile boolean accepting = true;
 
-    public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock) {
+    public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock,
+                                TrackSampler trackSampler, TrackBatchWriter trackWriter,
+                                SituationRevisionLog revisionLog) {
         this.queue = Objects.requireNonNull(queue, "queue");
         this.hitEvents = Objects.requireNonNull(hitEvents, "hitEvents");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.trackSampler = Objects.requireNonNull(trackSampler, "trackSampler");
+        this.trackWriter = Objects.requireNonNull(trackWriter, "trackWriter");
+        this.revisionLog = Objects.requireNonNull(revisionLog, "revisionLog");
     }
 
     // ------------------------------------------------------------------ 生产者（网关读线程）
@@ -274,6 +291,10 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
                 position);
         hitEvents.insert(event);
         hitsDealt.merge(hit.shooterNum(), 1, Integer::sum);
+        if (victim != null) {
+            // 命中是离散事件点：即使被击中者的状态没变，轨迹里也要留下这一刻（设计 06 §4.4）。
+            sampleEvent(victim);
+        }
     }
 
     /** 阵亡：冻结坐标与运动、解除在线窗口，并回填最近一条未判致死的命中。 */
@@ -282,7 +303,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         u.deadAt = now;
         u.frozenMotion = u.motion;
         u.motion = MotionState.FROZEN;
-        publish(u);
+        publishEvent(u);
         if (exerciseId == null) {
             return;
         }
@@ -304,7 +325,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         u.deadAt = null;
         u.motion = u.frozenMotion;
         u.frozenMotion = null;
-        publish(u);
+        publishEvent(u);
         return true;
     }
 
@@ -320,16 +341,42 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         }
     }
 
-    /** 单元变化：revision 单写 +1，并发布新的不可变视图。 */
+    /** 单元变化：revision 单写 +1、记入环形窗口、发布新视图，并按观察点采样。 */
     private void publish(Unit u) {
         revision = revision + 1;
         u.revision = revision;
         u.view = viewOf(u);
+        revisionLog.record(u.view);
+        sampleObservation(u);
     }
 
-    /** 只刷新视图（如心跳窗口基），不计入 revision。 */
+    /**
+     * 离散事件点（命中/阵亡/判活）：与 {@link #publish} 同样计入 revision 与环形窗口，
+     * 差别只在采样理由固定为 {@code EVENT}（必记，不受「状态没变」抑制）。
+     */
+    private void publishEvent(Unit u) {
+        revision = revision + 1;
+        u.revision = revision;
+        u.view = viewOf(u);
+        revisionLog.record(u.view);
+        sampleEvent(u);
+    }
+
+    /** 只刷新视图（如心跳窗口基），不计入 revision、不进环形窗口；但仍过一次观察点以产出 TIMER 采样。 */
     private void refresh(Unit u) {
         u.view = viewOf(u);
+        sampleObservation(u);
+    }
+
+    /** 观察点采样：按 {@code STATE_CHANGE > DISPLACEMENT > TIMER} 判定，不该记时不落库。 */
+    private void sampleObservation(Unit u) {
+        trackSampler.onObservation(exerciseId, u.view, tMs(clock.instant()))
+                .ifPresent(trackWriter::add);
+    }
+
+    /** 事件点采样：无条件记一行。 */
+    private void sampleEvent(Unit u) {
+        trackWriter.add(trackSampler.onEvent(exerciseId, u.view, tMs(clock.instant())));
     }
 
     private static UnitState viewOf(Unit u) {
@@ -364,6 +411,9 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         for (Unit u : units.values()) {
             u.view = viewOf(u);
         }
+        // 跨演习必须清采样基准与增量窗口：tMs 已归零、revision 已归零，留着上一场的条目会被当成新变化。
+        trackSampler.reset();
+        revisionLog.clear();
         revision = 0;
         startedAt = now;
         exerciseId = newExerciseId;
@@ -390,7 +440,9 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
                     hitsDealt.getOrDefault(u.vestNum, 0)));
         }
         outcomes.sort(Comparator.comparingInt(UnitOutcome::vestNum));
-        log.info("态势收尾：exerciseId={}，终局数={}", exerciseId, outcomes.size());
+        // 末段轨迹必须先落库再清内存态，否则留在缓冲里的采样点会随装载丢失（设计 06 §4.4）。
+        int flushed = trackWriter.flush();
+        log.info("态势收尾：exerciseId={}，终局数={}，补落轨迹={} 条", exerciseId, outcomes.size(), flushed);
         units.clear();
         exerciseId = null;
         startedAt = null;

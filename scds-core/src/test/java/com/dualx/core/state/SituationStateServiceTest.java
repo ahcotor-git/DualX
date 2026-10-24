@@ -8,8 +8,11 @@ import com.dualx.core.domain.MotionState;
 import com.dualx.core.domain.PollMode;
 import com.dualx.core.domain.PositionSource;
 import com.dualx.core.domain.RosterEntry;
+import com.dualx.core.domain.SampleReason;
+import com.dualx.core.domain.TrackSample;
 import com.dualx.core.push.UnitState;
 import com.dualx.core.repository.HitEventRepository;
+import com.dualx.core.repository.TrackSampleRepository;
 import com.dualx.protocol.HitPart;
 import com.dualx.protocol.Team;
 import com.dualx.protocol.VestStatus;
@@ -23,11 +26,13 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -43,6 +48,10 @@ class SituationStateServiceTest {
 
     private MutableClock clock;
     private HitEventRepository hitEvents;
+    private TrackSampleRepository trackSamples;
+    private TrackSampler sampler;
+    private TrackBatchWriter trackWriter;
+    private SituationRevisionLog revisionLog;
     private SituationStateService state;
 
     /** 可控时钟：状态机内部一律走它取时间。 */
@@ -74,10 +83,20 @@ class SituationStateServiceTest {
     void setUp() {
         clock = new MutableClock();
         hitEvents = mock(HitEventRepository.class);
-        state = new SituationStateService(newQueue(), hitEvents, clock);
+        trackSamples = mock(TrackSampleRepository.class);
+        // 采样周期 1000ms、室内位移阈值 0.05、室外 100m；批量阈值取很大，避免单测里自动落库，
+        // 只在显式 flush（停演收尾）时观察缓冲。
+        sampler = new TrackSampler(1000, 0.05, 100);
+        trackWriter = new TrackBatchWriter(trackSamples, 500, 1_000_000, 1000, () -> 0);
+        revisionLog = new SituationRevisionLog(16);
+        state = newService();
         state.beginExercise(EXERCISE_ID, T0, List.of(
                 roster(1, "红军-01", Team.RED),
                 roster(2, "蓝军-01", Team.BLUE)));
+    }
+
+    private SituationStateService newService() {
+        return new SituationStateService(newQueue(), hitEvents, clock, sampler, trackWriter, revisionLog);
     }
 
     private static StateEventQueue newQueue() {
@@ -234,7 +253,7 @@ class SituationStateServiceTest {
 
     @Test
     void hitWithoutRunningExerciseIsNotPersisted() {
-        state = new SituationStateService(newQueue(), hitEvents, clock);
+        state = newService();
 
         state.dispatch(new StateEvent.Serial(hit(1, 42, HitPart.HEAD.code()), SOURCE));
 
@@ -251,6 +270,81 @@ class SituationStateServiceTest {
         assertThat(state.unit(1)).get()
                 .extracting(UnitState::status).isEqualTo(VestStatus.DIE);
         assertThat(state.kills(42)).isZero();
+    }
+
+    // ------------------------------------------------------------------ 采样与增量窗口接线
+
+    @Test
+    void changeIsSampledAsStateChangeWhileUnchangedHeartbeatIsNot() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));   // 首次观察 → STATE_CHANGE
+
+        clock.advance(Duration.ofMillis(200));
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));   // 值未变、未到采样周期 → 不记
+
+        state.endExercise();
+
+        assertThat(flushedTrackSamples())
+                .extracting(TrackSample::sampleReason)
+                .containsExactly(SampleReason.STATE_CHANGE);
+    }
+
+    @Test
+    void offlineScanLeavesAStateChangeSample() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+
+        clock.advance(Duration.ofMillis(5001));
+        state.dispatch(new StateEvent.OfflineScan(clock.instant()));
+
+        state.endExercise();
+
+        assertThat(flushedTrackSamples())
+                .extracting(TrackSample::sampleReason)
+                .as("判活/在线建立与离线跳变各留一条 STATE_CHANGE")
+                .containsExactly(SampleReason.STATE_CHANGE, SampleReason.STATE_CHANGE);
+    }
+
+    @Test
+    void hitDeathAndReviveAreSampledAsDiscreteEvents() {
+        state.dispatch(new StateEvent.Serial(gps(1, 116.397428, 39.90923), SOURCE));
+        state.dispatch(new StateEvent.Serial(hit(1, 42, HitPart.HEAD.code()), SOURCE));
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 0, 30, 30), SOURCE));
+
+        assertThat(state.revive(1)).isTrue();
+
+        state.endExercise();
+
+        assertThat(flushedTrackSamples())
+                .filteredOn(s -> s.vestNum() == 1)
+                .extracting(TrackSample::sampleReason)
+                .as("首次定位 + 命中 + 阵亡 + 判活")
+                .containsExactly(SampleReason.STATE_CHANGE, SampleReason.EVENT,
+                        SampleReason.EVENT, SampleReason.EVENT);
+    }
+
+    @Test
+    void endExerciseFlushesTrackBufferAndClearsWindow() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+
+        assertThat(trackWriter.buffered()).as("未达批量阈值，采样点留在缓冲里").isEqualTo(1);
+        assertThat(revisionLog.size()).isEqualTo(1);
+
+        state.endExercise();
+
+        assertThat(trackWriter.buffered()).isZero();
+        verify(trackSamples).insertAll(any());
+    }
+
+    @Test
+    void beginExerciseOnNewExerciseClearsWindowAndSamplingBaseline() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        assertThat(revisionLog.size()).isEqualTo(1);
+        assertThat(sampler.tracked(1)).isTrue();
+
+        state.beginExercise(OTHER_EXERCISE_ID, T0.plusSeconds(60), List.of(roster(1, "红军-01", Team.RED)));
+
+        assertThat(state.revision()).isZero();
+        assertThat(revisionLog.size()).isZero();
+        assertThat(sampler.tracked(1)).as("跨演习必须清采样基准，否则与上一场作差").isFalse();
     }
 
     // ------------------------------------------------------------------ 编成、终局与链路
@@ -330,6 +424,20 @@ class SituationStateServiceTest {
 
     private static final java.util.UUID EXERCISE_ID =
             java.util.UUID.fromString("11111111-2222-3333-4444-555555555555");
+    private static final java.util.UUID OTHER_EXERCISE_ID =
+            java.util.UUID.fromString("99999999-8888-7777-6666-555555555555");
+
+    /** 停演收尾 flush 后，累计落库的全部轨迹采样点（按批次顺序拼接）。 */
+    @SuppressWarnings("unchecked")
+    private List<TrackSample> flushedTrackSamples() {
+        ArgumentCaptor<List<TrackSample>> captor = ArgumentCaptor.forClass(List.class);
+        verify(trackSamples, atLeastOnce()).insertAll(captor.capture());
+        List<TrackSample> all = new ArrayList<>();
+        for (List<TrackSample> batch : captor.getAllValues()) {
+            all.addAll(batch);
+        }
+        return all;
+    }
 
     private static RosterEntry roster(int vestNum, String name, Team team) {
         Instant epoch = Instant.parse("2026-01-01T00:00:00Z");
