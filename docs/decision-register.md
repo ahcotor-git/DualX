@@ -712,7 +712,7 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 **本段未做**：`watchSituation`（WS）与 `SituationPushPort`/`LinkStatusPushPort`（PUSH-MODEL/PUSH-WS，依赖 D07/D08）；
 `epoch`/跨代恢复（D08）；COMMAND 指令状态机；CALIBRATION；REPLAY；EXPORT。
 
-**实施进度（2026-10-24）**：**S1~S5 已完成**。
+**实施进度（2026-10-24）**：**S1~S5 已完成，S4/S5 零件已接线（S4b）**。
 
 - **S1（S1a~S1c 载荷下沉）**：`CombatRole`/`UnitState` 已搬入 `com.dualx.core.push`，api 旧类已删，
   引用方（`SituationEnvelope`/`SituationController`/`DeviceSelf`）已改指向（`241383d`）。
@@ -759,13 +759,11 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
    宁可偶发重复也不静默丢点；现场若证明重复不可接受，只改这一处失败策略。
 4. **没有独立的 flush 定时线程**：间隔判定在写手线程每次 `add` 时顺带完成（设计 06 §4.4 要求「由事件线程
    一次 `insertAll`」），帧流停下的场景由停演收尾的强制 `flush()` 兜底；多一个定时线程只会多一处并发面。
-5. **S4 尚未接线**：S4 白名单只有 `TrackSampler`/`TrackBatchWriter` 与单测，因此这两个类**还没有被
-   `SituationStateService` 的状态变化点调用**（接线要动第三个类，越段）。接线与 `TrackSampler.reset()` 的调用
-   属 S6 的装载/收尾编排。三个容量参数（`scds.state.track-batch-size` / `track-flush-interval-ms` / 缓冲硬上限）
-   与采样参数（`scds.state.sample-interval-ms` / `sample-displacement-indoor` / `-outdoor`）**均无默认值**，
-   由装配层绑定，D10 未闭合前不得据其宣称容量达标。
+5. **已接线**：见下文「S4b 接线段」。三个容量参数（`scds.state.track-batch-size` / `track-flush-interval-ms` /
+   缓冲硬上限）与采样参数（`scds.state.sample-interval-ms` / `sample-displacement-indoor` / `-outdoor`）
+   **仍无默认值**，由装配层绑定，D10 未闭合前不得据其宣称容量达标。
 
-**S5 的口径与未接线**（不得当成已接线）：
+**S5 的口径**：
 
 1. **超窗判据是「`sinceRevision` 小于已淘汰的最新 revision」，不是「小于窗口内最旧的 revision」**：
    revision 只在单元变化时递增、是**稀疏**的，窗口内最旧的条目可能远大于 `sinceRevision`；
@@ -779,13 +777,26 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
    revision 留在窗口里、被客户端当成「更新的变化」；切换本身由 `full=true` 帧表达（设计 02 §4.4）。
    ⚠ **两处设计在此冲突**：设计 02 §4.4 写「演习切换 revision **继续递增不回退**」，设计 06 §4.5 写
    「装载时**归零**」。本段依**设计 06** 执行（它是对 STATE 包的专门裁定），冲突留待 PUSH-MODEL 收口。
-5. **S5 尚未接线**：与 S4 同样，白名单只有本类 + 单测，`SituationRevisionLog` 还没被
-   `SituationStateService.publish()` 调用（接线要动第三个类，越段）。
+5. **已接线**：`publish`/`publishEvent` 每记一次单元变化就写一条；心跳值未变走 `refresh`，**不入窗**
+   （否则 200ms 一轮的心跳会把窗口刷空）。见下文「S4b 接线段」。
 
-**接线缺口（S4/S5 共同，必须在后续段闭合）**：`TrackSampler`、`TrackBatchWriter`、`SituationRevisionLog`
-三个类目前**都只是可单测的零件，尚未接入** `SituationStateService` 的状态变化点与装载/收尾入口；
-闭合需一个专门的接线段（改 `SituationStateService` + 其单测 + 装配层，约 3 个文件），未接线前
-**不得宣称轨迹与增量已产出**。
+**S4b 接线段（已完成，闭合上文两处「未接线」）**：`TrackSampler`、`TrackBatchWriter`、`SituationRevisionLog`
+已接入 `SituationStateService`——构造注入三者，接线点与口径如下：
+
+1. **观察点**：`publish`（每个单元变化）与 `refresh`（心跳值未变）都过一次
+   `TrackSampler.onObservation`，由它按 `STATE_CHANGE > DISPLACEMENT > TIMER` 决定记不记。
+   `refresh` 也过观察点是必要的：否则静止单元永远拿不到 `TIMER` 采样。
+2. **事件点**：`publishEvent` 固定记 `EVENT`，用于**命中**（被击中者）、**阵亡**、**判活**三处；
+   命中即使没改变被击中者状态也必须留点，这是 EVENT 不受抑制的意义。
+3. **窗口只记变化**：`publish`/`publishEvent` 各写一条 `SituationRevisionLog.record`；
+   `refresh` **不写**（它不 bump revision，写进去会把窗口里的真实变化挤掉）。
+4. **装载清底**：`beginExercise` 调 `trackSampler.reset()` + `revisionLog.clear()`——`tMs` 与 revision 都已归零，
+   留着上一场的采样基准会隔着演习作差、留着上一场的条目会被当成「更新的变化」。
+5. **收尾先落库**：`endExercise` 在清内存态前调 `trackWriter.flush()`，末段轨迹不丢在缓冲里；
+   与 `freezeOutcome` 的先后（先写终局再 flush）属 S6 的编排，本段只保证「清内存态前先落库」。
+
+**仍未闭合**：`SituationStateService` 还没有 Spring 装配点（三个零件与全部 `scds.state.*` 参数**没有生产者**），
+故本段只在 core 单测内证明接线正确；装配绑定随 S6/S8 落地。未装配前**不得宣称轨迹与增量已在生产路径上产出**。
 
 S6~S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
 

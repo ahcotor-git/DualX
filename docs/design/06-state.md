@@ -196,6 +196,7 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 | **S3** | 单一所有者核心：心跳/在线/冻结/命中/每马甲计数（注入时钟） | `scds-core` 新增 `SituationStateService`、`HitEventRepository` 增回填方法、单测 |
 | **S4** | 采样判定 + 批量落库 | `scds-core` 新增 `TrackSampler`、`TrackBatchWriter`、单测 |
 | **S5** | revision 环形窗口与增量窗口 | `scds-core` 新增 `SituationRevisionLog`、单测 |
+| **S4b**（实际执行时补段） | S4/S5 接线：把采样、批量落库、环形窗口接入状态变化点与装载/收尾入口 | `scds-core` 改 `SituationStateService`、其单测 |
 | **S6** | 与 LIFE 衔接：装载编成、停演终局（顺序见 §4.6） | `scds-core` 新增 `SituationSessionBinder`、单测 |
 | **S7** | core 读侧 `SituationQuery`：全量/增量/单马甲/队伍汇总/命中列表 + 超窗语义 | `scds-core` 新增 `SituationQuery`、单测 |
 | **S8** | 端到端 IT（仿真注入帧 → 读侧断言） | `scds-app` 新增 `SituationStateIT` |
