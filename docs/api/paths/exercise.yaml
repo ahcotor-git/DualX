@@ -355,6 +355,14 @@ exerciseCurrent:
           application/problem+json:
             schema:
               $ref: '../schemas/common.yaml#/Problem'
+      '503':
+        description: |
+          本实例尚未完成启动自愈，暂不可接业务（`INSTANCE_NOT_READY`）。启动瞬间 `ApplicationRunner`
+          尚未跑完而 HTTP 端口已在收请求，这一条就是此刻的答复；稍后重试即可（设计 01 §4.4）。
+        content:
+          application/problem+json:
+            schema:
+              $ref: '../schemas/common.yaml#/Problem'
       '500':
         $ref: '../schemas/common.yaml#/InternalError'
 

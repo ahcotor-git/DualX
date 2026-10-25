@@ -38,6 +38,8 @@ Problem:
         - `REPLAY_*`   复盘（REPLAY_NOT_FOUND / REPLAY_EXPORT_FAILED）
         - `SITUATION_*` 态势（SITUATION_REVISION_TOO_OLD）
         - `FILE_*`     受保护文件（FILE_URL_INVALID：签名无效或已过期，HTTP 403）
+        - `INSTANCE_NOT_READY` 本实例尚未完成启动自愈，暂不可接业务（HTTP 503，稍后重试即可；
+          与 INTERNAL_ERROR 的 500 分工，见 design/01-exercise-liveness.md §4.4）
         - `VALIDATION_FAILED` 字段级校验失败（详情见 errors）
         - `ROUTE_NOT_FOUND` MVC 路由或静态资源不存在（HTTP 404，不代替业务资源错误码）
         - `METHOD_NOT_ALLOWED` 请求方法不支持（HTTP 405，保留 Allow 响应头）
