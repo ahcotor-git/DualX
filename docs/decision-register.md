@@ -118,7 +118,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | M3 LIFE-DDL（V10 迁移 + 领域与契约同步） | 用户当次选择“LIFE 分段（演习生命周期 + 自愈）”，随后取消 LIFE 范围追问，视为按 D05 推荐口径推进。**本段只做 DDL 与类型边界**：V10 迁移、`ExerciseEndReason`、领域 `ExerciseLogType`（含 `SYSTEM`）、日志读写的枚举切换、契约补 `SYSTEM` 与 `endReason`。服务与自愈流程**未开始**。全量 `mvn -o verify` 全绿（**757 项**：protocol 19 / core 352 / api 103 / app 283）。**已落地 2 个本地提交**（`4933e4a` 迁移+领域+契约、本次决策回写提交），叠加 G 段后 `main` 领先 `origin/main` **11 个提交**；推送**因网络失败**（`RPC failed; curl 55 Send failure: Connection was reset`，EXIT=1），**远端未更新**，不得视为已入远端。细节见下「LIFE-DDL 执行边界」 |
 
 | 提交/推送 M3 HW-LINK（H0~H7） | 用户当次授权“提交推送并继续”。**已落地 3 个语义提交并成功推送**（`18a1358` 设计+决策回写、`c85df04` 网关实现+单测、`450794b` 端点接线+端到端 IT），`git push` 输出 `4efd272..450794b  main -> main`，工作树干净。H7 的 `HwLinkHttpIT` 5 例全通过（`Skipped: 0`），全量 `mvn test` 通过（scds-app 290 例，8 模块 BUILD SUCCESS）。细节见下「D06 / D10 执行边界」的实施进度与提交状态 |
-| D06 / D10（STATE 前置） | 2026-10-24 用户逐项裁定 4 项（见下「STATE 分段（一）执行边界」）：**做**增量环形窗口（不做 epoch/跨代）；5000ms 在线判定用**定时扫描产生跳变**；事件处理用**单消费者事件循环**；无硬件验证**复用 `scds.gateway.mode=simulator`**。**仅裁定口径与分段方案，S1~S8 均未开始**（后续进度见下「STATE 分段（一）执行边界」的实施进度：现 S1~S7 已完成） |
+| D06 / D10（STATE 前置） | 2026-10-24 用户逐项裁定 4 项（见下「STATE 分段（一）执行边界」）：**做**增量环形窗口（不做 epoch/跨代）；5000ms 在线判定用**定时扫描产生跳变**；事件处理用**单消费者事件循环**；无硬件验证**复用 `scds.gateway.mode=simulator`**。**仅裁定口径与分段方案，S1~S8 均未开始**（后续进度见下「STATE 分段（一）执行边界」的实施进度：现 S1~S8 已完成） |
 
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
@@ -712,7 +712,8 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 **本段未做**：`watchSituation`（WS）与 `SituationPushPort`/`LinkStatusPushPort`（PUSH-MODEL/PUSH-WS，依赖 D07/D08）；
 `epoch`/跨代恢复（D08）；COMMAND 指令状态机；CALIBRATION；REPLAY；EXPORT。
 
-**实施进度（2026-10-24）**：**S1~S7 已完成，其中 S4/S5 零件已接线（S4b）、S6 编排已落地、S7 读侧已落地**。
+**实施进度（2026-10-25）**：**S1~S8 已完成**——S4/S5 零件已接线（S4b）、S6 编排已落地、S7 读侧已落地、
+S8 装配层与端到端 IT 已落地。
 
 - **S1（S1a~S1c 载荷下沉）**：`CombatRole`/`UnitState` 已搬入 `com.dualx.core.push`，api 旧类已删，
   引用方（`SituationEnvelope`/`SituationController`/`DeviceSelf`）已改指向（`241383d`）。
@@ -828,10 +829,31 @@ S1 载荷下沉（`CombatRole`/`UnitState` 由 api 搬入 `com.dualx.core.push`�
 5. **未装配**：`SituationQuery` 与 `SituationStateService` 一样**不加** `@Component`——现在加了会因找不到
    `SituationStateService` bean 而让整个应用上下文起不来；装配随 S8 落地。
 
-**仍未闭合**：`SituationStateService`、`SituationSessionBinder` 与 `SituationQuery` 都还没有 Spring 装配点
-（三个零件、`SituationSessionBinder`、`SituationQuery` 与全部 `scds.state.*` 参数**没有生产者**），
-故 S4b/S6/S7 只在 core 单测内证明接线、编排与读侧语义正确；装配绑定随 S8 落地。未装配前
-**不得宣称轨迹与增量已在生产路径上产出**，也不得宣称开演/停演已在生产路径上驱动态势。
+**S8（装配层 + 端到端 IT，已完成）**：分两步落地。
 
-S8 **未开始**；四个态势端点与 `getVestLink` 仍为 501。
+- **S8a（装配层）**：新增 `SituationStateConfig`（`scds-app` 的 `com.dualx.config`），把全部态势 bean
+  （`clock` / `stateEventQueue` / `trackSampler` / `trackBatchWriter` / `situationRevisionLog` /
+  `situationStateService`（`@Bean(initMethod="start", destroyMethod="close")`）/ `situationQuery` /
+  `situationSessionBinder` / `offlineScanJob`）收在一处，并绑定 `scds.state.*`（`SituationStateProperties`，绑定期校验）。
+  嵌套 `OfflineScanJob` 用 `@Scheduled(fixedDelayString="${scds.state.offline-scan-interval-ms}")` 把
+  `StateEvent.OfflineScan` 投进**同一队列**（在线/离线判定与上行帧同一条单消费者事实，
+  5000ms 窗口只在这一处随时间产生跳变）。同时删除占位 `LoggingHardwareEventSink`、
+  移除 `GatewayConfig.hardwareEventSink()`（`deviceLinkAdmin` 仍注入 `HardwareEventSink`）——
+  **唯一** `HardwareEventSink` bean 现为 `SituationStateService`。`application.yml` 落 `scds.state.*`
+  九键与 `scds.situation.revision-window: 1024`。`@EnableScheduling` 挂在唯一入口 `ScdsNextApplication`。
+- **S8b（端到端 IT）**：`SituationStateIT`（`scds-app`）走完整生产入口装配（真 MySQL、真安全链、真写手线程），
+  经**真实网关成帧**注入协议黄金样本帧，断言 **core 读侧** `SituationQuery`。四个用例：①唯一 sink 就是状态机
+  且在线扫描生产者已就绪；②无演习时不产生单元、编成外马甲只计数不改状态（`revision` 在停演不清零，
+  只断言不被该帧推进）；③黄金样本驱动读侧：心跳→LIVE、GPS→定位（WGS-84 由协议库独立复算，不手抄）、
+  命中→落 `t_hit_event` + 每马甲计数 + 队伍汇总、`hp=0`→DIE 冻结坐标并验阵亡终态不被后续心跳复活；
+  ④在线扫描超 5000ms 翻 `OFFLINE` 并留 `STATE_CHANGE` 采样，停演收尾写 `t_exercise_unit` 终局与末段轨迹。
+  **刻意不覆盖两条（已由 core 单测证明）**：致死回填 `kills`（黄金样本 `ff05` 被击中者 4/5 与 `ff03` 的
+  `hp=0` 者 1/2 无交集，拼不出同一马甲的「先命中后阵亡」）与增量超窗 409（装配窗口 1024 端到端刷满不现实，
+  语义由 `SituationQueryTest` 证明、HTTP 状态码映射属 M4）。整仓 `mvn -o test` 全绿（app 294）。
+
+**仍未闭合**：HTTP 接线仍未做——四个态势端点（`SituationController`）与 `DeviceController.getVestLink`
+**仍为 501**，`SituationEnvelope`/`TeamSummary`/`HitEvent` 线载荷下沉、WS 通道与背压补齐属 **M4**。
+装配层虽已把 `beginExercise`/`endExercise` 的**零件**接起来，但生产路径上的**开演/停演调用方**（LIFE 的
+`startExercise`/`stopExercise` 真的调 `SituationSessionBinder`）尚未接线，故现下**不得宣称开演/停演已在
+生产路径上驱动态势**，也不得宣称轨迹与增量已在生产接口上产出——S8 交付到「装配可见 + core 读侧可断言」为止。
 
