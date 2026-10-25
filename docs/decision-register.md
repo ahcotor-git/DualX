@@ -119,6 +119,8 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 
 | 提交/推送 M3 HW-LINK（H0~H7） | 用户当次授权“提交推送并继续”。**已落地 3 个语义提交并成功推送**（`18a1358` 设计+决策回写、`c85df04` 网关实现+单测、`450794b` 端点接线+端到端 IT），`git push` 输出 `4efd272..450794b  main -> main`，工作树干净。H7 的 `HwLinkHttpIT` 5 例全通过（`Skipped: 0`），全量 `mvn test` 通过（scds-app 290 例，8 模块 BUILD SUCCESS）。细节见下「D06 / D10 执行边界」的实施进度与提交状态 |
 | D06 / D10（STATE 前置） | 2026-10-24 用户逐项裁定 4 项（见下「STATE 分段（一）执行边界」）：**做**增量环形窗口（不做 epoch/跨代）；5000ms 在线判定用**定时扫描产生跳变**；事件处理用**单消费者事件循环**；无硬件验证**复用 `scds.gateway.mode=simulator`**。**仅裁定口径与分段方案，S1~S8 均未开始**（后续进度见下「STATE 分段（一）执行边界」的实施进度：现 S1~S8 已完成） |
+| 提交/推送 M3 LIFE 分段（二） | 用户跳过提交授权问询（即按既有式样自决）。**已落地 3 个本地提交**（`443b787` 契约与错误码、`03b0306` 开停演接线与恢复门禁、`b84f998` 单实例保护文档与端到端 HTTP 覆盖）。整仓 `mvn -o test` 全绿（**953 项**：protocol 19 / gateway 44 / core 485 / api 109 / app 296）。推送**因网络失败**（`Recv failure: Connection was reset`，EXIT=1），**远端未更新**：`main` 领先 `origin/main` **6 个提交**（S8 三笔 + 本段三笔），不得视为已入远端 |
+| REVISION 语义冲突（设计 02 §4.4 ↔ 设计 06 §4.5） | **待裁定**，详见下「REVISION 语义冲突待裁定」。当前代码实现的是设计 06 的「装载归零」，与设计 02 「进程内只增不减」相矛盾；PUSH-MODEL 的 Poll 查询与 WS 补齐都以本口径为前提，故它是 M4 的**前置**，不能带着两套口径开工 |
 
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
@@ -967,11 +969,79 @@ L4b 让 `ExerciseController` 依赖 `ExerciseLifecycleService` + `SituationQuery
   变成「还要管内存态」。
 - **`Exercise` 的开演返回不含 `endReason`**：契约 `Exercise` schema 无该字段，`endReason` 只出现在停演响应
   （`StopExerciseResult`）；`CRASH_RECOVERED` 只由自愈补写，走本端点恒为 `NORMAL`。
-- **设计 02 §4.4（演习切换 revision 继续递增）与设计 06 §4.5（装载归零）的冲突**仍未收口，留 PUSH-MODEL。
+- **设计 02 §4.4（演习切换 revision 继续递增）与设计 06 §4.5（装载归零）的冲突**：2026-10-25 已取证并
+  立为待裁定项，见下「REVISION 语义冲突待裁定」（推荐采用设计 02，裁定后随 PUSH-MODEL 实施）。
 - **UWB 解算 / `ff06` 室内定位 / `signalQuality` / BD-09 换算**未接入（承 STATE 段）。
 
-**提交状态**：本段全部改动**停在本地工作树**（未提交、未推送），故本节不列提交号。另 S8 三笔
-（`d3761fd` / `43ca2da` / `5594011`）已本地提交但**尚未推送**——`git push` 因 GitHub:443 不可达失败，
-`main` 领先 `origin/main` 3 个提交。
+**提交状态**：本段已按三笔语义提交落到本地（`443b787` 契约与错误码、`03b0306` 开停演接线与恢复门禁、
+`b84f998` 单实例保护文档与端到端 HTTP 覆盖）。连同 S8 三笔（`d3761fd` / `43ca2da` / `5594011`），
+`main` 领先 `origin/main` **6 个提交**；推送**因网络失败**（`Recv failure: Connection was reset`），
+**远端未更新**，不得视为已入远端。
+
+---
+
+### REVISION 语义冲突待裁定（2026-10-25，M4 PUSH-MODEL 前置）
+
+**冲突原样**
+
+| 出处 | 口径 |
+|---|---|
+| [设计 02](design/02-push-ports.md) §4.4「演习切换」 | 开演 / 停演（含 `CRASH_RECOVERED` 收尾）各推一帧 `full=true`，revision **继续递增不回退** |
+| [设计 06](design/06-state.md) §4.5 / §4.6 | 开演装载时 revision **归零**；§4.6 末尾专门加注「另：`revision` 依 §4.5 在装载时**归零**，非『从当时值起算』」 |
+
+两份设计都同意「进程重启归零、不跨进程连续」，分歧只在**同一进程内的演习切换**。
+
+**已核对的代码事实**（当前实现的是设计 06 一侧）
+
+- [SituationStateService.java](../scds-core/src/main/java/com/dualx/core/state/SituationStateService.java)
+  `beginExercise` 末尾 `revision = 0`；`endExercise` 不动 revision（`SituationStateIT` L193 明确断言
+  「停演不清零」）。
+- [SituationRevisionLog.java](../scds-core/src/main/java/com/dualx/core/state/SituationRevisionLog.java)
+  `clear()` 把 `lastEvictedRevision` 一并归 0，而超窗判定是 `sinceRevision < lastEvictedRevision`；
+  `changesSince` **没有** `sinceRevision > 当前 revision` 的守卫。
+
+**由以上事实推演出的缺陷（干跑推演，不冒充本轮新增的运行时复现）**
+
+设上一场结束时全局 revision 为 500，某客户端持有 `sinceRevision=500`；此后开演把 revision 归零。
+
+- 该客户端带 500 来 Poll：`tooOld(500)` → `500 < 0` 为假 → 判为**未超窗** → 遍历（此时已清空的）窗口
+  → 返回**空列表**，语义是「已是最新」。**客户端永远不知道换了场**，静静停在上一场的画面上。
+- 停演同理：停演不清零 revision，故停演后旧客户端能靠 `changesSince` 拿到空列表而**不知道自己该看
+  `running=false`**。这两条都不是理论边界，而是「返回空列表 = 已是最新」这条既有语义的直接后果。
+- 根因不在某个分支写错，而在**数值回退本身**：一旦 revision 回退，`sinceRevision` 与当前 revision 的
+  **大小关系不再表达新旧**。设计 02 §4.4 正是为避开这一点才写下「不回退」——它把这个坑留给了
+  D08 的 `epoch`（跨进程那一半），而不是在进程内再造一个。
+
+**推荐裁定：采用设计 02 §4.4，设计 06 §4.5/§4.6 的「装载归零」让位**
+
+三条理由：①设计 02 §3 目标 3 自陈「**一次定死** revision 语义（作用域、递增粒度、窗口、重启行为、
+**演习切换时的表现**）」，演习切换明确归它定义，设计 06 §4.5 亦自陈窗口键「沿用设计 02 §5 的既有键」；
+②「战场重建」用 `full=true` 表达已经够用（02 §4.4 原文如此），归零**多买不到任何东西**，只多出一个
+契约未定义的态；③进程内只增不减之后，「切换 / 停演」本身成为一次态势变化，客户端凭 revision 严格
+递增即可判断帧的新旧，无需 `epoch`——`epoch` 只在进程重启时才是必需的（D08，仍待裁定）。
+
+**若按推荐裁定，待实施的最小改动**（不在本轮做，见下）
+
+- `SituationRevisionLog`：新增一个「把窗口下界抬到切换点」的原语（清窗 + `lastEvictedRevision` 置为
+  切换 revision），使**所有早于切换点的 `sinceRevision` 一律超窗 → 409 → 客户端改全量**；类注释
+  L32-34 的「归零」措辞同步改为「抬下界」。
+- `SituationStateService`：`beginExercise` 与 `endExercise` 各把 revision **+1**（切换本身是一次变化），
+  装载后的单元 stamped 该 revision；不再出现 `revision = 0`。
+- 既有断言同步：`SituationStateServiceTest` 的 `beginExerciseOnNewExerciseClearsWindowAndSamplingBaseline`
+  （现断言 `isZero()`）、`SituationQueryTest` L108/L123 的 `isZero()` 与 `changesSince(0)`、
+  `SituationStateIT` L205 / L219 / L221 的 `isZero()`。共约 7 个文件、横跨 `scds-core` 与 `scds-app`。
+- 设计 06 §4.5 / §4.6 改口径；设计 02 **无需改动**（它已是这个口径）。契约不需要动
+  （`sinceRevision` 语义、409 `SITUATION_REVISION_TOO_OLD` 都保持不变）。
+
+**为什么本轮不做**
+
+①它落在 D08 与「跨进程 revision 恢复」的待确认面上，快照 §6 明确「**不得默认同意推荐方案**」；
+②改动横跨两个模块约 7 个文件，超出「单原子任务 ≤3 文件」上限，必须切成可独立验收的子任务，而任一
+子任务中途都会留下红灯断言，属于方案级拆分，不是连续段内的小步；
+③当前实现虽与设计 02 冲突，但在**没有 WS / 没有 Poll 消费方**的今天不会被任何客户端踩到
+（态势四个 HTTP 端点是 501、`SituationPushPort` 尚未接线，均属 M4）。
+
+**阻塞面**：M4 PUSH-MODEL 的「Poll 查询 + 链路同构」与 M4 PUSH-WS 的「首帧屏障 / 补齐 / 超窗 / 跨代
+恢复」都以本口径为前提，未裁定前不宜开工。
 
 
