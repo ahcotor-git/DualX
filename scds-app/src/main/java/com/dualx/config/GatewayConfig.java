@@ -55,11 +55,6 @@ public class GatewayConfig {
     }
 
     @Bean
-    public HardwareEventSink hardwareEventSink() {
-        return new LoggingHardwareEventSink();
-    }
-
-    @Bean
     public DeviceLinkAdmin deviceLinkAdmin(GatewayProperties properties,
                                           LinkRegistry linkRegistry,
                                           HardwareEventSink hardwareEventSink) {
