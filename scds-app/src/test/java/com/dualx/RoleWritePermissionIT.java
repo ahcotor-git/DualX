@@ -13,12 +13,14 @@ import com.dualx.api.security.JwtDecoderConfig;
 import com.dualx.api.security.SecurityConfig;
 import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
+import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.plan.PlanService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileUrlSigner;
+import com.dualx.core.state.SituationQuery;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -133,6 +135,19 @@ class RoleWritePermissionIT {
         @Bean
         PlanService planService() {
             return stub(PlanService.class);
+        }
+
+        // 演习生命周期已接核心 ExerciseLifecycleService（要九个仓储与态势装载），本切片已排掉
+        // DataSource；`/exercise/current` 的在线数还要读态势读侧 SituationQuery。两者都给替身：
+        // 放行的开演 / 停演 / 读当前演习因此稳定返回 501，都不是 401/403，不影响判据。
+        @Bean
+        ExerciseLifecycleService exerciseLifecycleService() {
+            return stub(ExerciseLifecycleService.class);
+        }
+
+        @Bean
+        SituationQuery situationQuery() {
+            return stub(SituationQuery.class);
         }
 
         // 链路端点已接领域端口 DeviceLinkAdmin（真实现要真串口 / Netty 监听 12001）。

@@ -311,7 +311,12 @@ class PlanHttpIT {
         return body;
     }
 
-    /** 造一场进行中的演习：{@code startExercise} 仍是 501，故 409 的场景只能由夹具铺出来。 */
+    /**
+     * 造一场进行中的演习：{@code PLAN_IN_USE} 的判据是「该想定上存在未结束的场次」，
+     * 一行 {@code t_exercise} 就够，不必真开演。本类的判据是授权与校验口径，真开演会把态势
+     * 内存态与终局冻结拖进来（那是 {@code ExerciseLifecycleHttpIT} 的端到端覆盖范围），
+     * 两处都真开演只会让本类的回收从「按行删」变成「还要管内存态」。
+     */
     private static void startRunningExercise(String planId, String planName) {
         UUID exerciseId = UuidV7.generate();
         exercises.insert(new Exercise(exerciseId, UUID.fromString(planId), planName, null, BattleMode.TRAIN,

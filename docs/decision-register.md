@@ -857,3 +857,121 @@ S8 装配层与端到端 IT 已落地。
 `startExercise`/`stopExercise` 真的调 `SituationSessionBinder`）尚未接线，故现下**不得宣称开演/停演已在
 生产路径上驱动态势**，也不得宣称轨迹与增量已在生产接口上产出——S8 交付到「装配可见 + core 读侧可断言」为止。
 
+---
+
+### LIFE 分段（二）执行边界（2026-10-25，M3 演习生命周期开停演接线）
+
+依据 [实施计划](implementation-plan.md) M3 LIFE 与 [设计 01](design/01-exercise-liveness.md)（§4.3 实例标识与
+心跳、§4.4 启动自愈与部署前提、§4.5 心跳绝不自动收尾、§7 判据 6 条）。LIFE 分段（一）交付了「冻结收尾 +
+自愈」的零件，但**开演入口仍是 501**——没有入口就没有可被拒绝的动作，故恢复完成门禁也悬着。本段把
+`exercise.yaml` 的当前演习 4 端点里的 3 个（`getCurrentExercise` / `startExercise` / `stopExercise`）从 501
+接到 `ExerciseLifecycleService` + `SituationQuery`（`listCurrentExerciseLogs` 的游标口径归 M4 PUSH，仍 501），
+并按「每个原子任务 ≤3 文件」分成 L1~L7。
+
+| 段 | 内容 |
+|---|---|
+| L1 | 错误码与全局异常处理：`ApiExceptionHandler.statusOf` 把 `EXERCISE_ALREADY_RUNNING` 从台账段移出，新设「演习生命周期」段逐项登记 `EXERCISE_PLAN_NOT_FOUND`(404) / `EXERCISE_ROSTER_EMPTY`(400) / `EXERCISE_ALREADY_RUNNING`(409) / `EXERCISE_NOT_RUNNING`(409) |
+| L2 | `ExerciseLifecycleService` 起停逻辑：`currentExercise`（读库而不读态势内存态）/ `startExercise` / `insertRunning` / `snapshot` / `stopExercise` / `StopOutcome`（`freezeAndClose` 与 `CloseOutcome` 前段已有，本段只接线） |
+| L3 | `ExerciseLifecycleServiceIT`（12 例）：开演成功与 `owner_instance` 落库、404/400/409 三门、停演 200 与「无场次」409、已结束场次再收尾不改写 |
+| L4 | HTTP 接线：`ExerciseController` 构造器改三参（`PlanService` / `ExerciseLifecycleService` / `SituationQuery`），接 `getCurrentExercise` / `startExercise` / `stopExercise`；新增 `toExercise` / `onlineCount` / `noExerciseRunning` / `exercisePlanId`；`StopExerciseResult` 增 `endReason`；`ApiSkeletonSmokeIT` 同步（两个替身 bean + 构造签名） |
+| L5 | 恢复完成门禁：L5a 契约与枚举 / L5b 载体与发布 / L5c 映射与用例（见下「门禁的三处落地」） |
+| L6 | 单实例保护：`docs/environments.md` §6.4（进程管理层职责，**无 Java 代码改动**） |
+| L7 | 整仓回归（`RoleWritePermissionIT` 补两个替身 bean）与本文档回写；补 `ExerciseLifecycleHttpIT`（当前演习的端到端 HTTP 覆盖） |
+
+**用户逐项裁定（2 项）**
+
+| 项 | 裁定 |
+|---|---|
+| 门禁被拒的错误码 | **新增 `INSTANCE_NOT_READY`（503）**，不复用 `INTERNAL_ERROR`(500)：实例本身没坏，只是还没准备好接业务，客户端动作是「稍后重试」而不是翻日志。按契约优先的规矩，先在 `common.yaml` 的 `Problem.code` 登记，再在 `exercise.yaml` 的 `startExercise` 补 503 响应 |
+| 门禁状态由谁承载 | **`ExerciseLifecycleService` 持 `AtomicBoolean`**；发布方是 `ExerciseLivenessRecover`，不另设就绪标志、不放到配置或环境变量里 |
+
+**为什么门禁必须存在（本段最核心的一条）**
+
+`ApplicationRunner` 排在 `ApplicationReadyEvent` 之前，但**挡不住已经监听的 HTTP 端口收请求**。启动瞬间存在
+这样一个窗口：进程活着、端口通、自愈还没把上次崩溃留下的「进行中」场次收尾。此刻若放行开演，新场次会撞
+`uk_exercise_running`，而操作员看到的是一个看着正常、行为说不通的实例。故五条口径：
+
+1. **门禁在 `startExercise` 的方法最前，先于任何查库**。自愈没跑完时实例的库状态本身不可信（上一场残留行还
+   在），此时报「想定不存在」只会误导现场；503 的语义是「稍后重试」，优先于 404/400 报出——门禁未放行就谈
+   不上请求内容对不对。
+2. **门禁只拦开演**：停演与读侧不拦。运维正好要靠 `GET /exercise/current` 看见残留场次并停掉它，把读侧也拦
+   住等于把唯一的自救通道关掉。
+3. **门禁只进不退**：没有对应的复位方法。自愈在一个进程生命周期里只跑一次，置位后再复位没有真实场景，反而
+   会给出「可以退回未就绪」的错觉。
+4. **恢复失败不走本码**：那时启动直接失败，进程根本不接受请求——那是门禁的最强形态。本码只覆盖「还在跑、
+   但没跑完」这一段。
+5. **503 不带 `Retry-After`**：窗口多长取决于残留场次的收尾耗时，编一个秒数反而会让客户端按错误的节奏重试。
+   `ApiExceptionHandlerBusinessTest` 显式断言该响应头不存在。
+
+**门禁的三处落地**（缺任一处都不成立）
+
+- **契约与枚举（L5a）**：`common.yaml` 登记 `INSTANCE_NOT_READY`（含与 `INTERNAL_ERROR` 的分工说明）；
+  `exercise.yaml` 的 `startExercise` 补 503；`ApiErrorCode` 新增实例级枚举段。
+- **载体与发布（L5b）**：`ExerciseLifecycleService.recovered`（`AtomicBoolean`，初值 `false`）+ `markRecovered()`；
+  `ExerciseLivenessRecover.run()` 在 `findRunningLiveness()` 处理完之后**无条件**调 `markRecovered()`——
+  放在 `ifPresent` 之内就错了，**没有残留场次也是一次完整的自愈**。
+- **映射与用例（L5c）**：`ApiExceptionHandler.statusOf` 映射 503；`ApiExceptionHandlerBusinessTest` 的 503 用例；
+  新建 `ExerciseLifecycleServiceReadinessTest`。**为什么这个负向面必须手建实例**：`@SpringBootTest` 上下文启动
+  即跑完 Runner，永远「已就绪」，拒绝路径在真上下文里走不到。该用例同时断言
+  `verifyNoInteractions(plans, planRoster, exercises, units, sessions)`——门禁先于查库是**判据**，不是巧合。
+
+**`onlineCount` 的口径（本段接线时定，写入 `ExerciseController` 注释）**
+
+在线数取**态势读侧**而非库：库里根本没有这一列，在线与否是内存态的事。算法是「全体减离线」，其中 `OFFLINE`
+是**唯一的链路离线标记**（由 5000ms 心跳窗口扫描判出），`DIE` 则是马甲自报阵亡、与链路无关——**阵亡马甲仍在
+线上报，故仍计在线**。「参演 10 / 在线 8」说的是有几台还在上报，而不是有几台还活着（存活/阵亡的分解在队伍
+汇总里）。开演那一刻全体刚被装载成 `OFFLINE`，此刻算出来就是 0（端到端 IT 断言这一点）。
+
+**L6 的结论：单实例保护落在进程管理层，不在应用层**
+
+核查后确认应用侧三件**已具备且有 IT 覆盖**：开演 `claim(owner_instance)`、2000ms `heartbeat`（守卫带
+`owner_instance`）、`uk_exercise_running` 唯一索引。**唯一的真实缺口是文档**：设计 01 §4.4 把「启动单实例保护」
+指向 `environments.md`，而该节原本缺失，故本段无 Java 代码可改（D05 又禁止引入分布式中间件与库级锁）。
+补 §6.4 记录四件事：为什么必须靠进程管理层（自愈「一律收尾」**不区分 owner**，第二进程会把第一进程的活跃场次
+误停）、四形态要求（容器固定 `container_name` + `restart: unless-stopped`、禁止 `--scale`；原生服务单实例单元；
+升级窗口先停后启；不允许第二节点、无 HA）、现场判据（第二进程起来必留自愈 WARN `CRASH_RECOVERED`/
+`INSTANCE_RESTART` → 视为部署违规；「起来了但开不了演」应查启动日志而非重试）、以及**明确不做**（不引中间件、
+不带库级会话锁或 `GET_LOCK`、不做租约）。
+
+**L7 的回归破损（本段实际踩到，与 PLAN 段 §7 同一类）**
+
+整仓回归暴露 `RoleWritePermissionIT` 3 例上下文加载失败：`Unsatisfied dependency expressed through constructor
+parameter 1: No qualifying bean of type 'com.dualx.core.exercise.ExerciseLifecycleService' available`。根因是
+L4b 让 `ExerciseController` 依赖 `ExerciseLifecycleService` + `SituationQuery`，而该 IT 的切片
+（`PermissionApplication`）排掉了 DataSource，没有这两个 bean。修法：补两个 `stub(...)` 替身（放行的开演 /
+停演 / 读当前演习因此稳定返回 501，都不是 401/403，不影响该类的判据）。**这是接线类改动的连带项**：凡新增
+控制器依赖，都要回头检查所有排掉 DataSource 的切片上下文。
+
+**本节取代 STATE 段末的判断**：`startExercise` / `stopExercise` 现已真的调 `SituationSessionBinder`，
+「生产路径上的开演/停演调用方尚未接线」一句（STATE 段末）**已不再成立**——开演装载编成、停演写终局的编排
+现由 LIFE 的生产入口驱动；STATE 段其余未闭合项（四个态势 HTTP 端点仍 501、线载荷下沉与 WS 归 M4）不变。
+
+**本段结果**：全量 `mvn -o test` → **BUILD SUCCESS，953 项全绿**（`scds-protocol` 19 / `scds-gateway` 44 /
+`scds-core` 485 / `scds-api` 109 / `scds-app` 296）。本段的净增为 `ExerciseLifecycleServiceIT` 12 +
+`ExerciseLifecycleServiceReadinessTest` 1 + `ExerciseLifecycleHttpIT` 2 + `ApiExceptionHandlerBusinessTest` 1，
+其余为 HW-LINK / STATE / PLAN 各段此前已落地的用例。**未清库、未删卷、未改既有账号、未动已应用迁移**
+（本段无新迁移需求）。
+
+**本段未做（附理由）**
+
+- **`listCurrentExerciseLogs` 仍 501**：游标口径（`sinceSeq` → `latestSeq` 的推进）归 M4 PUSH。
+- **网关下行未接线**：契约 `startExercise` 步骤 ②③（逐台 14B 轮询配置帧、7B 开始帧）与 `stopExercise` 的 7B
+  结束帧都属 gateway。故契约 409 描述里「马甲串口链路未开启导致无法下发配置」这一分支**当前不可能触发**，
+  409 只来自 `EXERCISE_ALREADY_RUNNING`。
+- **门禁的拒绝路径在 HTTP 上不可达**：真上下文里 `ExerciseLivenessRecover` 是 `ApplicationRunner`，启动完成
+  即放行；503 由 core 单测（手建未置位实例）与 `ApiExceptionHandlerBusinessTest` 证明，不写成端到端 IT——
+  写不出不存在的时序，也不该为它造第二个开关。
+- **`PLAN_IN_USE` 的夹具未换成真开演**：PLAN 段留下的债务（原文「这条夹具在 `startExercise` 接线后应替换为
+  真实调用」）。本段**有意保留夹具**并改写注释说明理由——`PlanHttpIT` 的判据是授权与校验口径，真开演会把态势
+  内存态与终局冻结拖进来（那是 `ExerciseLifecycleHttpIT` 的范围），两处都真开演只会让该类的回收从「按行删」
+  变成「还要管内存态」。
+- **`Exercise` 的开演返回不含 `endReason`**：契约 `Exercise` schema 无该字段，`endReason` 只出现在停演响应
+  （`StopExerciseResult`）；`CRASH_RECOVERED` 只由自愈补写，走本端点恒为 `NORMAL`。
+- **设计 02 §4.4（演习切换 revision 继续递增）与设计 06 §4.5（装载归零）的冲突**仍未收口，留 PUSH-MODEL。
+- **UWB 解算 / `ff06` 室内定位 / `signalQuality` / BD-09 换算**未接入（承 STATE 段）。
+
+**提交状态**：本段全部改动**停在本地工作树**（未提交、未推送），故本节不列提交号。另 S8 三笔
+（`d3761fd` / `43ca2da` / `5594011`）已本地提交但**尚未推送**——`git push` 因 GitHub:443 不可达失败，
+`main` 领先 `origin/main` 3 个提交。
+
+
