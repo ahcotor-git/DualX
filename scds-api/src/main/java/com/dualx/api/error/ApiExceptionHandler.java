@@ -245,13 +245,18 @@ public class ApiExceptionHandler {
             case INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
             case NOT_IMPLEMENTED -> HttpStatus.NOT_IMPLEMENTED;
 
+            // ── 实例级（M3 LIFE 启动门禁）──────────────────────────────────────
+            // 503 而非 500：实例本身是好的，只是「还没准备好接业务」（启动自愈未跑完），
+            // 稍后重试即可；500 的含义是「这一次请求出了意外」，两者对客户端是不同动作。
+            case INSTANCE_NOT_READY -> HttpStatus.SERVICE_UNAVAILABLE;
+
             // ── 台账域（M2 LEDGER）──────────────────────────────────────────────
             // 逐项按契约登记，不按前缀猜：同一前缀里既有 404（马甲不存在）又有 409（编号冲突）。
             // 尚未落服务的码（COMMAND_*、REPLAY_*、MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
             // 落地那一刻再补进这张表，而不是现在替它们猜一个看着合理的状态。
             case DEVICE_VEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
-            case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND,
-                 EXERCISE_ALREADY_RUNNING -> HttpStatus.CONFLICT;
+            case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND ->
+                    HttpStatus.CONFLICT;
 
             // ── 硬件链路（HW-LINK，D06）──────────────────────────────────────────
             // 两个码同为 409、含义不同：「谁占着」——`DEVICE_LINK_ALREADY_OPEN` 是同一条逻辑链路的
@@ -275,6 +280,14 @@ public class ApiExceptionHandler {
             // 这一条路径上拿到的应当是 PLAN_NOT_FOUND。
             case PLAN_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case PLAN_IN_USE -> HttpStatus.CONFLICT;
+
+            // ── 演习生命周期（M3 LIFE）──────────────────────────────────────────
+            // 四个码同前缀、三种状态，故逐项登记：开演所引用的想定查不到是 404；想定编成为空是 400
+            // （是这次请求的内容问题，不是「资源不存在」）；开演时已有在跑场次、停演时没有在跑场次
+            // 都是 409——都是「当前状态不允许这个动作」，客户端处置动作相同（先 GET current 看真相）。
+            case EXERCISE_PLAN_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case EXERCISE_ROSTER_EMPTY -> HttpStatus.BAD_REQUEST;
+            case EXERCISE_ALREADY_RUNNING, EXERCISE_NOT_RUNNING -> HttpStatus.CONFLICT;
 
             // ── 受保护文件（M2 MAP-BASE，D09-②）────────────────────────────────
             // 签名错与已过期共用一个码、一个状态：客户端处置动作相同（回详情接口取新 URL）。

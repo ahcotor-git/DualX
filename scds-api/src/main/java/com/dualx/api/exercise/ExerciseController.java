@@ -16,8 +16,10 @@ import com.dualx.core.domain.ExportFormat;
 import com.dualx.core.domain.PollMode;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.plan.PlanRosterSheet;
 import com.dualx.core.plan.PlanService;
+import com.dualx.core.state.SituationQuery;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
 import jakarta.validation.Valid;
@@ -42,6 +44,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -57,10 +61,9 @@ import java.util.UUID;
  * 100/30/30/AUTO、{@code battleMode} = TRAIN）——「想定正在演习中不能改」这类判断全在服务层，
  * 写进控制器会让同一规则在 REST 与将来的 WS 入口上各写一遍。</p>
  *
- * <p><b>仍是占位（501）</b>：当前演习的 4 个端点（{@code getCurrentExercise} /
- * {@code startExercise} / {@code stopExercise} / {@code listCurrentExerciseLogs}）需接
- * {@code ExerciseLifecycleService} 与网关下行下发，属 LIFE 段落的剩余部分；
- * 本段只保证路由与 DTO 已按契约立起，响应上 501 与「已实现」可区分。</p>
+ * <p><b>仍是占位（501）</b>：{@code listCurrentExerciseLogs} 未接线——它的游标口径
+ * （{@code sinceSeq} 到 {@code latestSeq} 的推进）归 M4 PUSH。{@code getCurrentExercise} 已接线：
+ * 行数据读库、在线数读态势读侧，无演习时按契约返回 200 + {@code running=false}。</p>
  *
  * <p>不设类级路径前缀，逐方法写完整绝对路径。</p>
  */
@@ -69,9 +72,13 @@ import java.util.UUID;
 public class ExerciseController {
 
     private final PlanService plans;
+    private final ExerciseLifecycleService lifecycle;
+    private final SituationQuery situation;
 
-    public ExerciseController(PlanService plans) {
+    public ExerciseController(PlanService plans, ExerciseLifecycleService lifecycle, SituationQuery situation) {
         this.plans = plans;
+        this.lifecycle = lifecycle;
+        this.situation = situation;
     }
 
     // ── 想定 ────────────────────────────────────────────────────────────────
@@ -176,24 +183,41 @@ public class ExerciseController {
                 .toList());
     }
 
-    // ── 当前演习（占位）─────────────────────────────────────────────────────
+    // ── 当前演习 ────────────────────────────────────────────────────────────
 
-    /** 当前演习状态；无演习进行中时返回 running=false。 */
+    /**
+     * 当前演习状态；无演习进行中时 200 + {@code running=false}（契约明确不是 404）。
+     *
+     * <p>行数据读库、在线数读态势：库里的 {@code ended_at IS NULL} 是「有一场未结束的场次」的权威
+     * ——进程刚重启、自愈尚未收尾时态势内存态是空的，而这一行正是要让操作员看见并去停掉的事实。</p>
+     */
     @GetMapping("/api/v1/exercise/current")
     public Exercise getCurrentExercise() {
-        throw new NotImplementedException("getCurrentExercise");
+        return lifecycle.currentExercise()
+                .map(running -> toExercise(running, situation))
+                .orElseGet(ExerciseController::noExerciseRunning);
     }
 
-    /** 开始演习。 */
+    /**
+     * 开始演习（单例资源：同一时刻至多一场）。
+     *
+     * <p>只做契约形状的搬运：{@code planId} 解析、{@code battleMode} 为 null 时由服务层沿用想定，
+     * 单实例保护与「想定/编成是否可用」全在 {@link ExerciseLifecycleService} 里判。
+     * 契约步骤 ②③（14B 轮询配置帧、7B 开始帧）属网关下行，尚未接线。</p>
+     */
     @PostMapping("/api/v1/exercise/current")
+    @ResponseStatus(HttpStatus.CREATED)
     public Exercise startExercise(@RequestBody @Valid StartExerciseRequest request) {
-        throw new NotImplementedException("startExercise");
+        return toExercise(lifecycle.startExercise(exercisePlanId(request.planId()), request.battleMode()), situation);
     }
 
-    /** 结束演习。 */
+    /** 结束演习；当前没有演习进行中时 409。 */
     @DeleteMapping("/api/v1/exercise/current")
     public StopExerciseResult stopExercise() {
-        throw new NotImplementedException("stopExercise");
+        ExerciseLifecycleService.StopOutcome outcome = lifecycle.stopExercise();
+        // replayId 为 null 是契约允许的形态（复盘落库失败也走这条路）；复盘本体归 M5 REPLAY
+        return new StopExerciseResult(outcome.exerciseId().toString(), outcome.endedAt(), null,
+                outcome.endReason());
     }
 
     /** 当前演习日志流水：按 seq 增量拉取。 */
@@ -215,6 +239,20 @@ public class ExerciseController {
             return UUID.fromString(raw);
         } catch (IllegalArgumentException malformed) {
             throw new BusinessException(ApiErrorCode.PLAN_NOT_FOUND, "想定不存在：" + raw);
+        }
+    }
+
+    /**
+     * 开演请求体里的 {@code planId} 转 UUID。
+     *
+     * <p>与路径参数的 {@link #planId(String)} 同一取向（拼不出来就是不存在），但用开演语境的码：
+     * 本端点的 404 描述的正是「这次开演引用的想定不存在」。</p>
+     */
+    private static UUID exercisePlanId(String raw) {
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException malformed) {
+            throw new BusinessException(ApiErrorCode.EXERCISE_PLAN_NOT_FOUND, "开演所引用的想定不存在：" + raw);
         }
     }
 
@@ -267,5 +305,46 @@ public class ExerciseController {
     private static RosterEntry toEntry(com.dualx.core.domain.RosterEntry entry) {
         return new RosterEntry(entry.vestNum(), entry.name(), entry.team(), entry.hp(),
                 entry.ammo1(), entry.ammo2(), entry.mode());
+    }
+
+    /**
+     * 领域演习行 → 契约 DTO。
+     *
+     * <p>{@code onlineCount} 取态势读侧而不是库：库里根本没有这一列，在线与否是内存态的事。
+     * 开演那一刻全体刚被装载成 {@code OFFLINE}，此时算出来就是 0。</p>
+     */
+    private static Exercise toExercise(com.dualx.core.domain.Exercise exercise, SituationQuery situation) {
+        return new Exercise(exercise.id().toString(), exercise.planId().toString(), exercise.planName(),
+                exercise.mapId() == null ? null : exercise.mapId().toString(), exercise.battleMode(),
+                exercise.running(), exercise.startedAt(), exercise.endedAt(),
+                exercise.running() ? Duration.between(exercise.startedAt(), Instant.now()).toSeconds() : null,
+                exercise.rosterCount(), onlineCount(situation));
+    }
+
+    /**
+     * 在线马甲数：全体减离线。
+     *
+     * <p>{@code OFFLINE} 是**唯一的链路离线标记**（由态势状态机的 5000ms 心跳窗口扫描判出），
+     * {@code DIE} 则是马甲自报阵亡、与链路无关——阵亡马甲仍在线上报，故仍计在线。
+     * 「参演 10 / 在线 8」说的是有几台还在上报，而不是有几台还活着（存活/阵亡的分解在队伍汇总里）。</p>
+     */
+    private static int onlineCount(SituationQuery situation) {
+        int total = 0;
+        int offline = 0;
+        for (SituationQuery.TeamCounts counts : situation.teamSummary()) {
+            total += counts.total();
+            offline += counts.offline();
+        }
+        return total - offline;
+    }
+
+    /**
+     * 无演习进行中：除 {@code running} 外一律留空。
+     *
+     * <p>契约明确这是 200 + {@code running=false} 而**不是 404**，且不得编造场次 ID 或时间
+     * （D15-⑥）；客户端必须先判 {@code running} 再解引用其余字段。</p>
+     */
+    private static Exercise noExerciseRunning() {
+        return new Exercise(null, null, null, null, null, false, null, null, null, null, null);
     }
 }

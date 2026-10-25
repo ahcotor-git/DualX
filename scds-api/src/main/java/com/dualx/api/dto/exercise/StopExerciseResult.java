@@ -1,5 +1,7 @@
 package com.dualx.api.dto.exercise;
 
+import com.dualx.core.domain.ExerciseEndReason;
+
 import java.time.Instant;
 
 /**
@@ -7,7 +9,9 @@ import java.time.Instant;
  *
  * @param exerciseId 演习 ID
  * @param endedAt    结束时刻
- * @param replayId   复盘记录 ID，可用于立即跳转复盘；落库失败为 null
+ * @param replayId   复盘记录 ID，可用于立即跳转复盘；复盘未落库（含落库失败）为 null
+ * @param endReason  结束原因；走本端点恒为 {@code NORMAL}，{@code CRASH_RECOVERED} 只出现在自愈补写的场次
  */
-public record StopExerciseResult(String exerciseId, Instant endedAt, String replayId) {
+public record StopExerciseResult(String exerciseId, Instant endedAt, String replayId,
+                                 ExerciseEndReason endReason) {
 }

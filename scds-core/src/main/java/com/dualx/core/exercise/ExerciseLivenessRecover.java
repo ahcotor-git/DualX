@@ -26,8 +26,10 @@ import java.time.Instant;
  * 与正常停演共用同一段代码，只靠 {@link ExerciseEndReason#CRASH_RECOVERED} 区分。
  *
  * <p>{@code @Order(10)} 只决定本 Runner 与其他 Runner 的先后；它<b>不能</b>阻止已监听的 HTTP 端口
- * 收请求。设计 §4.4 要求的「恢复完成门禁」（恢复未完成时开演被拒）与 {@code startExercise} 同批落地，
- * 本类尚不承载门禁状态。恢复失败时本类不吞异常：启动直接失败，比「起来了却开不了演」更早被运维发现。
+ * 收请求。故本类兼任「恢复完成门禁」的发布方（设计 §4.4）：自愈正常返回后调
+ * {@link ExerciseLifecycleService#markRecovered()}，开演入口在此之前一律以
+ * {@code INSTANCE_NOT_READY}(503) 拒绝。恢复失败时本类不吞异常：启动直接失败，进程根本不接请求
+ * ——那是门禁的最强形态；本类发布的那一位只覆盖「还在跑、但没跑完」这一段。
  */
 @Component
 @Order(10)
@@ -49,6 +51,9 @@ public class ExerciseLivenessRecover implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         exercises.findRunningLiveness().ifPresent(this::recover);
+        // 门禁在此放行：无论上面是否收过尾，走到这里就说明「启动时该看的都看完了」。
+        // 放在 recover 之后而不是 ifPresent 之内——没有残留场次也是一次完整的自愈。
+        lifecycle.markRecovered();
     }
 
     private void recover(ExerciseRepository.RunningLiveness running) {

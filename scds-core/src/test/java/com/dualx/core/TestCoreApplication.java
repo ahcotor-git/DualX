@@ -1,6 +1,7 @@
 package com.dualx.core;
 
 import com.dualx.core.port.TokenSigner;
+import com.dualx.core.state.SituationSessionBinder;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -64,5 +65,18 @@ class TestCoreApplication {
     @Bean
     TokenSigner tokenSigner() {
         return mock(TokenSigner.class);
+    }
+
+    /**
+     * 态势会话编排的装配点在 {@code scds-app} 的 {@code SituationStateConfig}（它还要装配
+     * {@link com.dualx.core.state.SituationStateService} 及其一串协作者），本测试上下文里没有。
+     *
+     * <p>{@code ExerciseLifecycleService} 对它有**强依赖**——生产侧缺装配就该起不来，故不放宽
+     * 成可选注入；这里只补一个桩，让生命周期服务的集成测试能验证「库与内存态的启动顺序」。
+     * 真正的编成装载由 {@code scds-app} 的 {@code SituationStateIT} 用真 binder 覆盖。
+     */
+    @Bean
+    SituationSessionBinder situationSessionBinder() {
+        return mock(SituationSessionBinder.class);
     }
 }

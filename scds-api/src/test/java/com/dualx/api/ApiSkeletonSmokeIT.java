@@ -14,6 +14,7 @@ import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.auth.AuthService;
 import com.dualx.core.auth.DeviceAuthService;
+import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
@@ -21,6 +22,7 @@ import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileStore;
 import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.plan.PlanService;
+import com.dualx.core.state.SituationQuery;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -158,10 +160,28 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 演习生命周期已接核心 ExerciseLifecycleService：同上，替身一律抛占位异常，
+        // 使已接线的读/开演/停演端点在本测试里同样表现为 400（请求体缺失）/501。
+        // 真实链路（单实例保护、编成校验、停演冻结口径）由 ExerciseLifecycleServiceIT 与
+        // scds-app 的 ExerciseLifecycleHttpIT 覆盖。
+        ExerciseLifecycleService lifecycle = Mockito.mock(ExerciseLifecycleService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
+        // 当前演习的 onlineCount 要读态势读侧：同样给抛占位异常的替身。真装配
+        // （SituationStateService 及其一串协作者）在 scds-app 的 SituationStateConfig。
+        SituationQuery situationQuery = Mockito.mock(SituationQuery.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService),
-                        new ExerciseController(planService),
+                        new ExerciseController(planService, lifecycle, situationQuery),
                         new CommandController(),
                         new SituationController(),
                         new DeviceController(vestLedgerService, anchorLedgerService, deviceLinkAdmin),

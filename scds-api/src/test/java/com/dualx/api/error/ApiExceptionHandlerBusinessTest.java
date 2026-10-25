@@ -97,6 +97,21 @@ class ApiExceptionHandlerBusinessTest {
             throw new BusinessException(ApiErrorCode.EXERCISE_ALREADY_RUNNING, "演习进行中");
         }
 
+        @GetMapping("/boom/exercise-not-running")
+        void exerciseNotRunning() {
+            throw new BusinessException(ApiErrorCode.EXERCISE_NOT_RUNNING, "当前没有进行中的演习");
+        }
+
+        @GetMapping("/boom/exercise-plan-missing")
+        void exercisePlanMissing() {
+            throw new BusinessException(ApiErrorCode.EXERCISE_PLAN_NOT_FOUND, "想定不存在");
+        }
+
+        @GetMapping("/boom/exercise-roster-empty")
+        void exerciseRosterEmpty() {
+            throw new BusinessException(ApiErrorCode.EXERCISE_ROSTER_EMPTY, "想定编成为空，无法开演");
+        }
+
         @GetMapping("/boom/link-already-open")
         void linkAlreadyOpen() {
             throw new BusinessException(ApiErrorCode.DEVICE_LINK_ALREADY_OPEN, "链路已开启：SERIAL_VEST");
@@ -115,6 +130,11 @@ class ApiExceptionHandlerBusinessTest {
         @GetMapping("/boom/map-in-use")
         void mapInUse() {
             throw new BusinessException(ApiErrorCode.MAP_IN_USE, "底图已被想定引用，不能删除");
+        }
+
+        @GetMapping("/boom/instance-not-ready")
+        void instanceNotReady() {
+            throw new BusinessException(ApiErrorCode.INSTANCE_NOT_READY, "本实例尚未完成启动自愈，暂不可开演");
         }
 
         @GetMapping("/boom/unmapped")
@@ -177,13 +197,18 @@ class ApiExceptionHandlerBusinessTest {
             "/boom/vest-already-bound| 409 | DEVICE_VEST_ALREADY_BOUND",
             "/boom/vest-not-bound    | 409 | DEVICE_VEST_NOT_BOUND",
             "/boom/exercise-running  | 409 | EXERCISE_ALREADY_RUNNING",
+            // 演习块四个码同前缀、三种状态：开演引用的想定不存在是 404、编成为空是 400，
+            // 开演/停演与「当前是否在跑」冲突是 409——逐项登记而不是按 EXERCISE_ 前缀猜一个状态。
+            "/boom/exercise-not-running   | 409 | EXERCISE_NOT_RUNNING",
+            "/boom/exercise-plan-missing  | 404 | EXERCISE_PLAN_NOT_FOUND",
+            "/boom/exercise-roster-empty   | 400 | EXERCISE_ROSTER_EMPTY",
             // 链路两码同为 409、不同码：契约要求两种冲突可区分（「谁占着」），故逐项登记而非折成一个。
             "/boom/link-already-open | 409 | DEVICE_LINK_ALREADY_OPEN",
             "/boom/link-serial-busy  | 409 | DEVICE_LINK_SERIAL_BUSY",
             "/boom/map-not-found     | 404 | MAP_NOT_FOUND",
             "/boom/map-in-use        | 409 | MAP_IN_USE",
     })
-    @DisplayName("台账域、链路域与地图域错误码逐项按契约登记状态，不按前缀猜（DEVICE_* 里既有 404 又有 409）")
+    @DisplayName("台账域、演习域、链路域与地图域错误码逐项按契约登记状态，不按前缀猜（DEVICE_* / EXERCISE_* 里既有 404 又有 409）")
     void ledgerCodesMapToTheirContractStatus(String path, int expectedStatus, String expectedCode) throws Exception {
         mockMvc.perform(MockMvcRequestBuilders.get(path.trim()))
                 .andExpect(status().is(expectedStatus))
@@ -192,10 +217,22 @@ class ApiExceptionHandlerBusinessTest {
     }
 
     @Test
+    @DisplayName("实例尚未就绪 → 503：与 INTERNAL_ERROR 的 500 分工，客户端动作是「稍后重试」而不是翻日志")
+    void instanceNotReadyIs503Not500() throws Exception {
+        mockMvc.perform(MockMvcRequestBuilders.get("/boom/instance-not-ready"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("INSTANCE_NOT_READY"))
+                .andExpect(jsonPath("$.status").value(503))
+                // 门禁窗口有多长不可预知（取决于残留场次的收尾耗时），不给 Retry-After：
+                // 编一个秒数反而会让客户端按错误的节奏重试。
+                .andExpect(header().doesNotExist(HttpHeaders.RETRY_AFTER));
+    }
+
+    @Test
     @DisplayName("未登记状态的错误码响亮地失败：500 并在响应里保留原码")
     void unmappedCodeFailsLoudlyInsteadOfGuessingAnHttpStatus() throws Exception {
         // 这条是刻意的绊线：状态映射表刻意不按前缀猜（同一前缀里既有 404 又有 409）。
-        // 台账域（M2 LEDGER）登记完 DEVICE_VEST_* 与 EXERCISE_ALREADY_RUNNING 后，
+        // 台账域（M2 LEDGER）与演习块（M3 LIFE）登记完后，
         // 绊线换到尚未落服务的 COMMAND_* 上；将来为 COMMAND_QUEUE_FULL 登记了状态，
         // 本用例会失败——那一刻请一并换成下一个未登记的码，而不是把默认分支改回「猜一个
         // 看起来合理的 4xx」。
