@@ -1,9 +1,9 @@
 package com.dualx.api.situation;
 
 import com.dualx.api.dto.situation.HitEventList;
-import com.dualx.api.dto.situation.SituationEnvelope;
-import com.dualx.api.dto.situation.TeamSummary;
 import com.dualx.api.error.NotImplementedException;
+import com.dualx.core.push.SituationEnvelope;
+import com.dualx.core.push.TeamSummary;
 import com.dualx.core.push.UnitState;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;

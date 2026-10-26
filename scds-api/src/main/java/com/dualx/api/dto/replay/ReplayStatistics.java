@@ -1,6 +1,6 @@
 package com.dualx.api.dto.replay;
 
-import com.dualx.api.dto.situation.TeamSummary;
+import com.dualx.core.push.TeamSummary;
 import com.dualx.protocol.HitPart;
 
 import java.util.List;

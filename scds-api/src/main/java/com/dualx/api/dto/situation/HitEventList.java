@@ -1,5 +1,7 @@
 package com.dualx.api.dto.situation;
 
+import com.dualx.core.push.HitEvent;
+
 import java.util.List;
 
 /**
