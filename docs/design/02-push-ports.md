@@ -1,10 +1,10 @@
 # 设计 02 —— 服务端推送端口（态势 / 链路状态）
 
-> 状态：**状态所有权原则已确认，推送实现尚未落地** | 核查日期：2026-10-21 | 涉及 DDL：无
+> 状态：**态势侧与链路侧推送均已落地（含 Q9 链路同构收口）** | 核查日期：2026-10-26 | 涉及 DDL：无
 > 关联：解决评审遗留 **D2**（`SituationPublisher` 归属与 revision 语义），并补齐 Ports & Adapters 的**第三条边**。
 > 本文档只定义推送通道的实现结构，不改契约（`docs/api` 已定稿）；契约与实际不符之处单列在 §6。
 > 下文线程、补齐与恢复细节为候选设计，不等于已经实现或逐项获得用户确认。
-> 当前只有 PING/PONG 骨架；[审查清单](../review.md) 与 [测试矩阵](../testing.md) 登记未验证内容。
+> 当前两条通道（`/ws/v1/situation`、`/ws/v1/devices/links`）均已接线：首帧、背压、保活、停机齐备；[审查清单](../review.md) 与 [测试矩阵](../testing.md) 登记未验证内容。
 
 ---
 
@@ -124,9 +124,21 @@ public interface SituationPushPort {
 ```java
 package com.dualx.core.port;
 
-/** 链路状态推送端口：网关侧链路开关变化时调用。载荷类型与 {@code GET /devices/links} 完全一致。 */
+import com.dualx.core.domain.LinkStatus;
+import java.util.List;
+
+/**
+ * 链路状态推送端口：网关侧链路开关变化时调用。
+ * <p>载荷类型与 {@code GET /devices/links} 的响应体<b>完全一致</b>（{@code LinkStatus} 数组，
+ * 三种链路恒定各一条）——同构是类型级保证，不是靠两端各自映射到「看起来一样」的形状。</p>
+ */
 public interface LinkStatusPushPort {
-    void publish(LinkStatus status);
+    /**
+     * 广播一份链路状态全量快照。
+     * <p>实现方约定：本方法在链路状态迁移路径上被调用，<b>必须非阻塞、不得抛异常</b>；
+     * 任何 I/O 等待都要下沉到实现方自己的发送线程。</p>
+     */
+    void publish(List<LinkStatus> snapshot);
 }
 ```
 
@@ -144,7 +156,7 @@ public interface LinkStatusPushPort {
 两点澄清：
 
 1. **不再有独立的 `SituationPublisher` 组件。** 该名字废除，避免"端口 / 发布器"两套命名。api 侧实现类命名为 `SituationBroadcaster`（明确它是**适配器**，不是状态持有者）。
-2. **网关同一次链路变化会通知两处**（`HardwareEventSink.onLinkStateChanged` 与 `LinkStatusPushPort.publish`），这是**两个不同订阅者**，不是重复推送：前者喂 core 的健康检查 / 审计，后者喂客户端。网关内部维护一个 `LinkStateRegistry`，`snapshot()` 读它、变化时写它并扇出，三处读到的必然是同一份数据。
+2. **网关同一次链路变化会通知两处**（`HardwareEventSink.onLinkStateChanged` 与 `LinkStatusPushPort.publish`），这是**两个不同订阅者**，不是重复推送：前者喂 core 的健康检查 / 审计，后者喂客户端。网关内部维护一个 `LinkRegistry`，`snapshot()` 读它、变化时写它并扇出，三处读到的必然是同一份数据。推送由 `LinkRegistry` 统一发出（每个 `LinkSlot` 的状态迁移与接入数变化都回打到它），而不是让四个适配器各自在开关分支里各调一次端口。
 
 ### 4.3 前置改动：推送载荷类型下沉到中立层
 
@@ -199,10 +211,11 @@ public interface LinkStatusPushPort {
 
 `RESYNC`：`{"action":"RESYNC","sinceRevision":N}` 复用**同一套**补齐逻辑；超窗时**直接推一帧 `full=true`**，不新增任何服务端动作类型（信封自带 revision，客户端自然对齐）。这样 `clientToServer` 的枚举保持 `[PING, RESYNC]`，契约不用动。
 
-**链路同构缺口，尚待确认**：HTTP 契约返回 `List<LinkStatus>`，WS 契约却定义单个 `LinkStatus`。
-因此“首帧发列表、之后发对象”不是同构实现。候选方案是两端均发送完整列表快照，
-并相应调整 `LinkStatusPushPort` 签名；也可定义共同信封，但这两种都需要先确认契约变更。
-在确认前不得把现有两个不同根类型描述为“已经同构”。
+**链路同构已收口（Q9 采用推荐项）**：HTTP 契约返回 `List<LinkStatus>`，WS 契约的 `serverToClient`
+也已改为**同一根类型**（`LinkStatus` 数组，三种链路恒定各一条）；`LinkStatusPushPort.publish`
+的签名相应改为 `publish(List<LinkStatus> snapshot)`。首帧与每次变化推的**都是完整列表快照**，
+客户端在两条通道上共用同一套「整体替换」逻辑——同构因此是类型级保证（api 侧 `broadcast` 与
+网关 `LinkRegistry.snapshot()` 是同一个 Java 类型、同一份数据），而非「首帧发列表、之后发对象」的纪律约定。
 
 **订阅与首帧必须原子衔接**：注册会话、读取快照、补齐订阅期间新增事件须协调。
 不能仅“读快照然后注册”而丢掉中间变化，也不能“先注册再发首帧”导致增量跑在全量之前。
@@ -287,8 +300,8 @@ publish() ──offer──> 会话队列 [capacity 256] ──take──> 该�
 
 **`scds-gateway`**
 
-- 内部 `LinkStateRegistry`：`snapshot()` 的数据源
-- 链路状态变化点：写 registry → 调 `HardwareEventSink.onLinkStateChanged` → 调 `LinkStatusPushPort.publish`
+- 内部 `LinkRegistry`：`snapshot()` 的数据源，也是**推送的扇出点**（`LinkSlot` 的状态迁移与接入数变化回打 `LinkRegistry.fanOut()`）
+- 链路状态变化点：写 registry → 调 `HardwareEventSink.onLinkStateChanged`（喂 core）→ 由 `fanOut()` 调 `LinkStatusPushPort.publish(snapshot())`（喂客户端）；逐帧热路径 `recordFrame()` 一类**不**触发扇出
 - `DeviceLinkAdmin.snapshot()` 读 registry
 
 **`scds-api`**
@@ -328,7 +341,7 @@ scds:
 | **Q6** | 是否要 `NoopSituationPushPort`？ | **要**。否则 `scds-core` 的单元测试必须拉起 WS 上下文，切片测试的成本会立刻反噬 |
 | **Q7** | 链路状态是否需要在"值未变"时也周期重推（例如 10s 一次）？ | **不需要**。契约已定义 Poll 兜底，周期重推只会浪费带宽并掩盖真正的推送问题 |
 | **Q8** | 旧进程 revision 与新进程 revision 数值重叠如何识别？ | 比较 epoch，或明确重连全量规则；涉及客户端与契约，须先确认 |
-| **Q9** | 链路 Poll 数组与 WS 对象如何满足同构硬约束？ | 推荐两端统一完整列表快照；改签名、WS schema 及首帧用例前先确认 |
+| **Q9** | 链路 Poll 数组与 WS 对象如何满足同构硬约束？ | **已按推荐项落地**：两端统一完整列表快照（`LinkStatus` 数组，根类型一致）。`LinkStatusPushPort.publish(List<LinkStatus>)`、契约 `wsLinks.serverToClient` schema、首帧用例（`LinkWebSocketHandlerTest`）与扇出用例（`LinkRegistryTest`）均已同步；同构靠「`LinkRegistry.snapshot()` 是唯一出口」保证，不靠人工校准 |
 
 ---
 
