@@ -141,7 +141,7 @@ class SituationEnvelopeFactoryTest {
     // ------------------------------------------------------------------ 增量帧
 
     @Test
-    void deltaFrameCarriesWindowChangesWithEmptyHits() {
+    void deltaFrameCarriesWindowChangesWithEmptyHitsAndTeamSummary() {
         long switchRevision = query.revision();
         state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
 
@@ -153,9 +153,9 @@ class SituationEnvelopeFactoryTest {
         assertThat(envelope.changes()).extracting(UnitState::vestNum).containsExactly(1);
         assertThat(envelope.removedVestNums()).isEmpty();
         assertThat(envelope.hits()).as("seq 与 revision 互不推导，增量帧一律不带命中").isEmpty();
-        assertThat(envelope.teamSummary()).containsExactly(
-                new TeamSummary(Team.RED, 1, 1, 0, 0, 0),
-                new TeamSummary(Team.BLUE, 1, 0, 0, 1, 0));
+        assertThat(envelope.teamSummary())
+                .as("增量帧只带变化，权威汇总只在全量帧里出现（客户端按本地 units 自算）")
+                .isEmpty();
     }
 
     @Test

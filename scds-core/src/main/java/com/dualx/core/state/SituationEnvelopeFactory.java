@@ -63,6 +63,11 @@ public final class SituationEnvelopeFactory {
      * {@code sinceRevision} 无法定出该携带哪一段命中。命中补拉一律走契约已有的
      * {@code GET /situation/hits?sinceSeq=}——契约对该端点的定位正是「命中记录面板单独补拉」。</p>
      *
+     * <p><b>{@code teamSummary} 也恒为空</b>：「增量帧只带变化」是<u>字段级</u>口径——客户端把
+     * {@code changes} 合进本地单元表后自己就能算出汇总，权威汇总只在全量帧（{@code full=true}）里出现。
+     * 若增量帧也带权威汇总，则 WS 推的增量帧（写侧不能依赖读侧聚合）与 Poll 的增量帧会是两种形状，
+     * 「同构」就从类型级保证退化成了人工纪律。</p>
+     *
      * <p>{@code removedVestNums} 目前恒为空：本场编成在开演时装载后固定，演习中不移除成员。</p>
      *
      * @throws BusinessException {@link ApiErrorCode#SITUATION_REVISION_TOO_OLD}
@@ -78,7 +83,7 @@ public final class SituationEnvelopeFactory {
         }
         return new SituationEnvelope(
                 query.revision(), false, query.running(), exerciseId(), clock.instant(),
-                List.of(), window.get(), List.of(), List.of(), teamSummary());
+                List.of(), window.get(), List.of(), List.of(), List.of());
     }
 
     // ------------------------------------------------------------------ 单马甲 / 队伍汇总 / 命中
@@ -124,7 +129,13 @@ public final class SituationEnvelopeFactory {
                 event.shooterWeaponKind(), event.hitPart(), event.lethal(), event.position());
     }
 
-    private static TeamSummary toWire(SituationQuery.TeamCounts counts) {
+    /**
+     * 读侧计数载体 → 线载荷。
+     *
+     * <p>公开是给**写侧**用的：{@code SituationStateService} 推全量帧时要带权威汇总，它只能拿到
+     * {@link SituationQuery#teamSummaryOf} 的结果，而「计数载体 → 线载荷」的换算只能有一处。</p>
+     */
+    public static TeamSummary toWire(SituationQuery.TeamCounts counts) {
         return new TeamSummary(counts.team(), counts.total(), counts.live(), counts.dead(),
                 counts.offline(), counts.hitsDealt());
     }

@@ -10,6 +10,9 @@ import com.dualx.core.domain.PositionSource;
 import com.dualx.core.domain.RosterEntry;
 import com.dualx.core.domain.SampleReason;
 import com.dualx.core.domain.TrackSample;
+import com.dualx.core.port.SituationPushPort;
+import com.dualx.core.push.SituationEnvelope;
+import com.dualx.core.push.TeamSummary;
 import com.dualx.core.push.UnitState;
 import com.dualx.core.repository.HitEventRepository;
 import com.dualx.core.repository.TrackSampleRepository;
@@ -53,6 +56,9 @@ class SituationStateServiceTest {
     private TrackBatchWriter trackWriter;
     private SituationRevisionLog revisionLog;
     private SituationStateService state;
+    /** 本场推送出去的全部信封（写侧是无条件推送的，改为记录以便逐帧断言）。 */
+    private final List<SituationEnvelope> pushed = new ArrayList<>();
+    private SituationPushPort push;
     /** {@code setUp} 装载本场（一次切换）后的 revision——「非单元变化不计 revision」类断言的基准。 */
     private long revisionAfterLoad;
 
@@ -91,15 +97,19 @@ class SituationStateServiceTest {
         sampler = new TrackSampler(1000, 0.05, 100);
         trackWriter = new TrackBatchWriter(trackSamples, 500, 1_000_000, 1000, () -> 0);
         revisionLog = new SituationRevisionLog(16);
+        pushed.clear();
+        push = pushed::add;
         state = newService();
         state.beginExercise(EXERCISE_ID, T0, List.of(
                 roster(1, "红军-01", Team.RED),
                 roster(2, "蓝军-01", Team.BLUE)));
         revisionAfterLoad = state.revision();
+        // 装载本身推的那一帧全量不属于被测行为，清掉基线，后续断言只看被测动作推了什么。
+        pushed.clear();
     }
 
     private SituationStateService newService() {
-        return new SituationStateService(newQueue(), hitEvents, clock, sampler, trackWriter, revisionLog);
+        return new SituationStateService(newQueue(), hitEvents, clock, sampler, trackWriter, revisionLog, push);
     }
 
     private static StateEventQueue newQueue() {
@@ -359,6 +369,74 @@ class SituationStateServiceTest {
         assertThat(state.unit(1)).get()
                 .extracting(UnitState::revision).isEqualTo(switchRevision);
         assertThat(sampler.tracked(1)).as("跨演习必须清采样基准，否则与上一场作差").isFalse();
+    }
+
+    // ------------------------------------------------------------------ 下行推送
+
+    @Test
+    void unitChangeIsPushedAsDeltaFrame() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+
+        assertThat(pushed).hasSize(1);
+        SituationEnvelope frame = pushed.get(0);
+        assertThat(frame.full()).isFalse();
+        assertThat(frame.revision()).isEqualTo(state.revision());
+        assertThat(frame.running()).isTrue();
+        assertThat(frame.exerciseId()).isEqualTo(EXERCISE_ID.toString());
+        assertThat(frame.serverTime()).isEqualTo(T0);
+        assertThat(frame.changes()).extracting(UnitState::vestNum).containsExactly(1);
+        assertThat(frame.units()).as("增量帧不带全量快照").isEmpty();
+        assertThat(frame.hits()).as("命中不推 revision，增量帧一律不带命中").isEmpty();
+        assertThat(frame.teamSummary()).as("增量帧只带变化，权威汇总只在全量帧里").isEmpty();
+    }
+
+    @Test
+    void unchangedHeartbeatPushesNothing() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        pushed.clear();
+
+        clock.advance(Duration.ofMillis(200));
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+
+        assertThat(pushed).as("心跳值未变只刷新窗口，不计 revision、不推送").isEmpty();
+    }
+
+    @Test
+    void exerciseSwitchIsPushedAsFullFrameWithAuthoritativeTeamSummary() {
+        state.beginExercise(OTHER_EXERCISE_ID, T0.plusSeconds(60), List.of(roster(1, "红军-01", Team.RED)));
+
+        assertThat(pushed).hasSize(1);
+        SituationEnvelope frame = pushed.get(0);
+        assertThat(frame.full()).isTrue();
+        assertThat(frame.revision()).isEqualTo(state.revision());
+        assertThat(frame.exerciseId()).isEqualTo(OTHER_EXERCISE_ID.toString());
+        assertThat(frame.units()).extracting(UnitState::vestNum).containsExactly(1);
+        assertThat(frame.changes()).isEmpty();
+        assertThat(frame.hits()).isEmpty();
+        assertThat(frame.teamSummary())
+                .as("全量帧带权威汇总：新装载的单元一律按离线起算")
+                .containsExactly(new TeamSummary(Team.RED, 1, 0, 0, 1, 0));
+    }
+
+    @Test
+    void stopExerciseIsPushedAsEmptyFullFrame() {
+        state.endExercise();
+
+        assertThat(pushed).hasSize(1);
+        SituationEnvelope frame = pushed.get(0);
+        assertThat(frame.full()).isTrue();
+        assertThat(frame.revision()).isEqualTo(state.revision());
+        assertThat(frame.running()).isFalse();
+        assertThat(frame.exerciseId()).isNull();
+        assertThat(frame.units()).isEmpty();
+        assertThat(frame.teamSummary()).isEmpty();
+    }
+
+    @Test
+    void idempotentBeginExercisePushesNothing() {
+        state.beginExercise(EXERCISE_ID, T0, List.of(roster(1, "红军-01", Team.RED)));
+
+        assertThat(pushed).as("同场重复装载不改动任何东西，也就不该推帧").isEmpty();
     }
 
     // ------------------------------------------------------------------ 编成、终局与链路

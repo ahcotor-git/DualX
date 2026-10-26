@@ -9,7 +9,10 @@ import com.dualx.core.domain.MotionState;
 import com.dualx.core.domain.PositionSource;
 import com.dualx.core.domain.RosterEntry;
 import com.dualx.core.port.HardwareEventSink;
+import com.dualx.core.port.SituationPushPort;
 import com.dualx.core.push.CombatRole;
+import com.dualx.core.push.SituationEnvelope;
+import com.dualx.core.push.TeamSummary;
 import com.dualx.core.push.UnitState;
 import com.dualx.core.repository.HitEventRepository;
 import com.dualx.protocol.HitPart;
@@ -51,6 +54,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * （{@link TrackSampler} + {@link TrackBatchWriter}）与增量环形窗口（{@link SituationRevisionLog}）。
  * 与 LIFE 的装载/停演编排属 S6；core 读侧查询属 S7。</p>
  *
+ * <p><b>下行推送</b>（设计 02 §4.1 第三条边）：每次单元变化（含命中/阵亡/判活）推一帧增量、开演与停演
+ * 各推一帧全量，全部走 {@link SituationPushPort}；端口实现方负责非阻塞与吞异常（§4.7 约定 1），
+ * 本类只保证「推什么」——「怎么发」不在这里。心跳值未变的刷新**不推**：它不计 revision，
+ * 推了会让客户端的连续性检查把正常的 200ms 心跳误判成丢帧。</p>
+ *
  * <p><b>采样口径</b>（设计 06 §4.4）：每次单元变化都过一次观察点判定
  * （{@code STATE_CHANGE > DISPLACEMENT > TIMER}，见 {@link TrackSampler#onObservation}）；命中、阵亡、
  * 判活另记一条必记的 {@code EVENT}。心跳值未变时走 {@code refresh}——它仍过一次观察点（否则静止单元
@@ -84,6 +92,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private final TrackBatchWriter trackWriter;
     /** 增量环形窗口（S5）：{@code publish} 时记一条单元级变化，供读侧按 {@code sinceRevision} 补齐。 */
     private final SituationRevisionLog revisionLog;
+    /** 态势下行端口（设计 02 §4.1 第三条边）：每次变化、开演、停演各推一帧。 */
+    private final SituationPushPort push;
 
     /** 全部参演单元；结构性变更只在装载/停演时发生，值变更只在写手线程。 */
     private final Map<Integer, Unit> units = new ConcurrentHashMap<>();
@@ -108,15 +118,26 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private volatile Thread writer;
     private volatile boolean accepting = true;
 
+    /**
+     * 无下行消费者的构造：{@link NoopSituationPushPort} 兜底。核心单测与「只要核心不要 WS」的
+     * 切片走这条，不必拉起 WebSocket 上下文（设计 02 §6 Q6）。生产装配一律走下面带端口的构造。
+     */
     public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock,
                                 TrackSampler trackSampler, TrackBatchWriter trackWriter,
                                 SituationRevisionLog revisionLog) {
+        this(queue, hitEvents, clock, trackSampler, trackWriter, revisionLog, new NoopSituationPushPort());
+    }
+
+    public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock,
+                                TrackSampler trackSampler, TrackBatchWriter trackWriter,
+                                SituationRevisionLog revisionLog, SituationPushPort push) {
         this.queue = Objects.requireNonNull(queue, "queue");
         this.hitEvents = Objects.requireNonNull(hitEvents, "hitEvents");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.trackSampler = Objects.requireNonNull(trackSampler, "trackSampler");
         this.trackWriter = Objects.requireNonNull(trackWriter, "trackWriter");
         this.revisionLog = Objects.requireNonNull(revisionLog, "revisionLog");
+        this.push = Objects.requireNonNull(push, "push");
     }
 
     // ------------------------------------------------------------------ 生产者（网关读线程）
@@ -348,6 +369,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         u.view = viewOf(u);
         revisionLog.record(u.view);
         sampleObservation(u);
+        pushDelta(u);
     }
 
     /**
@@ -360,12 +382,50 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         u.view = viewOf(u);
         revisionLog.record(u.view);
         sampleEvent(u);
+        pushDelta(u);
     }
 
     /** 只刷新视图（如心跳窗口基），不计入 revision、不进环形窗口；但仍过一次观察点以产出 TIMER 采样。 */
     private void refresh(Unit u) {
         u.view = viewOf(u);
         sampleObservation(u);
+    }
+
+    // ------------------------------------------------------------------ 下行推送（设计 02 §4.4、§4.6）
+
+    /**
+     * 推一帧增量：只带本次变化的那个单元。
+     *
+     * <p>{@code hits} 与 {@code teamSummary} 恒空——与 HTTP 增量帧<u>同口径</u>（{@code
+     * SituationEnvelopeFactory.delta}）：命中不推 revision、{@code seq} 与 {@code revision} 互不推导，
+     * 故增量帧无从定出该带哪一段命中；队伍汇总由客户端把 {@code changes} 合进本地单元表后自算。
+     * 权威汇总只在全量帧里出现。</p>
+     *
+     * <p>端口实现方负责非阻塞与吞异常（设计 02 §4.7 约定 1），本类不在此加 I/O 等待或兜底
+     * try/catch——加了会把「实现方未遵守约定」这个真问题藏起来。</p>
+     */
+    private void pushDelta(Unit u) {
+        push.publish(new SituationEnvelope(
+                revision, false, running(), exerciseIdText(), clock.instant(),
+                List.of(), List.of(u.view), List.of(), List.of(), List.of()));
+    }
+
+    /**
+     * 推一帧全量：开演 / 停演这类「换场」用全量帧表达最直观——战场清空或重建都不需要新增动作类型，
+     * 客户端凭帧自带的 revision 直接对齐（设计 02 §4.4、§4.9）。
+     */
+    private void pushFull() {
+        List<UnitState> snapshot = snapshot();
+        push.publish(new SituationEnvelope(
+                revision, true, running(), exerciseIdText(), clock.instant(),
+                snapshot, List.of(), List.of(), List.of(),
+                SituationQuery.teamSummaryOf(snapshot, this::hitsDealt).stream()
+                        .map(SituationEnvelopeFactory::toWire).toList()));
+    }
+
+    private String exerciseIdText() {
+        UUID id = exerciseId;
+        return id == null ? null : id.toString();
     }
 
     /** 观察点采样：按 {@code STATE_CHANGE > DISPLACEMENT > TIMER} 判定，不该记时不落库。 */
@@ -421,6 +481,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         startedAt = now;
         exerciseId = newExerciseId;
         log.info("态势装载完成：exerciseId={}，单元数={}，切换点 revision={}", newExerciseId, units.size(), revision);
+        // 换场必须让已连上的客户端立刻重画：全量帧表达「战场重建」（设计 02 §4.9）。
+        pushFull();
     }
 
     /**
@@ -453,6 +515,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         units.clear();
         exerciseId = null;
         startedAt = null;
+        // 停演后的第一帧必须是全量且 running=false、units 为空——客户端据此清空战场（设计 02 §7 判据 6）。
+        pushFull();
         return outcomes;
     }
 

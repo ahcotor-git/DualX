@@ -1,9 +1,11 @@
 package com.dualx.config;
 
+import com.dualx.core.port.SituationPushPort;
 import com.dualx.core.repository.ExerciseUnitRepository;
 import com.dualx.core.repository.HitEventRepository;
 import com.dualx.core.repository.PlanRosterRepository;
 import com.dualx.core.repository.TrackSampleRepository;
+import com.dualx.core.state.NoopSituationPushPort;
 import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
 import com.dualx.core.state.SituationRevisionLog;
@@ -16,6 +18,7 @@ import com.dualx.core.state.TrackSampler;
 import com.dualx.protocol.ProtocolConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -100,6 +103,12 @@ public class SituationStateConfig {
      *
      * <p>{@code initMethod="start"} 起唯一写手线程（守护线程）；{@code destroyMethod="close"} 在停机
      * 阶段置 {@code accepting=false} 并中断写手，避免停机时还在往库里写轨迹。</p>
+     *
+     * <p><b>为什么要 {@link ObjectProvider} 而不是 {@code @ConditionalOnMissingBean}</b>：设计 02 §5/§6 Q6
+     * 要的是「没有 WS 实现时用 no-op」，而 {@code @ConditionalOnMissingBean} 的语义只在**自动配置**里
+     * 有确定的求值顺序——写在普通 {@code @Configuration} 里时，它是否生效取决于组件的扫描顺序
+     * （{@code SituationBroadcaster} 与本就同属被扫描的组件），会出现「加了个实现却被 no-op 顶掉」的
+     * 静默故障。{@code getIfAvailable} 在**装配时**看容器实际有什么，与顺序无关，语义也正是 Q6 想要的那条。</p>
      */
     @Bean(initMethod = "start", destroyMethod = "close")
     public SituationStateService situationStateService(StateEventQueue queue,
@@ -107,8 +116,10 @@ public class SituationStateConfig {
                                                        Clock clock,
                                                        TrackSampler trackSampler,
                                                        TrackBatchWriter trackBatchWriter,
-                                                       SituationRevisionLog revisionLog) {
-        return new SituationStateService(queue, hitEvents, clock, trackSampler, trackBatchWriter, revisionLog);
+                                                       SituationRevisionLog revisionLog,
+                                                       ObjectProvider<SituationPushPort> push) {
+        return new SituationStateService(queue, hitEvents, clock, trackSampler, trackBatchWriter, revisionLog,
+                push.getIfAvailable(NoopSituationPushPort::new));
     }
 
     /** 态势读侧门面：M4 的四个 Poll 端点与 WS 补齐都从这里取，不各自拼一遍。 */

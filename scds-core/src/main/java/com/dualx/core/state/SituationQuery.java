@@ -6,12 +6,14 @@ import com.dualx.core.repository.HitEventRepository;
 import com.dualx.protocol.Team;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.ToIntFunction;
 
 /**
  * 态势的<b>读侧</b>（设计 06 §5 S7 / [设计 02](../../../../docs/design/02-push-ports.md) §5）：
@@ -94,8 +96,22 @@ public final class SituationQuery {
      * {@code t_exercise_unit.hits_dealt} 同口径（设计 06 §4.3）。</p>
      */
     public List<TeamCounts> teamSummary() {
+        return teamSummaryOf(state.snapshot(), state::hitsDealt);
+    }
+
+    /**
+     * 聚合本体：从单元视图与「某马甲打出的命中数」函数算出队伍汇总。
+     *
+     * <p><b>为什么是静态方法</b>：写侧（{@code SituationStateService}）推全量帧时也要一份**权威**汇总，
+     * 而它不能反向依赖本类（本类依赖它）。队伍汇总的口径（含 {@code hitsDealt} 是「打出数」而非
+     * 「被命中数」）只能有一处，故抽成不依赖状态的静态实现，供读侧与写侧共用。</p>
+     *
+     * @param units     参与统计的单元视图（写侧传本场快照，读侧传 {@code state.snapshot()}）
+     * @param hitsDealt 取某马甲累计打出命中数的函数
+     */
+    public static List<TeamCounts> teamSummaryOf(Collection<UnitState> units, ToIntFunction<Integer> hitsDealt) {
         Map<Team, int[]> acc = new EnumMap<>(Team.class);
-        for (UnitState u : state.snapshot()) {
+        for (UnitState u : units) {
             // [total, live, dead, offline, hitsDealt]
             int[] c = acc.computeIfAbsent(u.team(), k -> new int[5]);
             c[0]++;
@@ -104,7 +120,7 @@ public final class SituationQuery {
                 case DIE -> c[2]++;
                 case OFFLINE -> c[3]++;
             }
-            c[4] += state.hitsDealt(u.vestNum());
+            c[4] += hitsDealt.applyAsInt(u.vestNum());
         }
         List<TeamCounts> out = new ArrayList<>(acc.size());
         for (Map.Entry<Team, int[]> e : acc.entrySet()) {
