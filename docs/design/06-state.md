@@ -142,27 +142,33 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 ### 4.5 revision 与增量环形窗口（D07/D08 边界）
 
 - `revision` 由事件线程**单写**，任何单元变化 `+1`；`UnitState.revision` 记录「该单元最后一次变化的 revision」。
+- **演习切换（开演/停演）本身也 `+1`，只增不减、不归零**（[设计 02](02-push-ports.md) §4.4 为权威口径）：
+  切换时清空窗口并把「已淘汰下界」抬到切换点（`SituationRevisionLog.rebase(switchRevision)`），使所有
+  **早于切换点**的 `sinceRevision` 一律判为超窗 → 409 → 客户端改全量；否则上一场的条目会以更小的 revision
+  残留，而客户端手里更大的 `sinceRevision` 又因未超窗拿到空列表、误判「已是最新」，换场就此静默失效。
 - 环形窗口保留最近 `scds.situation.revision-window`（默认 **1024**，**沿用 [设计 02](02-push-ports.md) §5 的既有键**）条**单元级**变化。
 - `getSituation`：
   - 不带 `sinceRevision` → 全量（`full=true`，`units` 有效）；
   - 带 `N` 且 `N` 在窗口内 → 增量（`full=false`，`changes` / `removedVestNums` / `hits`）；
-  - 带 `N` 但**超出窗口** → 409 `SITUATION_REVISION_TOO_OLD`（`ApiErrorCode` 已存在），客户端改全量。
-- **本包不做 `epoch`/跨代**：进程重启后 revision 从 1 重新开始，与 D08 的跨代恢复一起留给 PUSH-MODEL。
+  - 带 `N` 但**超出窗口**（含早于切换点）→ 409 `SITUATION_REVISION_TOO_OLD`（`ApiErrorCode` 已存在），客户端改全量。
+- **本包不做 `epoch`/跨代**：进程重启后 revision 从 **0** 重新起算（首次装载为 1），与 D08 的跨代恢复一起留给 PUSH-MODEL。
   这一点必须在实现与文档里写明，不得让客户端误以为跨重启可续传。
 - 无演习进行中：`running=false`、`units` 空数组；`includeSnapshotOnFirst=false` 时仍返回一帧空快照（契约默认 `true`）。
 
 ### 4.6 与 LIFE 的衔接（不含指令状态机）
 
 - **开演**：LIFE 的 `startExercise` 成功后调用 STATE 装载 —— 按 `exercise.planId()` 从 **`t_plan_roster`**（想定编成）
-  读编成到内存态（初始 `OFFLINE`、`position=null`、`positionSource=NONE`、装载时 `revision` **归零**），
-  记录 `startedAt` 作为 `tMs` 原点。
+  读编成到内存态（初始 `OFFLINE`、`position=null`、`positionSource=NONE`；装载是一次切换，`revision` **递增**
+  并作为本场切换点 stamped 到各单元），记录 `startedAt` 作为 `tMs` 原点。
   > **S6 落地修正**：本节原写「从 `t_exercise_unit` 读编成」，但该表是终局台账，**没有**初始 `hp/ammo/mode` 三列，
   > 而装载要的正是带这三项的 `RosterEntry`（即 `t_plan_roster` 的领域记录）。两份编成在开演时同源
   > （演习快照由 `startExercise` 从想定编成而来），故改读想定编成，**不新造默认值**。
-  > 另：`revision` 依 §4.5 在装载时**归零**，非「从当时值起算」。
+  > 另：`revision` 依 §4.5 在装载时**递增**（只增不减、不归零），切换点即本次递增值。
 - **停演**：在 LIFE 调 `freezeAndClose` **之前**，STATE 先对全体单位写一次终局
   （复用 `ExerciseUnitRepository.freezeOutcome`：存活写 `LIVE`、阵亡写 `DIE` + `dead_at` + 终值 `kills/hitsDealt`），
   **再 flush 轨迹缓冲**。顺序反了会让 `freezeAndClose` 读到 0 阵亡（它读的是库里的终局）。
+  停演同样是**切换**：`revision` 递增并把窗口下界抬到切换点（此时全量为空），早于切换点的 `sinceRevision`
+  一律 409，客户端据此改全量而不会误判「已是最新」（§4.5）。
   > **S6 落地时的实现口径**：flush 收进 `endExercise()`（即写终局**之前**）——flush 位置不影响任何读者
   > （`freezeAndClose` 读 `t_exercise_unit` + `t_hit_event`，**不读** `t_track_sample`），收进去可让
   > 「停演必 flush」不依赖调用方纪律；两者仍都在 `freezeAndClose` 之前完成。
