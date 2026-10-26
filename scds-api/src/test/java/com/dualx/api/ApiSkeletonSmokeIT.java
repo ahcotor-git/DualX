@@ -22,6 +22,7 @@ import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileStore;
 import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.plan.PlanService;
+import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
@@ -178,12 +179,22 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 态势四个 Poll 端点已接 core 的线载荷组装器（它内部走 SituationQuery 原语）：
+        // 替身一律抛占位异常，使四个端点在本测试里同样表现为 501（只证明路由注册）。
+        // 组装口径（全量/增量/超窗 409/编成外马甲 404）由 SituationEnvelopeFactoryTest 证明，
+        // 端到端由 scds-app 的态势 HTTP 测试覆盖。
+        SituationEnvelopeFactory situationEnvelopeFactory = Mockito.mock(SituationEnvelopeFactory.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService),
                         new ExerciseController(planService, lifecycle, situationQuery),
                         new CommandController(),
-                        new SituationController(),
+                        new SituationController(situationEnvelopeFactory),
                         new DeviceController(vestLedgerService, anchorLedgerService, deviceLinkAdmin),
                         // standalone 不装配 Spring 上下文，ObjectMapper 只能自备：本测试里
                         // 底图相关的 JSON 进出都会被替身的占位异常截断，用默认配置即可。

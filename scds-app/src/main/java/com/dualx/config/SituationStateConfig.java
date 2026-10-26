@@ -4,6 +4,7 @@ import com.dualx.core.repository.ExerciseUnitRepository;
 import com.dualx.core.repository.HitEventRepository;
 import com.dualx.core.repository.PlanRosterRepository;
 import com.dualx.core.repository.TrackSampleRepository;
+import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
 import com.dualx.core.state.SituationRevisionLog;
 import com.dualx.core.state.SituationSessionBinder;
@@ -114,6 +115,16 @@ public class SituationStateConfig {
     @Bean
     public SituationQuery situationQuery(SituationStateService state, HitEventRepository hitEvents) {
         return new SituationQuery(state, hitEvents);
+    }
+
+    /**
+     * 线载荷组装器：把读侧原语拼成 {@code SituationEnvelope}，Poll 与 WS 共用同一份组装逻辑
+     * （「同构」的落点）。落在 scds-app 而非 core，是因为它是纯编排对象、不持有状态也不必是
+     * Spring 组件；core 侧生产环境对它的唯一需求是 {@code SituationPushPort} 推送时段（PUSH-WS）。
+     */
+    @Bean
+    public SituationEnvelopeFactory situationEnvelopeFactory(SituationQuery query, Clock clock) {
+        return new SituationEnvelopeFactory(query, clock);
     }
 
     /** 开演装载编成 / 停演写终局的编排；调用点属 LIFE（停演必须在 {@code freezeAndClose} 之前调）。 */

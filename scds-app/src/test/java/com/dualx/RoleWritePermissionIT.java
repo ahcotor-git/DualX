@@ -20,6 +20,7 @@ import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.plan.PlanService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileUrlSigner;
+import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
@@ -53,6 +54,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
 import java.security.interfaces.RSAPrivateKey;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -148,6 +150,13 @@ class RoleWritePermissionIT {
         @Bean
         SituationQuery situationQuery() {
             return stub(SituationQuery.class);
+        }
+
+        // 态势控制器已改接核心的信封组装器。组装器无状态、不碰数据库，给真实实例即可；
+        // 它读的 SituationQuery 是上面的替身，故放行的态势请求稳定返回 501，不是 401/403。
+        @Bean
+        SituationEnvelopeFactory situationEnvelopeFactory(SituationQuery query) {
+            return new SituationEnvelopeFactory(query, Clock.systemUTC());
         }
 
         // 链路端点已接领域端口 DeviceLinkAdmin（真实现要真串口 / Netty 监听 12001）。

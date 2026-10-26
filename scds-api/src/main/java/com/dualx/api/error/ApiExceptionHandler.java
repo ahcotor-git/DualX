@@ -294,6 +294,16 @@ public class ApiExceptionHandler {
             // 与 AUTH_TOKEN_INVALID 的 401 分属两个信任域，文件签名失效不该要求重新登录。
             case FILE_URL_INVALID -> HttpStatus.FORBIDDEN;
 
+            // ── 态势（M4 PUSH-MODEL）────────────────────────────────────────────
+            // 契约 paths/situation.yaml 的 getSituation 明确写 409：客户端持有的 revision 已
+            // 超出服务端保留窗口（含早于本场切换点），处置动作与其它 409 不同——不是「改参数
+            // 重试」，而是「丢弃本地缓存改全量拉取」。状态取 409 而非 400，是因为请求本身合法、
+            // 只是与当前服务端状态冲突。
+            //
+            // 另一条失败路径 —— 编成外马甲（getVestState）—— 复用 DEVICE_VEST_NOT_FOUND（404），
+            // 见上方台账域登记：SITUATION_* 前缀只有本码，且现场处置与「马甲编号取不到」一致。
+            case SITUATION_REVISION_TOO_OLD -> HttpStatus.CONFLICT;
+
             default -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }

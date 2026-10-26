@@ -137,6 +137,12 @@ class ApiExceptionHandlerBusinessTest {
             throw new BusinessException(ApiErrorCode.INSTANCE_NOT_READY, "本实例尚未完成启动自愈，暂不可开演");
         }
 
+        @GetMapping("/boom/revision-too-old")
+        void revisionTooOld() {
+            throw new BusinessException(ApiErrorCode.SITUATION_REVISION_TOO_OLD,
+                    "持有的 revision 已超出服务端保留窗口，请改为全量拉取");
+        }
+
         @GetMapping("/boom/unmapped")
         void unmapped() {
             throw new BusinessException(ApiErrorCode.COMMAND_QUEUE_FULL, "指令队列已满");
@@ -207,6 +213,9 @@ class ApiExceptionHandlerBusinessTest {
             "/boom/link-serial-busy  | 409 | DEVICE_LINK_SERIAL_BUSY",
             "/boom/map-not-found     | 404 | MAP_NOT_FOUND",
             "/boom/map-in-use        | 409 | MAP_IN_USE",
+            // 态势：revision 超窗（M4 PUSH-MODEL）。契约 getSituation 明确写 409——请求本身合法，
+            // 只是与当前服务端状态冲突；客户端处置是「丢弃本地缓存改全量拉取」，不是「改参数重试」。
+            "/boom/revision-too-old  | 409 | SITUATION_REVISION_TOO_OLD",
     })
     @DisplayName("台账域、演习域、链路域与地图域错误码逐项按契约登记状态，不按前缀猜（DEVICE_* / EXERCISE_* 里既有 404 又有 409）")
     void ledgerCodesMapToTheirContractStatus(String path, int expectedStatus, String expectedCode) throws Exception {
