@@ -17,9 +17,9 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
  * {@code WebMvcConfigurer} 一族，若处理器是独立 Bean，切片里会出现「有配置无依赖」的启动失败。
  * 收在这里也顺带保证了「WS 只在装配处出现一次」。</p>
  *
- * <p><b>态势侧的会话表与广播器在 {@link SituationPushConfig}</b>：它们不能声明在本类里，
- * 否则本类「构造需要 registry、registry 的 {@code @Bean} 又要本类实例」会自引用成环。
- * 本类只负责把已经装配好的 registry 与信封工厂交给 handler。</p>
+ * <p><b>态势侧的会话表与广播器在 {@link SituationPushConfig}、链路侧在 {@link LinkPushConfig}</b>：
+ * 它们不能声明在本类里，否则本类「构造需要 registry、registry 的 {@code @Bean} 又要本类实例」
+ * 会自引用成环。本类只负责把已经装配好的 registry 与信封工厂交给 handler。
  */
 @Configuration
 @EnableWebSocket
@@ -30,10 +30,11 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     public WebSocketConfig(ObjectMapper objectMapper,
                            SituationSessionRegistry situationSessions,
-                           SituationEnvelopeFactory situationEnvelopes) {
+                           SituationEnvelopeFactory situationEnvelopes,
+                           LinkSessionRegistry linkSessions) {
         this.situationHandler = new SituationWebSocketHandler(objectMapper, situationSessions, situationEnvelopes,
                 SituationWebSocketHandler.DEFAULT_HITS_LIMIT);
-        this.linkHandler = new LinkWebSocketHandler(objectMapper);
+        this.linkHandler = new LinkWebSocketHandler(objectMapper, linkSessions);
     }
 
     @Override
