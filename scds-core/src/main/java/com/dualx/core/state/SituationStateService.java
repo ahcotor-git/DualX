@@ -396,8 +396,9 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     /**
      * 装载编成开始新演习。幂等：同一 {@code exerciseId} 重复装载直接返回。
      *
-     * <p>revision 在装载时归零——本段只保证**同代**增量，进程重启后从 1 重新开始，
-     * 不得让客户端以为跨重启可续传（设计 06 §4.5，跨代恢复属 PUSH-MODEL）。</p>
+     * <p><b>revision 只增不减</b>（设计 02 §4.4）：切换本身算一次变化，装载后 revision {@code +1}，
+     * 本场单元一律 stamped 该切换点，并把增量窗口下界抬到切换点——早于切换点的 {@code sinceRevision}
+     * 一律超窗 → 409 → 客户端改全量。进程重启从 0 重新起算（跨代恢复属 PUSH-MODEL）。</p>
      */
     public synchronized void beginExercise(UUID newExerciseId, Instant now, List<RosterEntry> roster) {
         Objects.requireNonNull(newExerciseId, "exerciseId");
@@ -408,16 +409,18 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         hitsDealt.clear();
         kills.clear();
         units.putAll(loadRoster(roster));
+        // 切换本身是一次态势变化：revision 只增不减，装载后的单元一律 stamped 切换点。
+        revision = revision + 1;
         for (Unit u : units.values()) {
+            u.revision = revision;
             u.view = viewOf(u);
         }
-        // 跨演习必须清采样基准与增量窗口：tMs 已归零、revision 已归零，留着上一场的条目会被当成新变化。
+        // 跨演习必须清采样基准并抬增量窗口下界：留着上一场的条目会被当成新变化，且旧 sinceRevision 会静默失效。
         trackSampler.reset();
-        revisionLog.clear();
-        revision = 0;
+        revisionLog.rebase(revision);
         startedAt = now;
         exerciseId = newExerciseId;
-        log.info("态势装载完成：exerciseId={}，单元数={}", newExerciseId, units.size());
+        log.info("态势装载完成：exerciseId={}，单元数={}，切换点 revision={}", newExerciseId, units.size(), revision);
     }
 
     /**
@@ -443,6 +446,10 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         // 末段轨迹必须先落库再清内存态，否则留在缓冲里的采样点会随装载丢失（设计 06 §4.4）。
         int flushed = trackWriter.flush();
         log.info("态势收尾：exerciseId={}，终局数={}，补落轨迹={} 条", exerciseId, outcomes.size(), flushed);
+        // 停演也算一次切换：revision 继续递增并把窗口下界抬到切换点，早于切换点的 sinceRevision →
+        // 409 → 客户端改全量（此时全量为空），不会因窗口残留上一场条目而静默失效（设计 02 §4.4）。
+        revision = revision + 1;
+        revisionLog.rebase(revision);
         units.clear();
         exerciseId = null;
         startedAt = null;
@@ -491,7 +498,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         return exerciseId;
     }
 
-    /** 当前全局 revision（**单代**，进程重启从 1 重新开始）。 */
+    /** 当前全局 revision（**单代**，进程重启从 0 起算；**只增不减**，开演/停演各 +1，设计 02 §4.4）。 */
     public long revision() {
         return revision;
     }

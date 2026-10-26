@@ -191,10 +191,11 @@ class SituationStateIT {
         assertThat(query.exerciseId()).isNull();
         assertThat(query.snapshot()).isEmpty();
         assertThat(query.revision())
-                .as("无演习时的心跳不产生单元变化（revision 是运行代内的计数器，停演不清零）")
+                .as("无演习时的心跳不产生单元变化（revision 是运行代内只增不减的计数器）")
                 .isEqualTo(revisionAtStop);
 
         UUID exerciseId = loadExercise();
+        long revisionAfterLoad = query.revision();
 
         long before = state.framesFromUnknownVest();
         links.injectSerial(HEARTBEAT_VEST7);
@@ -202,7 +203,9 @@ class SituationStateIT {
 
         assertThat(query.snapshot()).extracting(UnitState::vestNum).containsExactly(1, 2, 4, 5);
         assertThat(query.unit(7)).as("编成外的马甲不进态势").isEmpty();
-        assertThat(query.revision()).isZero();
+        assertThat(query.revision())
+                .as("编成外马甲的帧不产生单元变化（基线即装载切换点）")
+                .isEqualTo(revisionAfterLoad);
         assertThat(exerciseId).isEqualTo(query.exerciseId());
     }
 
@@ -210,15 +213,18 @@ class SituationStateIT {
     @DisplayName("黄金样本驱动读侧：心跳→LIVE、GPS→定位、命中→落库与计数、hp=0→阵亡冻结")
     void goldenFramesDriveTheReadSide() {
         UUID exerciseId = loadExercise();
+        long switchRevision = query.revision();
 
         assertThat(query.running()).isTrue();
         assertThat(query.snapshot()).allSatisfy(unit -> {
             assertThat(unit.status()).as("装载即离线").isEqualTo(VestStatus.OFFLINE);
             assertThat(unit.position()).isNull();
             assertThat(unit.positionSource()).isEqualTo(PositionSource.NONE);
-            assertThat(unit.revision()).isZero();
+            assertThat(unit.revision())
+                    .as("装载后的单元 stamped 切换点 revision").isEqualTo(switchRevision);
         });
-        assertThat(query.revision()).isZero();
+        assertThat(query.changesSince(switchRevision)).as("装载后尚无单元变化")
+                .contains(List.of());
 
         // ① 心跳 → LIVE（网关成帧器切出的帧类型自洽，这一条也证明黄金样本没被误帧）
         List<SerialFrame> framed = links.injectSerial(HEARTBEAT_VEST2_LIVE);
@@ -236,7 +242,7 @@ class SituationStateIT {
 
         long revisionAfterHeartbeat = query.revision();
         assertThat(revisionAfterHeartbeat).isPositive();
-        assertThat(query.changesSince(0).orElseThrow())
+        assertThat(query.changesSince(switchRevision).orElseThrow())
                 .as("增量窗口按 revision 记单元级变化")
                 .extracting(UnitState::vestNum).containsOnly(2);
         assertThat(query.changesSince(revisionAfterHeartbeat).orElseThrow())

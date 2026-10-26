@@ -53,6 +53,8 @@ class SituationStateServiceTest {
     private TrackBatchWriter trackWriter;
     private SituationRevisionLog revisionLog;
     private SituationStateService state;
+    /** {@code setUp} 装载本场（一次切换）后的 revision——「非单元变化不计 revision」类断言的基准。 */
+    private long revisionAfterLoad;
 
     /** 可控时钟：状态机内部一律走它取时间。 */
     private static final class MutableClock extends Clock {
@@ -93,6 +95,7 @@ class SituationStateServiceTest {
         state.beginExercise(EXERCISE_ID, T0, List.of(
                 roster(1, "红军-01", Team.RED),
                 roster(2, "蓝军-01", Team.BLUE)));
+        revisionAfterLoad = state.revision();
     }
 
     private SituationStateService newService() {
@@ -160,7 +163,9 @@ class SituationStateServiceTest {
 
         assertThat(state.unit(2)).get()
                 .extracting(UnitState::status).isEqualTo(VestStatus.OFFLINE);
-        assertThat(state.revision()).isZero();
+        assertThat(state.revision())
+                .as("离线扫描不改变任何单元，不计 revision（基线即装载切换点）")
+                .isEqualTo(revisionAfterLoad);
     }
 
     // ------------------------------------------------------------------ 阵亡冻结与判活
@@ -335,15 +340,24 @@ class SituationStateServiceTest {
     }
 
     @Test
-    void beginExerciseOnNewExerciseClearsWindowAndSamplingBaseline() {
+    void beginExerciseOnNewExerciseRaisesRevisionAndRebasesWindow() {
         state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
         assertThat(revisionLog.size()).isEqualTo(1);
         assertThat(sampler.tracked(1)).isTrue();
+        long revisionBeforeSwitch = state.revision();
 
         state.beginExercise(OTHER_EXERCISE_ID, T0.plusSeconds(60), List.of(roster(1, "红军-01", Team.RED)));
 
-        assertThat(state.revision()).isZero();
+        // 切换算一次变化：revision 只增不减、不归零（设计 02 §4.4）
+        long switchRevision = revisionBeforeSwitch + 1;
+        assertThat(state.revision()).isEqualTo(switchRevision);
+        // 窗口清空并把下界抬到切换点：早于切换点的 sinceRevision 一律超窗 → 客户端改全量
         assertThat(revisionLog.size()).isZero();
+        assertThat(revisionLog.lastEvictedRevision()).isEqualTo(switchRevision);
+        assertThat(state.changesSince(revisionBeforeSwitch)).isEmpty();
+        // 本场单元 stamped 该切换点
+        assertThat(state.unit(1)).get()
+                .extracting(UnitState::revision).isEqualTo(switchRevision);
         assertThat(sampler.tracked(1)).as("跨演习必须清采样基准，否则与上一场作差").isFalse();
     }
 
@@ -399,7 +413,9 @@ class SituationStateServiceTest {
 
         assertThat(state.linkState(SOURCE)).contains(LinkState.OPEN);
         assertThat(state.linkState(LinkKind.UWB_TCP_SERVER)).isEmpty();
-        assertThat(state.revision()).as("链路状态不是单元变化，不计 revision").isZero();
+        assertThat(state.revision())
+                .as("链路状态不是单元变化，不计 revision（基线即装载切换点）")
+                .isEqualTo(revisionAfterLoad);
     }
 
     @Test

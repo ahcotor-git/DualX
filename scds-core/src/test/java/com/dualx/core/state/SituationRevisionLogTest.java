@@ -92,20 +92,39 @@ class SituationRevisionLogTest {
     }
 
     @Test
-    void clearDropsWindowAndEvictionHistory() {
+    void rebaseDropsWindowAndRaisesLowerBoundToSwitchRevision() {
         SituationRevisionLog log = new SituationRevisionLog(2);
         log.record(view(1, 1));
         log.record(view(2, 2));
         log.record(view(3, 3));
 
-        log.clear();
+        // 切换点：清窗并把下界抬到 7（演习切换当次递增后的 revision）
+        log.rebase(7);
 
         assertThat(log.size()).isZero();
         assertThat(log.latestRevision()).isZero();
-        assertThat(log.lastEvictedRevision()).isZero();
+        assertThat(log.oldestRetainedRevision()).isZero();
+        assertThat(log.lastEvictedRevision()).isEqualTo(7);
         assertThat(log.evictedCount()).isZero();
-        assertThat(log.tooOld(0)).isFalse();
-        assertThat(log.changesSince(0)).contains(List.of());
+        // 早于切换点的一律超窗 → 客户端改全量；恰为切换点表示「已是最新」
+        assertThat(log.tooOld(6)).isTrue();
+        assertThat(log.changesSince(6)).isEmpty();
+        assertThat(log.tooOld(7)).isFalse();
+        assertThat(log.changesSince(7)).contains(List.of());
+    }
+
+    @Test
+    void rebaseThenNewChangesAreRetrievableFromSwitchPoint() {
+        SituationRevisionLog log = new SituationRevisionLog(8);
+        log.record(view(1, 3));
+        log.rebase(4);          // 开演/停演切换点
+        log.record(view(2, 5)); // 切换后的首个变化
+
+        // 客户端持有切换点：只补到切换后的变化
+        assertThat(log.changesSince(4).orElseThrow())
+                .extracting(UnitState::vestNum).containsExactly(2);
+        // 持有切换前的 revision：超窗（下界已被抬到切换点）
+        assertThat(log.tooOld(3)).isTrue();
     }
 
     @Test

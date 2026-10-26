@@ -29,9 +29,11 @@ import java.util.Optional;
  * 各变化过一次）。增量载荷要不要按 {@code vestNum} 压成最后一条，属组装增量信封的口径（S7），
  * 本类不预设——压不压都能让客户端收敛到同一个终态。</p>
  *
- * <p><b>演习切换要清窗</b>：装载新演习时 revision 归零重新爬升（设计 06 §4.5），若不 {@link #clear()}，
- * 上一场的条目会以更大的 revision 留在窗口里，被客户端当成「更新的变化」。该场次的切换本身由
- * {@code full=true} 帧表达（设计 02 §4.4）。</p>
+ * <p><b>演习切换要抬下界</b>：切换（开演/停演）本身算一次变化，切换点的 revision <b>只增不减</b>
+ * （设计 02 §4.4），不归零。若不调 {@link #rebase(long)} 把下界抬到切换点，上一场的条目会以<b>更小</b>
+ * 的 revision 留在窗口里，而客户端手里更大的 {@code sinceRevision} 又因未超窗而拿到空列表、误判
+ * 「已是最新」——换场就此静默失效。故切换时清窗并把下界抬到切换 revision，使所有早于切换点的
+ * {@code sinceRevision} 一律超窗 → 409 → 客户端改全量；该场次的切换本身另由 {@code full=true} 帧表达。</p>
  */
 public final class SituationRevisionLog {
 
@@ -111,10 +113,16 @@ public final class SituationRevisionLog {
         return lastEvictedRevision;
     }
 
-    /** 清空窗口与淘汰记录（装载新演习时调用，见类注释）。 */
-    public void clear() {
+    /**
+     * 把窗口下界抬到切换点：清空窗口，并把淘汰下界置为 {@code switchRevision}
+     * （演习切换时调用，见类注释）。此后**所有** {@code sinceRevision < switchRevision} 一律判为超窗
+     * → 409 → 客户端改全量；恰为 {@code switchRevision} 表示客户端已持有切换点，判为「已是最新」。
+     *
+     * @param switchRevision 切换点 revision（即切换当次递增后的全局 revision）
+     */
+    public void rebase(long switchRevision) {
         ring.clear();
-        lastEvictedRevision = 0L;
+        lastEvictedRevision = switchRevision;
         evictedCount = 0L;
     }
 

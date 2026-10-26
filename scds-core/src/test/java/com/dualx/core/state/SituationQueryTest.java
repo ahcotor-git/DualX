@@ -105,7 +105,9 @@ class SituationQueryTest {
                     assertThat(u.name()).isEqualTo("红军-01");
                     assertThat(u.team()).isEqualTo(Team.RED);
                     assertThat(u.status()).isEqualTo(VestStatus.OFFLINE);
-                    assertThat(u.revision()).isZero();
+                    assertThat(u.revision())
+                            .as("装载后的单元 stamped 切换点 revision")
+                            .isEqualTo(query.revision());
                 });
     }
 
@@ -120,11 +122,15 @@ class SituationQueryTest {
 
     @Test
     void changesSinceReturnsWindowChangesThenEmptiesWhenUpToDate() {
-        assertThat(query.changesSince(0)).as("刚装载、尚无变化")
+        long switchRevision = query.revision();   // 装载切换点
+        assertThat(query.changesSince(switchRevision)).as("刚装载、尚无变化")
                 .contains(List.of());
+        assertThat(query.changesSince(switchRevision - 1))
+                .as("早于切换点的 sinceRevision 一律超窗 → 客户端改全量").isEmpty();
+
         state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
 
-        List<UnitState> window = query.changesSince(0).orElseThrow();
+        List<UnitState> window = query.changesSince(switchRevision).orElseThrow();
         assertThat(window).extracting(UnitState::vestNum).containsExactly(1);
         assertThat(query.changesSince(query.revision())).as("已是最新时为「空列表」而非空 Optional")
                 .contains(List.of());
@@ -143,7 +149,7 @@ class SituationQueryTest {
 
         assertThat(query.changesSince(0)).as("revision 已被淘汰 → 超窗")
                 .isEmpty();
-        List<UnitState> boundary = query.changesSince(1).orElseThrow();
+        List<UnitState> boundary = query.changesSince(2).orElseThrow();
         assertThat(boundary).as("边界：since 等于已淘汰 revision 仍可补齐")
                 .extracting(UnitState::vestNum).containsExactly(2);
     }
