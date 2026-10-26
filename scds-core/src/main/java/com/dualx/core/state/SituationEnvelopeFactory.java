@@ -8,6 +8,7 @@ import com.dualx.core.push.TeamSummary;
 import com.dualx.core.push.UnitState;
 
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -84,6 +85,44 @@ public final class SituationEnvelopeFactory {
         return new SituationEnvelope(
                 query.epoch(), query.revision(), false, query.running(), exerciseId(), clock.instant(),
                 List.of(), window.get(), List.of(), List.of(), List.of());
+    }
+
+    /**
+     * 从 {@code sinceRevision} 起**逐 revision** 的增量帧序列（WebSocket 补齐专用，设计 02 §4.5）。
+     *
+     * <p><b>为什么 WS 逐帧而 Poll 一帧</b>：判据 2 要求「客户端持有当前 revision − 3 时依次收到
+     * 3 帧 {@code full=false}，revision 连续无跳号」——每帧推进一格，客户端侧的对齐进度才可见；
+     * 一帧打包全部变化虽然内容等价，却让「补齐到哪了」在客户端不可观测。两条通道的**内容同源**
+     * （同一 {@code changesSince} 窗口、同一字段口径、同一信封类型），差别只在切分粒度，
+     * 故两处仍共用本类构造，不另写一套组装。</p>
+     *
+     * <p>窗口内已无更新变化（{@code sinceRevision} 即当前 revision）时返回**一帧空
+     * {@code changes}**，与 {@link #delta} 对「已是最新」的表达一致——客户端凭它确认无遗漏，
+     * 而不是干等一帧永不到来的帧。</p>
+     *
+     * @throws BusinessException {@link ApiErrorCode#SITUATION_REVISION_TOO_OLD}
+     *                           ——已超出服务端保留窗口，调用方应关闭连接（close 4000）让客户端改全量
+     */
+    public List<SituationEnvelope> deltaFrames(long sinceRevision) {
+        Optional<List<UnitState>> window = query.changesSince(sinceRevision);
+        if (window.isEmpty()) {
+            throw new BusinessException(ApiErrorCode.SITUATION_REVISION_TOO_OLD,
+                    "持有的 revision 已超出服务端保留窗口，请改为全量拉取：sinceRevision=" + sinceRevision
+                            + "，当前 revision=" + query.revision());
+        }
+        List<UnitState> changes = window.get();
+        if (changes.isEmpty()) {
+            return List.of(new SituationEnvelope(
+                    query.epoch(), query.revision(), false, query.running(), exerciseId(), clock.instant(),
+                    List.of(), List.of(), List.of(), List.of(), List.of()));
+        }
+        List<SituationEnvelope> frames = new ArrayList<>(changes.size());
+        for (UnitState change : changes) {
+            frames.add(new SituationEnvelope(
+                    query.epoch(), change.revision(), false, query.running(), exerciseId(), clock.instant(),
+                    List.of(), List.of(change), List.of(), List.of(), List.of()));
+        }
+        return frames;
     }
 
     // ------------------------------------------------------------------ 单马甲 / 队伍汇总 / 命中

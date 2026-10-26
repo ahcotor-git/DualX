@@ -183,6 +183,56 @@ class SituationEnvelopeFactoryTest {
                 .isEqualTo(ApiErrorCode.SITUATION_REVISION_TOO_OLD);
     }
 
+    // ------------------------------------------------------------------ 增量帧序列（WS 补齐）
+
+    @Test
+    void deltaFramesSplitsOneFramePerRevisionInOrder() {
+        long base = query.revision();
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        clock.advance(Duration.ofMillis(200));
+        state.dispatch(new StateEvent.Serial(gps(2, 116.1, 39.1), SOURCE));
+
+        List<SituationEnvelope> frames = factory.deltaFrames(base);
+
+        assertThat(frames).extracting(SituationEnvelope::revision).containsExactly(base + 1, base + 2);
+        assertThat(frames).allSatisfy(f -> {
+            assertThat(f.full()).isFalse();
+            assertThat(f.epoch()).isEqualTo(query.epoch());
+            assertThat(f.running()).isTrue();
+            assertThat(f.units()).as("增量帧不带全量快照").isEmpty();
+            assertThat(f.changes()).as("一帧一格 revision").hasSize(1);
+            assertThat(f.hits()).isEmpty();
+            assertThat(f.teamSummary()).as("权威汇总只在全量帧里").isEmpty();
+        });
+        assertThat(frames.get(0).changes()).extracting(UnitState::vestNum).containsExactly(1);
+        assertThat(frames.get(1).changes()).extracting(UnitState::vestNum).containsExactly(2);
+    }
+
+    @Test
+    void deltaFramesReturnsSingleEmptyFrameWhenUpToDate() {
+        List<SituationEnvelope> frames = factory.deltaFrames(query.revision());
+
+        assertThat(frames).hasSize(1);
+        assertThat(frames.get(0).full()).isFalse();
+        assertThat(frames.get(0).revision()).isEqualTo(query.revision());
+        assertThat(frames.get(0).changes()).as("已是最新：回一帧空 changes 供客户端确认无遗漏").isEmpty();
+    }
+
+    @Test
+    void deltaFramesThrowsRevisionTooOldWhenOutOfWindow() {
+        state = newState(new SituationRevisionLog(1));
+        rebuild();
+        state.beginExercise(EXERCISE_ID, T0, List.of(roster(1, "红军-01", Team.RED)));
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        clock.advance(Duration.ofMillis(200));
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 29, 30), SOURCE));
+
+        assertThatThrownBy(() -> factory.deltaFrames(0))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).code())
+                .isEqualTo(ApiErrorCode.SITUATION_REVISION_TOO_OLD);
+    }
+
     // ------------------------------------------------------------------ 单马甲
 
     @Test
@@ -239,6 +289,11 @@ class SituationEnvelopeFactoryTest {
 
     private static SerialFrame.Hit hit(int hitVestNum, int shooterNum, int hitPart) {
         return new SerialFrame.Hit(hitVestNum, shooterNum, hitPart, new byte[] {(byte) hitVestNum});
+    }
+
+    private static SerialFrame.Gps gps(int vestNum, double lng, double lat) {
+        return new SerialFrame.Gps(vestNum, (long) (lng * 1_000_000), (long) (lat * 1_000_000),
+                lng, lat, new byte[] {(byte) vestNum});
     }
 
     private static HitEvent hitEvent(long seq) {
