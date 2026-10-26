@@ -1,5 +1,6 @@
 package com.dualx;
 
+import com.dualx.core.state.SituationRevisionLog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.MissingNode;
@@ -37,7 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 双通道同构的端到端验收，即设计 [02](../../docs/design/02-push-ports.md) §7 的<b>判据 1</b>
- * （「链路通道也必须检查 JSON 根类型一致」），并覆盖判据 5 的一部分（关闭即注销）。
+ * （「链路通道也必须检查 JSON 根类型一致」），并覆盖<b>判据 3</b>（超窗恢复：close 4000 → 改全量重连）
+ * 与判据 5 的一部分（关闭即注销）。
  *
  * <p>前序工作把两条通道都接线完毕，但两侧各自只有单测：单测证明「会话表会推数组」，
  * 却证明不了「真实装配出来的 Spring 上下文里，推送与 Poll 读的是同一份数据」。
@@ -156,6 +158,31 @@ class PushIsomorphismIT {
         assertThat(app.linksSnapshot().isArray()).isTrue();
     }
 
+    @Test
+    @DisplayName("超窗补齐（判据 3）：携「当前 revision − 窗口 − 1」握手被 close 4000；改全量重连即刻拿到全量")
+    void staleSinceRevisionIsClosedWith4000AndReconnectGetsFullSnapshot() throws Exception {
+        long current = app.situationEnvelope().path("revision").asLong();
+        long tooOld = current - app.window() - 1;
+
+        // 握手已完成连接升级，故超窗只能用 close 4000 表达（契约 wsSituation），不能返 409
+        FrameCollector rejected = new FrameCollector(app.mapper);
+        try (Ws ignored = Ws.open(app.wsUrl("/ws/v1/situation?sinceRevision=" + tooOld), app.admin, rejected)) {
+            CloseStatus status = rejected.awaitClose(Duration.ofSeconds(5));
+            assertThat(status.getCode()).as("超窗的关闭码与契约逐字一致").isEqualTo(4000);
+            assertThat(status.getReason()).isEqualTo("SITUATION_REVISION_TOO_OLD");
+        }
+
+        // 客户端按契约不带 sinceRevision 重连：首帧必须是 full=true，才不至于「卡在旧 revision」
+        FrameCollector fresh = new FrameCollector(app.mapper);
+        try (Ws ignored = Ws.open(app.wsUrl("/ws/v1/situation"), app.admin, fresh)) {
+            JsonNode first = fresh.awaitFrame(JsonNode::isObject, Duration.ofSeconds(5));
+            assertThat(first.path("full").asBoolean()).as("改全量后的首帧必须是全量").isTrue();
+            assertThat(first.path("revision").asLong())
+                    .as("revision 只增不减，重连后不得低于握手前的当前值").isGreaterThanOrEqualTo(current);
+            assertThat(first.path("units").isArray()).as("全量帧必然携带权威 units").isTrue();
+        }
+    }
+
     // ── 断言辅助 ─────────────────────────────────────────────────────────────
 
     private static List<String> kindsOf(JsonNode snapshot) {
@@ -192,6 +219,7 @@ class PushIsomorphismIT {
     private static final class FrameCollector extends TextWebSocketHandler {
 
         private final BlockingQueue<String> frames = new LinkedBlockingQueue<>();
+        private final BlockingQueue<CloseStatus> closes = new LinkedBlockingQueue<>();
         private final ObjectMapper mapper;
 
         FrameCollector(ObjectMapper mapper) {
@@ -201,6 +229,20 @@ class PushIsomorphismIT {
         @Override
         protected void handleTextMessage(WebSocketSession session, TextMessage message) {
             frames.add(message.getPayload());
+        }
+
+        @Override
+        public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+            closes.add(status);
+        }
+
+        /** 超窗握手由服务端主动关闭，客户端凭这里的关闭码判断该改全量重连。 */
+        CloseStatus awaitClose(Duration timeout) throws Exception {
+            CloseStatus status = closes.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            if (status == null) {
+                throw new AssertionError("等待服务端关闭帧超时");
+            }
+            return status;
         }
 
         JsonNode awaitFrame(Predicate<JsonNode> accept, Duration timeout) throws Exception {
@@ -320,6 +362,13 @@ class PushIsomorphismIT {
             HttpResponse<String> response = get("/api/v1/situation", admin);
             assertThat(response.statusCode()).isEqualTo(200);
             return mapper.readTree(response.body());
+        }
+
+        /** 增量窗口条数：从真实配置读，缺省时用中立层的设计默认值（判据 3 的「窗口」就是它）。 */
+        private int window() {
+            Integer configured = context.getEnvironment()
+                    .getProperty("scds.situation.revision-window", Integer.class);
+            return configured != null ? configured : SituationRevisionLog.DEFAULT_WINDOW;
         }
 
         private JsonNode serialRequest(String portName) {
