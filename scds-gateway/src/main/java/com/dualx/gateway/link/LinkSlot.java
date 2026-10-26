@@ -18,6 +18,11 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>本类型只管「状态与计数」，不含任何物理资源。打开/关闭的冲突判定在
  * {@link LinkRegistry}：那里才有三种链路之间的互斥与串口独占关系。</p>
+ *
+ * <p><b>变化扇出</b>：状态迁移与接入数变化后触发 {@link #onChange} 注册的钩子（由
+ * {@link LinkRegistry} 装上），把「变化 → 通知」收在一个出口，而不是在每个适配器的每个
+ * 变化点上各写一次。{@link #recordFrame()} 一类每帧都走的<b>热路径刻意不触发</b>：
+ * 契约只要求链路状态变化时推送，逐帧重推会淹没真正的变化、浪费带宽，并掩盖真正的推送问题。</p>
  */
 public final class LinkSlot {
 
@@ -34,8 +39,23 @@ public final class LinkSlot {
     private String errorMessage;
     private volatile Instant lastFrameAt;
 
+    /** 状态/接入数变化后的扇出钩子；未注册时为 {@code null}（纯单测不需要推送）。 */
+    private volatile Runnable changeHook;
+
     LinkSlot(LinkKind kind) {
         this.kind = kind;
+    }
+
+    /** 由 {@link LinkRegistry} 在构造时注册；钩子必须非阻塞且自行吞掉异常。 */
+    void onChange(Runnable hook) {
+        this.changeHook = hook;
+    }
+
+    private void fireChanged() {
+        Runnable hook = changeHook;
+        if (hook != null) {
+            hook.run();
+        }
     }
 
     public LinkKind kind() {
@@ -62,6 +82,7 @@ public final class LinkSlot {
             droppedTotal.set(0L);
             crcErrorTotal.set(0L);
         }
+        fireChanged();
     }
 
     /** 由 {@link LinkRegistry#finishOpen} 调用。 */
@@ -69,6 +90,7 @@ public final class LinkSlot {
         synchronized (lock) {
             this.state = LinkState.OPEN;
         }
+        fireChanged();
     }
 
     /** 由 {@link LinkRegistry#abortOpen} 调用：物理打开失败，保留原因供排障。 */
@@ -77,6 +99,7 @@ public final class LinkSlot {
             this.state = LinkState.ERROR;
             this.errorMessage = message;
         }
+        fireChanged();
     }
 
     /** 由 {@link LinkRegistry#close} 调用：回到 CLOSED 并清空本次开启的全部痕迹。 */
@@ -92,6 +115,7 @@ public final class LinkSlot {
             droppedTotal.set(0L);
             crcErrorTotal.set(0L);
         }
+        fireChanged();
     }
 
     /** 收到一整帧合法帧。适配器在读线程直接调用。 */
@@ -115,6 +139,7 @@ public final class LinkSlot {
         synchronized (lock) {
             this.fdCount = count;
         }
+        fireChanged();
     }
 
     public LinkStatus status() {

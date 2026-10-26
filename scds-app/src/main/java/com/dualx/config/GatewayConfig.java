@@ -2,12 +2,14 @@ package com.dualx.config;
 
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.HardwareEventSink;
+import com.dualx.core.port.LinkStatusPushPort;
 import com.dualx.gateway.config.GatewayProperties;
 import com.dualx.gateway.link.LinkRegistry;
 import com.dualx.gateway.link.RealDeviceLinkAdmin;
 import com.dualx.gateway.sim.SimulatedLinkAdapter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -48,10 +50,21 @@ public class GatewayConfig {
         return new GatewayProperties();
     }
 
-    /** 三种链路共用的状态机与串口独占表；真链路与仿真必须是同一实例才能对拍。 */
+    /**
+     * 三种链路共用的状态机与串口独占表；真链路与仿真必须是同一实例才能对拍。
+     *
+     * <p>同时把自己注册为链路状态推送的扇出点（设计 02 §4.2）：注册表是链路状态的真源，
+     * 推送端口由 {@code scds-api} 的 {@code LinkStatusBroadcaster} 实现。端口缺席
+     * （只要网关不要 WS 的切片）时注册表照常工作，只是不广播——{@code GET /api/v1/devices/links}
+     * 仍是唯一真源，不引入 {@code Noop*} 类的意义也仅此一处。</p>
+     */
     @Bean
-    public LinkRegistry linkRegistry() {
-        return new LinkRegistry();
+    public LinkRegistry linkRegistry(ObjectProvider<LinkStatusPushPort> linkPush) {
+        LinkStatusPushPort push = linkPush.getIfAvailable();
+        if (push == null) {
+            log.info("链路状态推送端口未装配（本进程无 WS 消费者）：链路变化只更新注册表，不广播。");
+        }
+        return new LinkRegistry(push);
     }
 
     @Bean

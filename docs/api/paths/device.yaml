@@ -577,7 +577,9 @@ wsLinks:
     operationId: watchLinks
     summary: 链路状态推送（WebSocket）
     description: |
-      替代旧系统 `/socket/in` 与 `/socket/out` 两个端点。链路状态变化（开关、异常、接入数变化）时推一帧 `LinkStatus`。
+      替代旧系统 `/socket/in` 与 `/socket/out` 两个端点。链路状态变化（开关、异常、接入数变化）时推一帧 **完整列表快照**——
+      根类型与 `GET /api/v1/devices/links` 的响应体**完全一致**（`LinkStatus` 数组，三种链路恒定各一条），
+      不是「只含变化那一条」的局部对象：客户端因此不必在 WS 与 Poll 两条通道上各维护一套状态合并逻辑。
       **同样遵循双通道约定**：本通道不替代 `GET /api/v1/devices/links`，客户端仍需低频轮询兜底。
     responses:
       '101':
@@ -590,8 +592,11 @@ wsLinks:
       url: ws://{host}:11001/ws/v1/devices/links
       subprotocol: scds.links.v1
       serverToClient:
+        description: 与 `GET /api/v1/devices/links` 的响应体同构的完整列表快照（不是单条 `LinkStatus`）。
         schema:
-          $ref: '../schemas/common.yaml#/LinkStatus'
+          type: array
+          items:
+            $ref: '../schemas/common.yaml#/LinkStatus'
       clientToServer:
         schema:
           type: object
