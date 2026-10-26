@@ -192,6 +192,15 @@ scds:
   situation:
     revision-window: 1024
 
+  # ===== WebSocket 推送（设计 02 §4.7 / §5）=====
+  # 两条通道（态势 / 链路）的背压与保活口径；链路侧随 D07/Q9 一起接。
+  push:
+    # 每会话待发帧上限：队满即丢帧并计数，随后由「revision 不连续 → 改推全量」自动收敛。
+    # ⚠ 候选值，不是容量结论——现场客户端数（D10/Q5）到位前不得据其宣称容量达标。
+    send-queue-capacity: 256
+    # 无上行主动断开阈值，契约值 30000ms（可配不可改语义）；扫描周期固定 5s。
+    idle-timeout-ms: 30000
+
 management:
   endpoints:
     web:
