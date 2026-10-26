@@ -381,6 +381,7 @@ class SituationStateServiceTest {
         SituationEnvelope frame = pushed.get(0);
         assertThat(frame.full()).isFalse();
         assertThat(frame.revision()).isEqualTo(state.revision());
+        assertThat(frame.epoch()).as("帧必须带进程代标识，客户端据此发现服务端重启").isEqualTo(state.epoch());
         assertThat(frame.running()).isTrue();
         assertThat(frame.exerciseId()).isEqualTo(EXERCISE_ID.toString());
         assertThat(frame.serverTime()).isEqualTo(T0);
@@ -409,6 +410,7 @@ class SituationStateServiceTest {
         SituationEnvelope frame = pushed.get(0);
         assertThat(frame.full()).isTrue();
         assertThat(frame.revision()).isEqualTo(state.revision());
+        assertThat(frame.epoch()).isEqualTo(state.epoch());
         assertThat(frame.exerciseId()).isEqualTo(OTHER_EXERCISE_ID.toString());
         assertThat(frame.units()).extracting(UnitState::vestNum).containsExactly(1);
         assertThat(frame.changes()).isEmpty();
@@ -437,6 +439,16 @@ class SituationStateServiceTest {
         state.beginExercise(EXERCISE_ID, T0, List.of(roster(1, "红军-01", Team.RED)));
 
         assertThat(pushed).as("同场重复装载不改动任何东西，也就不该推帧").isEmpty();
+    }
+
+    @Test
+    void epochIsStableWithinProcessAndChangesAcrossProcesses() {
+        String first = state.epoch();
+        assertThat(first).isNotBlank();
+        assertThat(state.epoch()).as("同一实例（同一进程）内代标识恒定").isEqualTo(first);
+        assertThat(newService().epoch())
+                .as("新实例模拟进程重启：epoch 必变，客户端据此发现换代改全量（设计 02 §6 Q8）")
+                .isNotEqualTo(first);
     }
 
     // ------------------------------------------------------------------ 编成、终局与链路

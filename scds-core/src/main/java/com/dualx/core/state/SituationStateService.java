@@ -115,6 +115,15 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private volatile Instant startedAt;
     private volatile long revision;
 
+    /**
+     * 进程代标识（设计 02 §6 Q8）：进程启动时生成一次，重启必变。
+     *
+     * <p>它<b>不参与业务</b>，只作「服务端是否已换代」的判据——{@link #revision} 只在单代内单调，
+     * 重启归零后与旧进程的数值存在重叠，客户端单凭 revision 无法分辨「仍是同一代的旧窗口」
+     * 与「新进程的巧合数值」。随每个信封下发（HTTP Poll 与 WS 同此），客户端比对不一致即改全量。</p>
+     */
+    private final String epoch = UUID.randomUUID().toString();
+
     private volatile Thread writer;
     private volatile boolean accepting = true;
 
@@ -406,7 +415,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
      */
     private void pushDelta(Unit u) {
         push.publish(new SituationEnvelope(
-                revision, false, running(), exerciseIdText(), clock.instant(),
+                epoch, revision, false, running(), exerciseIdText(), clock.instant(),
                 List.of(), List.of(u.view), List.of(), List.of(), List.of()));
     }
 
@@ -417,7 +426,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private void pushFull() {
         List<UnitState> snapshot = snapshot();
         push.publish(new SituationEnvelope(
-                revision, true, running(), exerciseIdText(), clock.instant(),
+                epoch, revision, true, running(), exerciseIdText(), clock.instant(),
                 snapshot, List.of(), List.of(), List.of(),
                 SituationQuery.teamSummaryOf(snapshot, this::hitsDealt).stream()
                         .map(SituationEnvelopeFactory::toWire).toList()));
@@ -565,6 +574,18 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     /** 当前全局 revision（**单代**，进程重启从 0 起算；**只增不减**，开演/停演各 +1，设计 02 §4.4）。 */
     public long revision() {
         return revision;
+    }
+
+    /**
+     * 当前进程代标识（设计 02 §6 Q8）。
+     *
+     * <p><b>为什么不放进 revision</b>：客户端拿到的 {@code revision} 只在单代内可比。进程重启后
+     * revision 归零重算，与上一个进程的数值存在重叠——若只下发 revision，客户端会把「新进程的
+     * 巧合数值」当成「自己还在窗口内」，静默丢掉整段状态。故另发一个换代必变的标识，
+     * 客户端比对不一致即丢弃本地缓存改全量。</p>
+     */
+    public String epoch() {
+        return epoch;
     }
 
     /**

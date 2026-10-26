@@ -151,8 +151,17 @@ TeamSummary:
 # ---------------------------------------------------------------------------
 SituationEnvelope:
   type: object
-  required: [revision, full, running, serverTime]
+  required: [epoch, revision, full, running, serverTime]
   properties:
+    epoch:
+      type: string
+      description: |
+        服务端**进程代标识**，进程启动时生成、重启后必变（设计 02 §6 Q8 裁定）。
+        客户端必须把它与本地保存的 epoch 比对：**不一致即视为服务端已换代**，
+        本地 `sinceRevision` 一律作废，必须丢弃缓存改为全量拉取。
+        理由：`revision` 只在单进程生命周期内单调，重启归零后与上一个进程的数值存在重叠，
+        单凭 `revision` 无法区分「仍是同一代的旧窗口」与「新进程的巧合数值」。
+        HTTP Poll 与 WebSocket 两条通道同此规则。
     revision:
       type: integer
       format: int64

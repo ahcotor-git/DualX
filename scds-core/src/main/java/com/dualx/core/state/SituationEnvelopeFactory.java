@@ -50,7 +50,7 @@ public final class SituationEnvelopeFactory {
      */
     public SituationEnvelope full(int hitsLimit) {
         return new SituationEnvelope(
-                query.revision(), true, query.running(), exerciseId(), clock.instant(),
+                query.epoch(), query.revision(), true, query.running(), exerciseId(), clock.instant(),
                 query.snapshot(), List.of(), List.of(), hits(null, hitsLimit), teamSummary());
     }
 
@@ -82,7 +82,7 @@ public final class SituationEnvelopeFactory {
                             + "，当前 revision=" + query.revision());
         }
         return new SituationEnvelope(
-                query.revision(), false, query.running(), exerciseId(), clock.instant(),
+                query.epoch(), query.revision(), false, query.running(), exerciseId(), clock.instant(),
                 List.of(), window.get(), List.of(), List.of(), List.of());
     }
 

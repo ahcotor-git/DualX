@@ -115,6 +115,7 @@ class SituationEnvelopeFactoryTest {
         assertThat(envelope.exerciseId()).isEqualTo(EXERCISE_ID.toString());
         assertThat(envelope.serverTime()).isEqualTo(T0);
         assertThat(envelope.revision()).isEqualTo(query.revision());
+        assertThat(envelope.epoch()).as("Poll 与 WS 同构：全量帧也必须带进程代标识").isEqualTo(query.epoch());
         assertThat(envelope.units()).extracting(UnitState::vestNum).containsExactly(1, 2);
         assertThat(envelope.changes()).isEmpty();
         assertThat(envelope.removedVestNums()).isEmpty();
@@ -149,6 +150,7 @@ class SituationEnvelopeFactoryTest {
 
         assertThat(envelope.full()).isFalse();
         assertThat(envelope.running()).isTrue();
+        assertThat(envelope.epoch()).isEqualTo(query.epoch());
         assertThat(envelope.units()).isEmpty();
         assertThat(envelope.changes()).extracting(UnitState::vestNum).containsExactly(1);
         assertThat(envelope.removedVestNums()).isEmpty();

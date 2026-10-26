@@ -166,6 +166,14 @@ wsSituation:
       · `{"action":"PING"}` → 服务端回 `{"action":"PONG"}`（保活，服务端 30s 无上行会主动断开）；
       · `{"action":"RESYNC","sinceRevision":N}` → 服务端按 N 重新补齐。
 
+      **超窗表达（与 Poll 不同）**：握手成功后无法再返回 HTTP 状态码，故 `sinceRevision` 超窗时
+      服务端**主动关闭连接**：close code `4000` + reason `SITUATION_REVISION_TOO_OLD`；
+      客户端应不带 `sinceRevision` 重连以取全量。`RESYNC` 超窗同样处理，但由服务端直接回推
+      一帧 `full=true`（信封自带 revision，客户端自然对齐）。
+
+      **换代表达**：帧体自带 `epoch`。客户端发现 `epoch` 与本地保存的不一致即视为服务端已重启，
+      应丢弃本地缓存、改不带 `sinceRevision` 重连以取全量（设计 02 §6 Q8）。
+
       **硬约束**：本通道不得替代 HTTP Poll。客户端必须持续低频轮询 `/api/v1/situation`。
     parameters:
       - name: sinceRevision
@@ -178,12 +186,6 @@ wsSituation:
         description: 协议升级成功
       '401':
         $ref: '../schemas/common.yaml#/Unauthorized'
-      '409':
-        description: revision 过旧（`SITUATION_REVISION_TOO_OLD`），请不带 sinceRevision 重连
-        content:
-          application/problem+json:
-            schema:
-              $ref: '../schemas/common.yaml#/Problem'
       '500':
         $ref: '../schemas/common.yaml#/InternalError'
     x-websocket:

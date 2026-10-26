@@ -14,6 +14,8 @@ import java.util.List;
  * {@code com.dualx.core.push}（设计 02 §4.3 甲）。api 的 Controller 与 WS 适配器直接复用本类型，
  * <b>不得再加一层映射 DTO</b>，否则「同构」会从类型级保证退化为人工纪律。</p>
  *
+ * @param epoch           服务端**进程代标识**（进程启动时生成、重启必变），客户端据此判断
+ *                        「服务端是否已换代」，换代即丢弃本地 {@code revision} 改全量（设计 02 §6 Q8）
  * @param revision        全局单调递增的态势版本号，客户端必须保存并用于 {@code sinceRevision} 续传
  * @param full            true=全量快照（units 有效）；false=增量（changes / removedVestNums 有效）
  * @param running         当前是否有演习进行中
@@ -26,6 +28,7 @@ import java.util.List;
  * @param teamSummary     队伍汇总
  */
 public record SituationEnvelope(
+        String epoch,
         long revision,
         boolean full,
         boolean running,
