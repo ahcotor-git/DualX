@@ -1,9 +1,9 @@
 # scds-next 交接快照
 
 > 更新：2026-10-27，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M3 COMMAND MR-1（五条单兵即时指令）+ MR-2（全体充弹与覆盖配置）+ MR-3（队列过期扫描）
-> 已完成并本地提交**；最新全量 `mvn test` **1035 项，失败/错误/跳过均 0**（见 testing 第 15、16 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~16 节冲突处，以该处为准。
+> 当前任务：**M3 CAL-1 UWB 室内解算链路（解算器 + 装配接线 + app 端到端）已完成并本地提交**；
+> 最新全量 `mvn test` **1055 项，失败/错误/跳过均 0**（见 testing 第 15、16、17 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~17 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -13,28 +13,29 @@
 [测试](docs/testing.md)和[下一对话提示词](docs/next-chat-prompt.md)。
 HTTP/WS唯一契约入口是 [openapi.yaml](docs/api/openapi.yaml)。
 
-已完成的里程碑（逐项证据在 testing 第 7~16 节）：SEC-01 / SEC-02 / ERR-01、TEST-01（隔离库 +
+已完成的里程碑（逐项证据在 testing 第 7~17 节）：SEC-01 / SEC-02 / ERR-01、TEST-01（隔离库 +
 完整应用启动）、AUTH-HTTP / DEVICE-AUTH / AUTH-HARDEN、M2 LEDGER（台账/基站/绑定闭环）、
 M2 PLAN（想定与编成、导入导出）、M2 MAP-BASE（底图 CRUD / 图片 / 楼层点位）、
 M3 LIFE（开停演与恢复门禁、单实例保护）、M3 STATE（态势状态机与读侧）、
 M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停机释放链路），
-**M3 COMMAND MR-1 + MR-2 + MR-3**，以及 **M3 CAL-1（UWB 室内解算链路）**。
+**M3 COMMAND MR-1 + MR-2 + MR-3**，以及 **M3 CAL-1（UWB 室内解算链路：CAL-1a 解算器 /
+CAL-1b 装配接线 / CAL-1c app 端到端）**。
 
-下一原子任务的候选（详见 testing 第 16.3 节与第 3 节矩阵）：M3 **CAL-2**（UWB 标定本体：
+下一原子任务的候选（详见 testing 第 17 节与第 3 节矩阵）：M3 **CAL-2**（UWB 标定本体：
 三端点去 501、进程内状态机、`V11` 校准列、现场实测长宽覆盖写回 `uwb_meta`）；COMMAND 剩余的
 `move`（等地图置位写入口）；M5 EXPORT（replay 导出，仍 501）；`getVestLink` 仍 501；Flutter 客户端
 （Android 单兵端 / Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不照搬本快照的瞬时结论。
-提交/推送仍须当次授权；含 CAL-1 在内的本轮提交推送状态见第 2 节，网络失败时不得写成已入远端。
+提交/推送仍须当次授权；含 CAL-1c 在内的本轮提交推送状态见第 2 节，网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源代码HEAD | 本轮 4 个提交已全部入远端 `main`（`76ae4b7..eda1b1a`）；本次回写补记推送状态 |
-| 实际远端main | 与本地 HEAD 一致；前几次 `git push` 曾因 443 连接被重置/超时失败，改用 `git -c http.version=HTTP/1.1 push` 后成功 |
-| 已推送 | `78ce05e`（feat 室内解算 IndoorPositionResolver）、`05563a7`（docs 四角编号更正为 bs1↔bs4）、`0c80727`（feat 41B 帧解算接入态势写侧）、`eda1b1a`（docs CAL-1 口径回写） |
-| 本轮继续成果 | 工作树干净，暂存区为空 |
+| 源代码HEAD | 上一步 `ce2b33d` 已入远端 `main`；本轮 CAL-1c 的 test + docs 两个提交随后补推 |
+| 实际远端main | 本次提交前与本地 HEAD `ce2b33d` 一致；前几次 `git push` 曾因 443 连接被重置/超时失败，改用 `git -c http.version=HTTP/1.1 push` 后成功 |
+| 已推送 | `78ce05e`（feat 室内解算 IndoorPositionResolver）、`05563a7`（docs 四角编号更正为 bs1↔bs4）、`0c80727`（feat 41B 帧解算接入态势写侧）、`eda1b1a`（docs CAL-1 口径回写）、`ce2b33d`（docs CAL-1 推送状态与里程碑） |
+| 本轮继续成果 | 工作树含 CAL-1c 改动：`scds-app/.../SituationStateIT.java`（+2 用例）+ `docs/testing.md`（第 17 节）；合入 CAL-1c 后全量 1055 项全绿 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -56,11 +57,15 @@ MVC统一Problem及真实Boot共存回归；核心IT独立库、初始化前门�
 新增已完成（**M3 COMMAND MR-3**）：`ExerciseCommandExpiryTask`（core `@Component`，
 `scds.command.sent-ttl` 默认 30s、`@Scheduled` 5s 一拍，只扫 `SENT` 且按 `sent_at` 判超时，
 写 `SYSTEM` 存证后作废并清终态行）与仓储 `findSentBefore`。
-新增已完成（**M3 CAL-1 UWB 解算链路**）：`IndoorPositionResolver`（41B 帧 → **整图**百分比坐标，
+新增已完成（**M3 CAL-1 UWB 解算链路**，分三步：CAL-1a 解算器 / CAL-1b 装配接线 / CAL-1c app 端到端）：
+`IndoorPositionResolver`（41B 帧 → **整图**百分比坐标，
 每马甲自持 `UwbFilter`/`UwbSolver` 状态）、`SituationStateService.applyUwb` / `loadIndoorMap`
 （解算几何随本场底图装载，开演/停演各清一次；解不出只计数 `uwbFramesWithoutFix` 而不改坐标）、
 `SituationSessionBinder` 注入 `BaseMapRepository` 按 `exercise.mapId` 读 `t_map`；
 修复 `application.yml` 死配置键（`uwb-mode: enabled` → `mode: true`，原键从未生效）。
+CAL-1c 在 `scds-app` 的 `SituationStateIT` 以真 Spring 装配 + 真库底图 + 真 `UwbFramer` 新增 2 例：
+可解几何下解算写入整图 `INDOOR` 坐标 / `positionSource=UWB` / `signalQuality=4`；
+无底图时只进「无解」计数、不臆造坐标（该帧按冻结成帧规则自拼，理由见 testing 第 17.3 节）。
 未完成：COMMAND 的 `move`（手动置位，等地图置位写入口）；`getVestLink` 仍 501；
 M3 **CAL-2**（UWB 标定本体：三端点去 501、`V11` 校准列、现场实测长宽覆盖写回 `uwb_meta`）与
 M5 EXPORT（replay 导出）仍 501；
@@ -74,9 +79,12 @@ Flyway文件V1-V7、V9-V10，共9份；18张业务表，另有Flyway历史表。
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn test`：2026-10-27，**1035项，失败/错误/跳过均0**：
-protocol19 + gateway49 + core510 + api139 + app318（solver/domain无测试）。
-本段新增证据为 `ExerciseCommandExpiryTaskIT` 6 例（MR-3），详见 testing 第 16 节；
+**当前**全量`mvn test`：2026-10-27，**1055项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core528 + api139 + app320（solver/domain无测试）。
+本段新增证据为 CAL-1（解算链路）共 3 段：core `IndoorPositionResolverTest` 12 +
+`SituationStateServiceTest` +4 + `SituationSessionBinderTest` +2（CAL-1a/1b），
+app `SituationStateIT` +2（CAL-1c，真装配 + 真库底图 + 真 `UwbFramer` 端到端），详见 testing 第 17 节；
+MR-3 的证据是 `ExerciseCommandExpiryTaskIT` 6 例，详见 testing 第 16 节；
 MR-1/MR-2 的证据是 `CommandHttpIT` 4 例，详见 testing 第 15 节。
 
 当时`mvn clean verify`：2026-10-21 18:48:41 +08:00，
@@ -192,7 +200,7 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：COMMAND MR-3 详见 testing 第 16 节、MR-1/MR-2 详见第 15 节；T-STOP 详见第 14 节；
-DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1035 项测试、COMMAND MR-1/MR-2/MR-3 交付与下一任务候选，
-不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND。
+最新证据：M3 CAL-1（含 CAL-1c）详见 testing 第 17 节；COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
+T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
+本快照已同步 1055 项测试、M3 CAL-1 交付与下一任务候选（CAL-2），
+不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1。

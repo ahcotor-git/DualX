@@ -8,6 +8,7 @@
 > M2 LEDGER台账/基站/绑定与681项最新全量结果见第12节。
 > M4 DEVICE-SELF单兵自身视角与1020项最新全量结果见第13节（第2节RT-SID行已被第13节取代）。
 > M4 T-STOP停机与立即重启及1021项最新全量结果见第14节（第3节T-STOP行已被第14节取代）。
+> M3 CAL-1 UWB 室内解算链路（解算器 + 装配接线 + app 端到端）与1055项最新全量结果见第17节。
 
 ## 1. 本次自动化结果
 
@@ -886,3 +887,85 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 `move`（手动置位）、`getVestLink`、M3 CALIBRATION、M5 EXPORT 仍 501，与本段无关。
 
 本段为**代码验收**，不是生产发布批准。
+
+## 17. M3 CAL-1 UWB 室内解算链路
+
+2026-10-27 按 M3 CALIBRATION 的**前置**工作包实施（`docs/implementation-plan.md` 第 91 行；
+`docs/design/06-state.md` §4.6「CAL-1 落地补充」、§7 判据）。CALIBRATION 拆为
+**CAL-1（解算链路）** 与 **CAL-2（标定本体）** 两段，CAL-1 再拆三步：
+CAL-1a 解算器与单测 → CAL-1b 装配接线 → CAL-1c app 端到端。本节记录三段合起来的证据，
+**其模块计数与总计取代第 16 节的表**；CAL-2 尚未开工。
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动（协议字节、成帧规则一字未动） |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 528 | 0/0/0 | CAL-1a 新增 `IndoorPositionResolverTest` 12；`SituationStateServiceTest` +4、`SituationSessionBinderTest` +2 |
+| api | 139 | 0/0/0 | 未改动 |
+| app | 320 | 0/0/0 | `SituationStateIT` +2（CAL-1c：真装配 + 真库底图 + 真成帧器的 UWB 端到端） |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1055** | **0/0/0** | 全 reactor SUCCESS |
+
+### 17.1 落地范围与口径
+
+**CAL-1a（`IndoorPositionResolver`，`scds-core`）**：把协议 B 的 41B 帧解成**整图**百分比坐标。
+每马甲自持 `UwbFilter` + `UwbSolver` 先验，因此它必须是 Spring **单例**；`load(...)` 装载本场
+几何（`uwb_meta` 四角 + 图片像素尺寸），`clear()` 清空。三类情况**一律不产出坐标**（只计数）：
+UWB 开关关、本场未装载几何、该帧解算降级。**不改 `scds-solver`**：`UwbSolver` 与其几何约定
+一字未动，`IndoorPositionResolver` 只做「装载 → 调用 → 二次映射」。
+
+**CAL-1b（装配接线）**：`SituationStateService.dispatch` 的 `case StateEvent.Uwb` 从「只计数」
+改为 `applyUwb` —— 解出则写
+`GeoPoint(CoordinateSystem.INDOOR, xPct, yPct, 原楼层/点位, ...)` + `positionSource = UWB` +
+`signalQuality = usedCount`；解不出**什么都不改**，只累加 `uwbFramesWithoutFix`。
+解算几何随开演装载（`SituationSessionBinder` 注入 `BaseMapRepository`，按 `exercise.mapId`
+读 `t_map`）；`mapId` 为 null 必须**显式清空**。`beginExercise` 幂等判据后清一次、`endExercise`
+首行清一次。`IndoorPositionResolver` 由 `scds-app` 的 `SituationStateConfig` 装配，
+`@ConfigurationProperties("scds.uwb")` 恢复绑定前缀（`scds-solver` 刻意零 Spring 依赖）。
+**同时修掉一个死配置键**：`application.yml` 原写 `uwb-mode: enabled`，而 `ScdsUwbProperties.mode`
+默认 `false`，即解算链路此前**永远不会生效**；改为 `mode: true`。
+
+**CAL-1c（app 端到端）**：`SituationStateIT` 增两条用例，走完整生产入口装配。
+
+### 17.2 用例判据
+
+core（`IndoorPositionResolverTest` 12 / `SituationStateServiceTest` 32 / `SituationSessionBinderTest` 8）
+覆盖解算语义：中心帧映射为整图 `(0.525, 0.5640625)`、小位移方向正确、时序倒灌保持上一帧、
+每马甲互不串先验、缺锚点/非正长宽/缺图片尺寸**装载即判否**、`clear()` 与换图重建状态；
+服务层覆盖「解出写坐标 / 阵亡冻结不更新 / 无几何只计数 / 编成外马甲不参与」。
+
+app（`SituationStateIT`，2）：
+
+1. `uwbFrameResolvesIntoWholeImageIndoorCoordinate`——铺一张 2000×1600、现场 30m×18m 的
+   室内底图（`uwb_meta` 四角按「左下 → 右下 → 右上 → 左上」，`bs1→bs2` 为长度基准、
+   `bs1→bs4` 为宽度基准），装载带 `mapId` 的演习后注入 41B 帧：断言真成帧器切出的
+   `vestNum` / `rangesMm` 与拼入一致，读侧坐标为 `INDOOR`、`xPct/yPct` 在 0.002 内命中整图中心、
+   不带 WGS-84、`positionSource = UWB`、`signalQuality = 4`，且 `uwbFramesWithoutFix()` 不增。
+2. `uwbFramesWithoutLoadedGeometryAreCountedNotSolved`——`mapId = null` 时同一帧只让
+   `uwbFramesWithoutFix()` 加一，坐标仍为 null、来源仍 `NONE`（不臆造坐标）。
+
+### 17.3 边界与不变式
+
+**唯一例外：UWB 41B 帧是测试自拼的**。库里的 `uwb41` 黄金样本是**近场**测距（几十~几百毫米，
+解不出 30m×18m 的场），且没有本场编成编号（1/2/4/5）对应的样本；故 `SituationStateIT.uwbFrameHex`
+按 `PROTOCOL.md` §6.5 的冻结规则（帧头 `AA 29`、帧尾 `55`、`sum(byte[0..38]) & 0xFF == byte[39]`）
+拼写字节，并把「能否被**真**成帧器切出并交给状态机」写进断言作为往返校验。协议 A 的串口帧仍然
+一律取黄金样本，不自造字节；UWB 成帧对真实捕获字节的验证由 `UwbLinkTest` / `UwbFramesGoldenSamplesTest` 覆盖。
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、成帧与校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值。
+
+**`ff06` 仍只打 DEBUG**：协议 §1.4④ 要求「UWB 连续坐标生效时丢弃 `ff06` 室内点位帧」，
+该**判别开关**属 CAL-2（标定分段），本段只把它降为 `log.debug` 并注明「未采用」，
+不改变其透传与计数行为。
+
+**在线态不受影响**：本段不引入新的在线判定，仍只由心跳驱动（5000ms），UWB 帧不刷新
+`lastHeartbeatAt`；因此「只有 UWB、没有心跳」的马甲不会被判在线——这是既有口径，非本轮回归。
+
+**CAL-2 仍未完成**：三个标定端点去 501、进程内标定状态机、`V11` 校准列、现场实测长宽覆盖
+写回 `uwb_meta`。`move`（手动置位）、`getVestLink`、M5 EXPORT 仍 501，与本段无关。
+
+本段为**代码验收**，不是生产发布批准；UWB 盒子经 12001 的连续坐标、容量与长稳属现场待验收。
