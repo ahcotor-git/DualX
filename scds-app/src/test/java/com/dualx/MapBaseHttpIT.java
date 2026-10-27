@@ -222,6 +222,40 @@ class MapBaseHttpIT {
         createdMaps.remove(mapId);
     }
 
+    @Test
+    @DisplayName("CAL-2 中心基准校准三端点走真实 HTTP：未标四角 404、GET 报 IDLE、链路未开 POST 409、DELETE 204")
+    void uwbCalibrationEndpointsOverRealHttp() throws Exception {
+        String token = adminToken();
+        String mapId = createMap(token, "中心基准校准验收");
+        assertThat(upload(mapId, image("png", 400, 300), "底图.png", token).statusCode()).isEqualTo(200);
+        String calibPath = "/api/v1/maps/" + mapId + "/uwb-calibration";
+
+        // 没有四角骨架时中心基准校准无处写回：与 getUwbMeta 同一口径（404 而不是 400）
+        assertProblem(post(calibPath, calibrationRequest(3), token), 404, "MAP_NOT_CALIBRATED", calibPath);
+
+        // 还没标过四角：进程内没有会话，GET 如实回答 IDLE
+        HttpResponse<byte[]> idle = get(calibPath, token);
+        assertThat(idle.statusCode()).isEqualTo(200);
+        assertThat(json(idle).path("state").asText()).isEqualTo("IDLE");
+        assertThat(json(idle).path("sampledFrames").asInt()).isZero();
+        assertThat(json(idle).path("appliedAt").isNull()).isTrue();
+
+        String metaPath = "/api/v1/maps/" + mapId + "/uwb-meta";
+        assertThat(put(metaPath, uwbMeta(398, 298), token).statusCode()).isEqualTo(200);
+
+        // 四角齐备但 UWB 链路未开（本类用 application.yml 的默认 gateway.mode=real，且不手动开链路）：
+        // 采不到帧的标定要早拒，落在 409 的第二个情形上（与 MAP_CALIBRATION_IN_PROGRESS 分码）
+        assertProblem(post(calibPath, calibrationRequest(3), token), 409, "DEVICE_LINK_NOT_OPEN", calibPath);
+        assertThat(json(get(calibPath, token)).path("state").asText())
+                .as("被拒的标定不入会话：状态仍是 IDLE，而不是留下一个永远跑不完的 RUNNING")
+                .isEqualTo("IDLE");
+
+        assertThat(delete(calibPath, token).statusCode()).isEqualTo(204);
+
+        assertThat(delete("/api/v1/maps/" + mapId, token).statusCode()).isEqualTo(204);
+        createdMaps.remove(mapId);
+    }
+
     // ── 夹具 ─────────────────────────────────────────────────────────────────
 
     private static String adminToken() throws Exception {
@@ -274,6 +308,17 @@ class MapBaseHttpIT {
 
     private static ObjectNode point(double x, double y) {
         return mapper.createObjectNode().put("xPx", x).put("yPx", y);
+    }
+
+    /**
+     * 触发一次中心基准校准的请求体：采样帧数 + 一个卷尺实测长度。
+     *
+     * <p><b>必须带实测值</b>：服务层的判据顺序是「先要求至少一个卷尺实测值，再查 UWB 链路」，
+     * 只给 {@code sampleFrames} 会先落在 400 {@code MAP_UWB_META_INCOMPLETE} 上，
+     * 根本走不到「链路未开」那条 409——那样用例就测错了分支。</p>
+     */
+    private static ObjectNode calibrationRequest(int sampleFrames) {
+        return mapper.createObjectNode().put("sampleFrames", sampleFrames).put("bs1ToBs2Cm", 3000);
     }
 
     private static void deleteFilesRoot() {

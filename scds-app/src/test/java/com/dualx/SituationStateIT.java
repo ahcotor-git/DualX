@@ -13,6 +13,8 @@ import com.dualx.core.domain.TrackSample;
 import com.dualx.core.domain.BaseMap;
 import com.dualx.core.domain.BattleMode;
 import com.dualx.core.domain.MapType;
+import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.map.UwbCalibrationService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.HardwareEventSink;
 import com.dualx.core.push.UnitState;
@@ -24,6 +26,7 @@ import com.dualx.core.state.SituationQuery;
 import com.dualx.core.state.SituationSessionBinder;
 import com.dualx.core.state.SituationStateService;
 import com.dualx.core.support.UuidV7;
+import com.dualx.core.support.SqlTime;
 import com.dualx.gateway.sim.SimulatedLinkAdapter;
 import com.dualx.protocol.Hex;
 import com.dualx.protocol.HitPart;
@@ -33,6 +36,8 @@ import com.dualx.protocol.VestStatus;
 import com.dualx.protocol.serial.SerialFrame;
 import com.dualx.protocol.serial.SerialFramer;
 import com.dualx.protocol.uwb.UwbFrame;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +50,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import java.security.KeyPair;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +81,11 @@ import static org.assertj.core.api.Assertions.within;
  * 毫米级测距、也没有本场编成编号（1/2/4/5）对应的样本，故按冻结成帧规则拼写（见 {@link #uwbFrameHex}），
  * 并把「能否被真成帧器切出」写进断言。<b>这不是现场验收</b>：真实串口 115200 时序、UWB 盒子经 12001 的
  * 连续坐标、容量与长稳无法由仿真证明（设计 06 §7「现场待验收」）。</p>
+ *
+ * <p><b>CAL-2 的成功路径也在本类</b>：中心基准校准的采样入口挂在唯一写手线程上（{@code applyUwb} 里
+ * 刻意早于编成判定，标定因此发生在开演之前），「标定采不采得到帧」只有在真装配 + 真写手线程下才成立。
+ * 三端点的 HTTP 形状（202/200/204 与 404/409）由 {@code MapBaseHttpIT} 覆盖，本类补的是
+ * 「帧 → 采样 → 覆盖写回 {@code uwb_meta} → {@code calibrated_at} 落库」这一段。</p>
  *
  * <p><b>刻意不覆盖的两条（已由 core 单测证明）</b>：</p>
  * <ul>
@@ -139,6 +150,14 @@ class SituationStateIT {
     /** 整图 2000×1600 上，物理中心对应 (1050/2000, 902.5/1600)。 */
     private static final double CENTRE_IMAGE_X = 0.525;
     private static final double CENTRE_IMAGE_Y = 0.5640625;
+
+    // ── CAL-2 中心基准校准夹具 ───────────────────────────────────────────────
+
+    /** 采样帧数：小到够验「采满即收」，又不必等配置默认的 200 帧。 */
+    private static final int CALIB_TARGET_FRAMES = 3;
+
+    /** 现场卷尺实测长度（厘米）：与 {@link #UWB_META} 的 3000 刻意不同，写回才可辨。 */
+    private static final double CALIB_TAPE_LENGTH_CM = 2450.0;
 
     private static ConfigurableApplicationContext context;
     private static SimulatedLinkAdapter links;
@@ -432,6 +451,49 @@ class SituationStateIT {
         assertThat(query.exerciseId()).isEqualTo(exerciseId);
     }
 
+    @Test
+    @DisplayName("CAL-2：开演前经唯一写手线程采样中心基准校准，卷尺实测长宽覆盖写回并落标定时刻")
+    void uwbCalibrationWritesTapeMeasuresBackThroughTheWriterThread() throws Exception {
+        seedIndoorMap();
+        // 标定发生在演习之前：没有演习时也必须采得到帧（取样入口早于编成判定，见 applyUwb）。
+        state.endExercise();
+
+        UwbCalibrationService calibration = context.getBean(UwbCalibrationService.class);
+        MapLedgerService ledger = context.getBean(MapLedgerService.class);
+        ObjectMapper json = context.getBean(ObjectMapper.class);
+        assertThat(json.readTree(ledger.uwbMeta(MAP_ID)).path("realLengthCm").asDouble())
+                .as("标定前是底图自带的手工基准").isEqualTo(3000.0);
+        assertThat(calibratedAt()).as("直接插库的行没有标定时刻，V11 列应为 NULL").isNull();
+
+        UwbCalibrationService.Status started = calibration.start(
+                MAP_ID, CALIB_TARGET_FRAMES, CALIB_TAPE_LENGTH_CM, null);
+        assertThat(started.state()).isEqualTo(UwbCalibrationService.State.RUNNING);
+        assertThat(started.progressPct()).isZero();
+
+        // 静止一致性：同一帧连投目标帧数（编号与逐角测距都不变，偏离中位数为 0），
+        // 走的是真网关成帧器 → 真写手线程 → 标定采样这条链，不是直接调 onFrame。
+        for (int i = 0; i < CALIB_TARGET_FRAMES; i++) {
+            links.injectUwb(uwbFrameHex(2, RANGES_AT_CENTRE));
+        }
+        await("标定采满目标帧数并转 SUCCEEDED", () -> calibration.status(MAP_ID).state()
+                == UwbCalibrationService.State.SUCCEEDED);
+
+        UwbCalibrationService.Status done = calibration.status(MAP_ID);
+        assertThat(done.sampledFrames()).isEqualTo(CALIB_TARGET_FRAMES);
+        assertThat(done.progressPct()).isEqualTo(100);
+        assertThat(done.appliedAt()).as("结果生效时刻同时进状态与库").isNotNull();
+
+        JsonNode written = json.readTree(ledger.uwbMeta(MAP_ID));
+        assertThat(written.path("realLengthCm").asDouble())
+                .as("卷尺实测长度覆盖写回：采样只承担静止一致性校验，不反推几何")
+                .isEqualTo(CALIB_TAPE_LENGTH_CM);
+        assertThat(written.path("realWidthCm").asDouble()).as("未提供的维保持原值").isEqualTo(1800.0);
+        assertThat(written.path("bs1").path("xPx").asDouble()).as("四角几何不被标定改写").isEqualTo(120.0);
+        assertThat(calibratedAt())
+                .as("标定的内容与时刻由同一次 saveUwbMeta 落库（V11 列 calibrated_at）")
+                .isNotNull();
+    }
+
     // ── 夹具 ────────────────────────────────────────────────────────────────
 
     /** 装载一场新演习（编成来自真库 {@code t_plan_roster}，走真 {@link SituationSessionBinder}）。 */
@@ -469,6 +531,21 @@ class SituationStateIT {
         baseMaps.deleteById(MAP_ID);
         baseMaps.insert(new BaseMap(MAP_ID, "态势IT室内底图", MapType.INDOOR, "maps/state-it.png",
                 2000, 1600, null, UWB_META, Instant.now(), Instant.now()));
+    }
+
+    /**
+     * 直读 {@code t_map.calibrated_at}（UTC 挂钟值 → {@link Instant}）；{@code NULL} 即「从未标定」。
+     *
+     * <p>该列刻意不进 {@code BaseMapRepository.COLUMNS}、也不落到 {@code BaseMap} 上（见仓储类注释），
+     * 所以「标定写回有没有落这一列」只能直查库。</p>
+     */
+    private static Instant calibratedAt() {
+        return jdbc.sql("SELECT calibrated_at FROM t_map WHERE id = :id")
+                .param("id", MAP_ID.toString())
+                .query(LocalDateTime.class)
+                .optional()
+                .map(SqlTime::fromDb)
+                .orElse(null);
     }
 
     /**

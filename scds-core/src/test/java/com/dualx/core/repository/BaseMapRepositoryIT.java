@@ -3,13 +3,17 @@ package com.dualx.core.repository;
 import com.dualx.core.domain.BaseMap;
 import com.dualx.core.domain.MapType;
 import com.dualx.core.support.PageRequest;
+import com.dualx.core.support.SqlTime;
 import com.dualx.core.support.UuidV7;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -23,6 +27,13 @@ class BaseMapRepositoryIT {
 
     @Autowired
     private BaseMapRepository maps;
+
+    /**
+     * 只为读 {@code calibrated_at}：该列刻意不进 {@link BaseMapRepository#COLUMNS}、
+     * 也不落到 {@code BaseMap} 上（见仓储类注释），所以验证「写进去了没」只能直查库。
+     */
+    @Autowired
+    private JdbcClient jdbc;
 
     /**
      * 契约 UwbMeta 的冻结结构，逐字保存、逐字读回（uwb_meta 是 TEXT，库不做任何改写）。
@@ -127,6 +138,46 @@ class BaseMapRepositoryIT {
         assertThat(loaded.imageHeight()).isEqualTo(600);
         assertThat(loaded.remark()).isEqualTo("改过");
         assertThat(loaded.uwbMeta()).isEqualTo(UWB_META);
+    }
+
+    /**
+     * {@code calibrated_at}（V11）的两个关键性质：新建即空、只由 {@link BaseMapRepository#markCalibrated}
+     * 前进——改名换型的 {@link BaseMapRepository#update} 不许把它带走。
+     */
+    @Test
+    void markCalibrated_stampsOnlyItsOwnColumn() {
+        UUID id = UuidV7.generate();
+        maps.insert(new BaseMap(id, "待标定图", MapType.INDOOR, null, null, null, null, null, null, null));
+        assertThat(calibratedAt(id)).isNull();
+
+        Instant stamped = Instant.parse("2026-10-27T08:00:00Z");
+        assertThat(maps.markCalibrated(id, stamped)).isEqualTo(1);
+
+        assertThat(calibratedAt(id)).isEqualTo(stamped);
+        maps.update(new BaseMap(id, "改过名", MapType.OUTDOOR, "maps/y.png",
+                800, 600, null, UWB_META, null, null));
+        assertThat(calibratedAt(id)).isEqualTo(stamped);
+    }
+
+    @Test
+    void markCalibrated_unknownIdAffectsNoRow() {
+        assertThat(maps.markCalibrated(UuidV7.generate(), Instant.parse("2026-10-27T08:00:00Z"))).isZero();
+    }
+
+    /**
+     * 直读 {@code calibrated_at}（UTC 挂钟值 → Instant）。
+     *
+     * <p>用 {@code list()} 而不是 {@code optional()}：列值本身可以是 {@code NULL}，
+     * 而 {@code optional()} 会把「有行、值为 NULL」折叠成 {@code Optional.empty()}，
+     * 与「没有这一行」混在一起，再拿 {@code orElseThrow} 就直接抛异常了。</p>
+     */
+    private Instant calibratedAt(UUID id) {
+        List<LocalDateTime> stored = jdbc.sql("SELECT calibrated_at FROM t_map WHERE id = :id")
+                .param("id", id.toString())
+                .query(LocalDateTime.class)
+                .list();
+        assertThat(stored).hasSize(1);
+        return SqlTime.fromDb(stored.get(0));
     }
 
     @Test
