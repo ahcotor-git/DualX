@@ -56,6 +56,15 @@ public enum ApiErrorCode {
     DEVICE_VEST_NOT_BOUND,
     DEVICE_LINK_ALREADY_OPEN,
     DEVICE_LINK_SERIAL_BUSY,
+    /**
+     * 目标链路当前未开启，而本动作要求它先处于 {@code OPEN}（HTTP 409）。
+     *
+     * <p>与 {@link #DEVICE_LINK_ALREADY_OPEN} 语义相反：后者是「同一条逻辑链路的重复开启请求」，
+     * 本码是「要用的链路还没开」。契约 {@code startUwbCalibration} 的 409 第二种情形即此——
+     * UWB 链路未开启时标定会一帧都采不到，早拒比让客户端对着一个永远 {@code RUNNING} 的状态
+     * 空等要好。登记见 {@code docs/api/schemas/common.yaml} 的 {@code Problem.code}。</p>
+     */
+    DEVICE_LINK_NOT_OPEN,
     DEVICE_ANCHOR_NOT_CALIBRATED,
 
     // ===== MAP_* 地图 =====

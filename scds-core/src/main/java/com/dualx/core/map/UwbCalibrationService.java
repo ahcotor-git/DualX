@@ -1,5 +1,8 @@
 package com.dualx.core.map;
 
+import com.dualx.core.domain.LinkKind;
+import com.dualx.core.domain.LinkState;
+import com.dualx.core.domain.LinkStatus;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.solver.config.ScdsUwbProperties;
@@ -13,9 +16,11 @@ import org.slf4j.LoggerFactory;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * UWB 中心基准标定（契约 {@code startUwbCalibration} / {@code getUwbCalibration} /
@@ -24,7 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p><b>它做什么</b>：把被测单元摆到场地正中心，采 {@code calibSampleFrames} 帧 41B 测距，
  * 校验这段窗口内测距是「静止」的，然后把现场卷尺实测的长宽<b>覆盖写回</b>
  * {@code t_map.uwb_meta} 的 {@code realLengthCm} / {@code realWidthCm}——
- * 解算链路只读那一列，所以现场调优的沉淀点就是它。</p>
+ * 解算链路只读那一列，所以现场调优的沉淀点就是它。开启前先要 UWB 链路已 {@code OPEN}
+ * （否则一帧都收不到），见 {@link #uwbLinkOpen()}。</p>
  *
  * <p><b>为什么不自己反推几何</b>（本段口径，2026-10-27 裁定）：实测长宽以**卷尺值为准**，
  * 采样只承担「这段时间单元没动」的一致性校验。反推一套几何意味着在 core 里再写一份必然与
@@ -84,6 +90,15 @@ public final class UwbCalibrationService {
     private final MapLedgerService ledger;
     private final ScdsUwbProperties uwb;
     private final Clock clock;
+    /**
+     * 链路运行态快照的<b>延迟</b>来源。
+     *
+     * <p>取 {@code Supplier} 而不是直接注入 {@code DeviceLinkAdmin} 端口，是为了打破装配环：
+     * {@code deviceLinkAdmin} 依赖 {@code HardwareEventSink}（即 {@code SituationStateService}），
+     * 而那个状态所有者依赖本服务。装配层因此传一个「调用时才解析」的句柄；{@link #start} 只在
+     * HTTP 请求期调用它，那时容器早已就绪。生产由 {@code DeviceLinkAdmin::snapshot} 提供。</p>
+     */
+    private final Supplier<List<LinkStatus>> linkSnapshot;
 
     /** 每张底图一份会话；键是底图 id，不是演习 id——标定发生在演习之前。 */
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
@@ -94,11 +109,15 @@ public final class UwbCalibrationService {
      * @param uwb    {@code scds.uwb.*}：采样帧数与静止阈值的来源（solver 刻意不带 Spring 注解，
      *               绑定由装配层恢复）
      * @param clock  UTC 时钟；{@code appliedAt} 与态势时间戳同源
+     * @param linkSnapshot 链路运行态快照的延迟来源（{@code DeviceLinkAdmin::snapshot}）；用来判
+     *                     「UWB 链路是否已开启」，见 {@link #uwbLinkOpen()}
      */
-    public UwbCalibrationService(MapLedgerService ledger, ScdsUwbProperties uwb, Clock clock) {
+    public UwbCalibrationService(MapLedgerService ledger, ScdsUwbProperties uwb, Clock clock,
+                                 Supplier<List<LinkStatus>> linkSnapshot) {
         this.ledger = ledger;
         this.uwb = uwb;
         this.clock = clock;
+        this.linkSnapshot = linkSnapshot;
     }
 
     /**
@@ -118,6 +137,7 @@ public final class UwbCalibrationService {
      * @return 受理后的状态（{@code RUNNING}）
      * @throws BusinessException {@code MAP_NOT_CALIBRATED} 底图还没标四角；
      *                           {@code MAP_UWB_META_INCOMPLETE} 两个实测值都没给；
+     *                           {@code DEVICE_LINK_NOT_OPEN} UWB 链路没开（采不到帧，早拒好过空等）；
      *                           {@code MAP_CALIBRATION_IN_PROGRESS} 该底图已有标定在跑；
      *                           {@code VALIDATION_FAILED} 采样帧数 ≤ 0 或实测值不是正整数厘米
      */
@@ -135,6 +155,11 @@ public final class UwbCalibrationService {
         }
         requirePositiveWholeCm(bs1ToBs2Cm, "bs1ToBs2Cm");
         requirePositiveWholeCm(bs1ToBs3Cm, "bs1ToBs3Cm");
+        // 链路没开就没帧源，采满目标帧数这件事永远不会发生（契约 startUwbCalibration 的 409 第二种）。
+        if (!uwbLinkOpen()) {
+            throw new BusinessException(ApiErrorCode.DEVICE_LINK_NOT_OPEN,
+                    "UWB 链路未开启（TCP 服务端与串口都非 OPEN），中心基准校准采不到帧：" + mapId);
+        }
 
         Session fresh = new Session(mapId, baseMeta, target, bs1ToBs2Cm, bs1ToBs3Cm,
                 uwb.getCalibStaticMaxDiffCm() * 10.0d);
@@ -205,6 +230,19 @@ public final class UwbCalibrationService {
     }
 
     // ------------------------------------------------------------------ 完成阶段
+
+    /**
+     * UWB 链路是否已开启：{@code UWB_TCP_SERVER} 与 {@code UWB_SERIAL} 两条（二选一互斥）
+     * 任一为 {@code OPEN} 即算开启。
+     *
+     * <p>只认 {@code OPEN}，不认 {@code OPENING}：监听刚下发、还没就绪的那几百毫秒里接受一次标定，
+     * 会把开头的若干帧丢在链路外，采样窗口的前段就掺进了「少帧」的位移假象。</p>
+     */
+    private boolean uwbLinkOpen() {
+        return linkSnapshot.get().stream()
+                .anyMatch(link -> link.state() == LinkState.OPEN
+                        && (link.kind() == LinkKind.UWB_TCP_SERVER || link.kind() == LinkKind.UWB_SERIAL));
+    }
 
     /** 校验静止性 → 覆盖写回实测长宽 → 置终态；任何失败都折叠成 {@code FAILED}，不上抛。 */
     private void finish(Session s) {

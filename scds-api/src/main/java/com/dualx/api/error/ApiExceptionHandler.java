@@ -268,8 +268,8 @@ public class ApiExceptionHandler {
 
             // ── 台账域（M2 LEDGER）──────────────────────────────────────────────
             // 逐项按契约登记，不按前缀猜：同一前缀里既有 404（马甲不存在）又有 409（编号冲突）。
-            // 尚未落服务的码（REPLAY_*、MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
-            // 落地那一刻再补进这张表，而不是现在替它们猜一个看着合理的状态。
+            // 尚未落服务的码（REPLAY_* 等）继续走 default——落地那一刻再补进这张表，
+            // 而不是现在替它们猜一个看着合理的状态。
             case DEVICE_VEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND ->
                     HttpStatus.CONFLICT;
@@ -278,7 +278,10 @@ public class ApiExceptionHandler {
             // 两个码同为 409、含义不同：「谁占着」——`DEVICE_LINK_ALREADY_OPEN` 是同一条逻辑链路的
             // 重复开启请求，`DEVICE_LINK_SERIAL_BUSY` 是物理资源冲突（串口被本进程另一条链路持有，
             // 或打开时被系统拒绝）。前端按 code 分流，不依赖 title 文案。
-            case DEVICE_LINK_ALREADY_OPEN, DEVICE_LINK_SERIAL_BUSY -> HttpStatus.CONFLICT;
+            // `DEVICE_LINK_NOT_OPEN` 也是 409 但方向相反：动作要用的链路还没开
+            // （契约 startUwbCalibration 的 409 第二种情形，见 paths/map.yaml）。
+            case DEVICE_LINK_ALREADY_OPEN, DEVICE_LINK_SERIAL_BUSY, DEVICE_LINK_NOT_OPEN ->
+                    HttpStatus.CONFLICT;
 
             // ── 指挥指令（M3 COMMAND）──────────────────────────────────────────
             // 逐项登记，理由同上：同一前缀里两种状态。契约只在 reloadVest / reloadAllVests 的 400
@@ -299,9 +302,12 @@ public class ApiExceptionHandler {
             // 楼层点位与 UWB 标定：getUwbMeta 的「还没标定」是 404 MAP_NOT_CALIBRATED
             // （与 MAP_NOT_FOUND 分码，现场动作不同）；putUwbMeta 的校验失败是 400，
             // 契约把这两处原写成同一个码，本次按「一码一状态」拆开。
+            // 中心基准校准三端点（CAL-2）：startUwbCalibration 的「已有校准在跑」是 409
+            // MAP_CALIBRATION_IN_PROGRESS（契约路径里写明）；「UWB 链路未开启」的 409
+            // 走 DEVICE_LINK_NOT_OPEN（登记在硬件链路那一节，同码不分处）。
             case MAP_NOT_FOUND, MAP_NOT_CALIBRATED, MAP_IMAGE_MISSING -> HttpStatus.NOT_FOUND;
             case MAP_UWB_META_INCOMPLETE -> HttpStatus.BAD_REQUEST;
-            case MAP_IN_USE -> HttpStatus.CONFLICT;
+            case MAP_IN_USE, MAP_CALIBRATION_IN_PROGRESS -> HttpStatus.CONFLICT;
 
             // ── 想定域（M2 PLAN）────────────────────────────────────────────────
             // 与地图域同形：想定查不到是 404；正被进行中的演习占着（改/删/改编成）是 409。

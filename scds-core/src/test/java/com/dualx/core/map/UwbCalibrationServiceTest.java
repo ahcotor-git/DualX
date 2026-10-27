@@ -1,5 +1,8 @@
 package com.dualx.core.map;
 
+import com.dualx.core.domain.LinkKind;
+import com.dualx.core.domain.LinkState;
+import com.dualx.core.domain.LinkStatus;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.solver.config.ScdsUwbProperties;
@@ -12,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,17 +64,57 @@ class UwbCalibrationServiceTest {
     private Clock clock;
     private UwbCalibrationService service;
 
+    /** 链路快照的可变桩：默认「UWB TCP 服务端已开」，只有链路判据那条测试会改它。 */
+    private List<LinkStatus> linkSnapshot;
+
     @BeforeEach
     void setUp() {
         ledger = mock(MapLedgerService.class);
         uwb = new ScdsUwbProperties();
         uwb.setCalibSampleFrames(TARGET_FRAMES);
         clock = Clock.fixed(Instant.parse("2026-10-27T08:00:00Z"), ZoneOffset.UTC);
-        service = new UwbCalibrationService(ledger, uwb, clock);
+        linkSnapshot = List.of(link(LinkKind.UWB_TCP_SERVER, LinkState.OPEN));
+        service = new UwbCalibrationService(ledger, uwb, clock, () -> linkSnapshot);
         when(ledger.uwbMeta(MAP_ID)).thenReturn(META);
     }
 
-    // ── start 的四条拒绝路径 ────────────────────────────────────────────────
+    private static LinkStatus link(LinkKind kind, LinkState state) {
+        return new LinkStatus(kind, state, null, null, null, null, 0L, 0L, 0L, null);
+    }
+
+    // ── start 的五条拒绝路径 ────────────────────────────────────────────────
+
+    @Test
+    void startRejectsWhenNoUwbLinkIsOpen() {
+        linkSnapshot = List.of(
+                link(LinkKind.SERIAL_VEST, LinkState.OPEN),
+                link(LinkKind.UWB_TCP_SERVER, LinkState.CLOSED),
+                link(LinkKind.UWB_SERIAL, LinkState.CLOSED));
+
+        assertThatThrownBy(() -> service.start(MAP_ID, TARGET_FRAMES, 3000.0d, null))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.code()).isEqualTo(ApiErrorCode.DEVICE_LINK_NOT_OPEN));
+    }
+
+    @Test
+    void openingLinkDoesNotCountAsOpenYet() {
+        // OPENING 期间接受标定会在链路就绪前丢掉开头若干帧，采样窗口前段就掺进「少帧」位移假象
+        linkSnapshot = List.of(link(LinkKind.UWB_TCP_SERVER, LinkState.OPENING));
+
+        assertThatThrownBy(() -> service.start(MAP_ID, TARGET_FRAMES, 3000.0d, null))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.code()).isEqualTo(ApiErrorCode.DEVICE_LINK_NOT_OPEN));
+    }
+
+    @Test
+    void uwbSerialLinkAlsoSatisfiesThePrecondition() {
+        linkSnapshot = List.of(
+                link(LinkKind.UWB_TCP_SERVER, LinkState.CLOSED),
+                link(LinkKind.UWB_SERIAL, LinkState.OPEN));
+
+        assertThat(service.start(MAP_ID, TARGET_FRAMES, 3000.0d, null).state())
+                .isEqualTo(UwbCalibrationService.State.RUNNING);
+    }
 
     @Test
     void startRejectsMapWithoutCalibratedGeometry() {

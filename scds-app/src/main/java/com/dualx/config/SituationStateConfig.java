@@ -2,6 +2,7 @@ package com.dualx.config;
 
 import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.map.UwbCalibrationService;
+import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.SituationPushPort;
 import com.dualx.core.repository.BaseMapRepository;
 import com.dualx.core.repository.ExerciseUnitRepository;
@@ -128,12 +129,20 @@ public class SituationStateConfig {
      * HTTP 三端点启动的那次标定，必须与写手线程逐帧喂进来的采样落在同一份会话表上，否则
      * {@code startUwbCalibration} 之后永远等不到里程碑。存活期与进程一致——设计 01 §4.1
      * 「标定上下文只在内存里」，重启即丢。
+     *
+     * <p><b>为什么链路快照是 {@link ObjectProvider} 而不是直接注入 {@link DeviceLinkAdmin}</b>：
+     * {@code deviceLinkAdmin} 依赖 {@code HardwareEventSink}（就是下面的
+     * {@link SituationStateService}），而它又依赖本服务——直接注入会是一个装配环。
+     * {@code ObjectProvider} 是延迟句柄，注入它不触发目标 bean 的创建，环在此断开；
+     * 真正取快照发生在 HTTP 请求期（{@code startUwbCalibration}），那时容器早已就绪。</p>
      */
     @Bean
     public UwbCalibrationService uwbCalibrationService(MapLedgerService mapLedger,
                                                        ScdsUwbProperties uwbProperties,
-                                                       Clock clock) {
-        return new UwbCalibrationService(mapLedger, uwbProperties, clock);
+                                                       Clock clock,
+                                                       ObjectProvider<DeviceLinkAdmin> linkAdmin) {
+        return new UwbCalibrationService(mapLedger, uwbProperties, clock,
+                () -> linkAdmin.getObject().snapshot());
     }
 
     /**
