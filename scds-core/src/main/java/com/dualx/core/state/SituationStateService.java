@@ -1,5 +1,6 @@
 package com.dualx.core.state;
 
+import com.dualx.core.domain.BaseMap;
 import com.dualx.core.domain.CoordinateSystem;
 import com.dualx.core.domain.GeoPoint;
 import com.dualx.core.domain.HitEvent;
@@ -52,7 +53,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p><b>已交付</b>：在线/离线判定（5000ms 窗口）、阵亡冻结与判活、命中落库与致死回填、每马甲命中/击杀
  * 计数、revision 单写（S3）；并把 S4/S5 的三个零件**接线**到状态变化点——轨迹采样
  * （{@link TrackSampler} + {@link TrackBatchWriter}）与增量环形窗口（{@link SituationRevisionLog}）。
- * 与 LIFE 的装载/停演编排属 S6；core 读侧查询属 S7。</p>
+ * 室内坐标由 41B UWB 帧经 {@link IndoorPositionResolver} 解算后写入，解算几何随本场底图装载
+ * （{@link #loadIndoorMap(com.dualx.core.domain.BaseMap)}）。与 LIFE 的装载/停演编排属 S6；
+ * core 读侧查询属 S7。</p>
  *
  * <p><b>下行推送</b>（设计 02 §4.1 第三条边）：每次单元变化（含命中/阵亡/判活）推一帧增量、开演与停演
  * 各推一帧全量，全部走 {@link SituationPushPort}；端口实现方负责非阻塞与吞异常（§4.7 约定 1），
@@ -66,9 +69,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p><b>本段明确不做的边界</b>（不得当成已实现）：</p>
  * <ul>
- *   <li>{@code ff06} 室内定位与 UWB 坐标解算未接入——求解需要地图域 {@code uwb_meta} 与
- *       {@link com.dualx.solver.algorithm.UwbSolver}，属后续分段；因此当前室内坐标不产生，
- *       UWB 帧只计数不改状态。</li>
+ *   <li>{@code ff06} 室内定位点仍未采用——室内坐标一律由 41B UWB 帧解算（{@link IndoorPositionResolver}），
+ *       而「{@code ff06} 在 UWB 生效时丢弃」这个开关属标定分段（协议 §1.4④），本段仍只记 DEBUG。</li>
  *   <li>GPS 只落协议自带的 WGS-84 值；BD-09（{@code GeoPoint.lng/lat}）的换算规则是
  *       {@code docs/requirements.md} 里未闭合的 Q-LEGACY-RULE，本段不臆造。</li>
  *   <li>{@code combatRole} 的编号区间划分未裁定（设计 06 §6），故 {@link UnitState#combatRole()}
@@ -94,6 +96,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private final SituationRevisionLog revisionLog;
     /** 态势下行端口（设计 02 §4.1 第三条边）：每次变化、开演、停演各推一帧。 */
     private final SituationPushPort push;
+    /** 室内解算（41B UWB 帧 → 整图百分比坐标）；几何随本场底图装载，见 {@link #loadIndoorMap(BaseMap)}。 */
+    private final IndoorPositionResolver indoor;
 
     /** 全部参演单元；结构性变更只在装载/停演时发生，值变更只在写手线程。 */
     private final Map<Integer, Unit> units = new ConcurrentHashMap<>();
@@ -106,8 +110,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
 
     /** 无演习进行中却到达的业务帧数（可观测：说明网关在上报，但没人开演）。 */
     private final AtomicLong framesWithoutExercise = new AtomicLong();
-    /** UWB 帧到达数（解算未接入，仅计数，见类注释）。 */
-    private final AtomicLong uwbFramesUnhandled = new AtomicLong();
+    /** 未能解出整图坐标的 UWB 帧数（UWB 未开、本场未装载底图几何，或该帧解算降级）。 */
+    private final AtomicLong uwbFramesWithoutFix = new AtomicLong();
     /** 不在编成内的马甲帧数（可观测：马甲未被编入却在上报）。 */
     private final AtomicLong framesFromUnknownVest = new AtomicLong();
 
@@ -133,19 +137,22 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
      */
     public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock,
                                 TrackSampler trackSampler, TrackBatchWriter trackWriter,
-                                SituationRevisionLog revisionLog) {
-        this(queue, hitEvents, clock, trackSampler, trackWriter, revisionLog, new NoopSituationPushPort());
+                                SituationRevisionLog revisionLog, IndoorPositionResolver indoor) {
+        this(queue, hitEvents, clock, trackSampler, trackWriter, revisionLog, indoor,
+                new NoopSituationPushPort());
     }
 
     public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock,
                                 TrackSampler trackSampler, TrackBatchWriter trackWriter,
-                                SituationRevisionLog revisionLog, SituationPushPort push) {
+                                SituationRevisionLog revisionLog, IndoorPositionResolver indoor,
+                                SituationPushPort push) {
         this.queue = Objects.requireNonNull(queue, "queue");
         this.hitEvents = Objects.requireNonNull(hitEvents, "hitEvents");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.trackSampler = Objects.requireNonNull(trackSampler, "trackSampler");
         this.trackWriter = Objects.requireNonNull(trackWriter, "trackWriter");
         this.revisionLog = Objects.requireNonNull(revisionLog, "revisionLog");
+        this.indoor = Objects.requireNonNull(indoor, "indoor");
         this.push = Objects.requireNonNull(push, "push");
     }
 
@@ -217,7 +224,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     public void dispatch(StateEvent event) {
         switch (event) {
             case StateEvent.Serial s -> onSerial(s.frame());
-            case StateEvent.Uwb u -> uwbFramesUnhandled.incrementAndGet();
+            case StateEvent.Uwb u -> applyUwb(u.frame());
             case StateEvent.LinkChanged c -> linkStates.put(c.kind(), c.state());
             case StateEvent.OfflineScan scan -> scanOffline(scan.at());
         }
@@ -228,8 +235,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
             case SerialFrame.Heartbeat hb -> heartbeat(hb, clock.instant());
             case SerialFrame.Hit hit -> recordHit(hit, clock.instant());
             case SerialFrame.Gps gps -> applyGps(gps);
-            case SerialFrame.IndoorLocation indoor -> log.debug(
-                    "ff06 室内定位帧未接入（缺地图域 uwb_meta / UwbSolver），vestNum={}", indoor.vestNum());
+            case SerialFrame.IndoorLocation location -> log.debug(
+                    "ff06 室内定位点未采用（室内坐标走 UWB 41B 解算帧），vestNum={}", location.vestNum());
             case SerialFrame.Mortar mortar -> log.debug("ff07 迫击炮帧不在 S3 范围，vestNum={}", mortar.vestNum());
             case SerialFrame.SimNo sim -> log.debug("ff0a SIM 帧不在 S3 范围，vestNum={}", sim.vestNum());
         }
@@ -297,6 +304,45 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
                 null, null,
                 gps.lng(), gps.lat());
         u.positionSource = PositionSource.GPS;
+        publish(u);
+    }
+
+    /**
+     * 室内定位：41B UWB 帧经 {@link IndoorPositionResolver} 解算成**整图**百分比坐标后写入。
+     *
+     * <p>解不出坐标（UWB 未开、本场未装载底图几何、或该帧降级）时<b>什么都不改</b>，只累加
+     * {@link #uwbFramesWithoutFix()}——与 GPS「帧到即写」不同：UWB 的坐标是解算产物，
+     * 解不出时把 {@code positionSource} 改成 {@code UWB} 会让客户端把上一帧的坐标当成新的可信值。</p>
+     *
+     * <p>{@code signalQuality} 记本帧实际用上的基站数（契约：0~8，&lt; 2 时坐标不可信）。</p>
+     */
+    private void applyUwb(UwbFrame frame) {
+        Unit u = units.get(frame.vestNum());
+        if (u == null) {
+            framesFromUnknownVest.incrementAndGet();
+            return;
+        }
+        if (u.status == VestStatus.DIE) {
+            // 阵亡冻结：坐标停在最后有效值（与 GPS 同口径，D15-⑦）。
+            return;
+        }
+        Optional<IndoorPositionResolver.Fix> resolved =
+                indoor.resolve(frame.vestNum(), frame.rangesMm(), clock.instant().toEpochMilli());
+        if (resolved.isEmpty()) {
+            uwbFramesWithoutFix.incrementAndGet();
+            return;
+        }
+        IndoorPositionResolver.Fix fix = resolved.get();
+        GeoPoint previous = u.position;
+        u.position = new GeoPoint(
+                CoordinateSystem.INDOOR,
+                fix.xPct(), fix.yPct(),
+                previous == null ? null : previous.floorNum(),
+                previous == null ? null : previous.posNum(),
+                null, null,
+                null, null);
+        u.positionSource = PositionSource.UWB;
+        u.signalQuality = fix.usedCount();
         publish(u);
     }
 
@@ -468,12 +514,17 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
      * <p><b>revision 只增不减</b>（设计 02 §4.4）：切换本身算一次变化，装载后 revision {@code +1}，
      * 本场单元一律 stamped 该切换点，并把增量窗口下界抬到切换点——早于切换点的 {@code sinceRevision}
      * 一律超窗 → 409 → 客户端改全量。进程重启从 0 重新起算（跨代恢复属 PUSH-MODEL）。</p>
+     *
+     * <p><b>先把室内解算几何清空</b>：本场的几何由紧随其后的
+     * {@link #loadIndoorMap(BaseMap)} 提供。留着上一场的底图会让新演习的 UWB 帧按旧场几何解算，
+     * 而那是**静默的错误坐标**——比解不出来更难发现。</p>
      */
     public synchronized void beginExercise(UUID newExerciseId, Instant now, List<RosterEntry> roster) {
         Objects.requireNonNull(newExerciseId, "exerciseId");
         if (newExerciseId.equals(exerciseId)) {
             return;
         }
+        indoor.clear();
         units.clear();
         hitsDealt.clear();
         kills.clear();
@@ -495,12 +546,39 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     }
 
     /**
+     * 装载本场底图的室内解算几何（{@code t_map} 的 {@code uwb_meta} 与图像像素尺寸）。
+     *
+     * <p>由 {@link SituationSessionBinder} 在 {@link #beginExercise} 之后调用；{@code map} 为
+     * {@code null} 表示本场没有底图（室外纯 GPS 或想定未绑图），等价于清空。停演由
+     * {@link #endExercise()} 统一清空，调用方不必再清。</p>
+     *
+     * @return 该图的 {@code uwb_meta} 与像素尺寸是否齐备；false 时 UWB 帧只计数不出坐标
+     */
+    public synchronized boolean loadIndoorMap(BaseMap map) {
+        if (map == null) {
+            indoor.clear();
+            log.info("本场无底图：室内解算几何已清空，UWB 帧只计数不出坐标");
+            return false;
+        }
+        boolean ready = indoor.load(map.id().toString(), map.uwbMeta(), map.imageWidth(), map.imageHeight());
+        if (ready) {
+            log.info("室内解算几何就绪：mapId={}，底图={}×{}", map.id(), map.imageWidth(), map.imageHeight());
+        } else {
+            log.warn("底图缺 UWB 标定参数或图片尺寸，室内解算不可用：mapId={}，底图={}×{}",
+                    map.id(), map.imageWidth(), map.imageHeight());
+        }
+        return ready;
+    }
+
+    /**
      * 停演收尾：返回全体单元的终局，供 S6 用 {@code ExerciseUnitRepository.freezeOutcome} 落库
      * （必须**先**写终局再 flush 轨迹，否则 {@code freezeAndClose} 读库会读到 0 阵亡），随后清空内存态。
      *
      * @return 终局列表；当前没有演习进行中时返回空列表
      */
     public synchronized List<UnitOutcome> endExercise() {
+        // 解算几何与内存态同生命周期：停演即失效，免得下一场开演前到达的 UWB 帧按本场几何解算。
+        indoor.clear();
         if (exerciseId == null) {
             return List.of();
         }
@@ -616,8 +694,9 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         return framesWithoutExercise.get();
     }
 
-    public long uwbFramesUnhandled() {
-        return uwbFramesUnhandled.get();
+    /** 未能解出整图坐标的 UWB 帧数（UWB 未开 / 本场无底图几何 / 该帧解算降级时的可观测计数）。 */
+    public long uwbFramesWithoutFix() {
+        return uwbFramesWithoutFix.get();
     }
 
     public long framesFromUnknownVest() {

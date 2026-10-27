@@ -1,10 +1,12 @@
 package com.dualx.config;
 
 import com.dualx.core.port.SituationPushPort;
+import com.dualx.core.repository.BaseMapRepository;
 import com.dualx.core.repository.ExerciseUnitRepository;
 import com.dualx.core.repository.HitEventRepository;
 import com.dualx.core.repository.PlanRosterRepository;
 import com.dualx.core.repository.TrackSampleRepository;
+import com.dualx.core.state.IndoorPositionResolver;
 import com.dualx.core.state.NoopSituationPushPort;
 import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
@@ -16,6 +18,7 @@ import com.dualx.core.state.StateEventQueue;
 import com.dualx.core.state.TrackBatchWriter;
 import com.dualx.core.state.TrackSampler;
 import com.dualx.protocol.ProtocolConstants;
+import com.dualx.solver.config.ScdsUwbProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -99,6 +102,26 @@ public class SituationStateConfig {
     }
 
     /**
+     * UWB 解算参数（{@code scds.uwb.*}）。{@link ScdsUwbProperties} 刻意不带 Spring 注解
+     * （{@code scds-solver} 零 Spring 依赖，见其模块说明），绑定前缀由装配层恢复。
+     */
+    @Bean
+    @ConfigurationProperties("scds.uwb")
+    public ScdsUwbProperties scdsUwbProperties() {
+        return new ScdsUwbProperties();
+    }
+
+    /**
+     * 室内解算器（41B UWB 帧 → 整图百分比坐标）。它是无状态配置 + 有状态滤波器，故必须是
+     * **单例**：每马甲的滤波先验就存在实例里，多份实例等于同一马甲有多套先验。
+     * 解算几何由开演时的 {@code SituationStateService.loadIndoorMap} 装载。
+     */
+    @Bean
+    public IndoorPositionResolver indoorPositionResolver(ScdsUwbProperties uwbProperties) {
+        return new IndoorPositionResolver(uwbProperties);
+    }
+
+    /**
      * 唯一的态势状态所有者，同时是唯一的 {@link com.dualx.core.port.HardwareEventSink} bean。
      *
      * <p>{@code initMethod="start"} 起唯一写手线程（守护线程）；{@code destroyMethod="close"} 在停机
@@ -117,9 +140,10 @@ public class SituationStateConfig {
                                                        TrackSampler trackSampler,
                                                        TrackBatchWriter trackBatchWriter,
                                                        SituationRevisionLog revisionLog,
+                                                       IndoorPositionResolver indoorPositionResolver,
                                                        ObjectProvider<SituationPushPort> push) {
         return new SituationStateService(queue, hitEvents, clock, trackSampler, trackBatchWriter, revisionLog,
-                push.getIfAvailable(NoopSituationPushPort::new));
+                indoorPositionResolver, push.getIfAvailable(NoopSituationPushPort::new));
     }
 
     /** 态势读侧门面：M4 的四个 Poll 端点与 WS 补齐都从这里取，不各自拼一遍。 */
@@ -143,8 +167,9 @@ public class SituationStateConfig {
     public SituationSessionBinder situationSessionBinder(SituationStateService state,
                                                          PlanRosterRepository planRoster,
                                                          ExerciseUnitRepository exerciseUnits,
+                                                         BaseMapRepository baseMaps,
                                                          Clock clock) {
-        return new SituationSessionBinder(state, planRoster, exerciseUnits, clock);
+        return new SituationSessionBinder(state, planRoster, exerciseUnits, baseMaps, clock);
     }
 
     /**

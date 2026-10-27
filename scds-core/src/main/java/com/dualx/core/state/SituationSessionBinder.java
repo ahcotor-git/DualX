@@ -2,6 +2,7 @@ package com.dualx.core.state;
 
 import com.dualx.core.domain.Exercise;
 import com.dualx.core.domain.RosterEntry;
+import com.dualx.core.repository.BaseMapRepository;
 import com.dualx.core.repository.ExerciseUnitRepository;
 import com.dualx.core.repository.PlanRosterRepository;
 import org.slf4j.Logger;
@@ -40,13 +41,16 @@ public final class SituationSessionBinder {
     private final SituationStateService state;
     private final PlanRosterRepository planRoster;
     private final ExerciseUnitRepository exerciseUnits;
+    private final BaseMapRepository baseMaps;
     private final Clock clock;
 
     public SituationSessionBinder(SituationStateService state, PlanRosterRepository planRoster,
-                                  ExerciseUnitRepository exerciseUnits, Clock clock) {
+                                  ExerciseUnitRepository exerciseUnits, BaseMapRepository baseMaps,
+                                  Clock clock) {
         this.state = Objects.requireNonNull(state, "state");
         this.planRoster = Objects.requireNonNull(planRoster, "planRoster");
         this.exerciseUnits = Objects.requireNonNull(exerciseUnits, "exerciseUnits");
+        this.baseMaps = Objects.requireNonNull(baseMaps, "baseMaps");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -64,8 +68,30 @@ public final class SituationSessionBinder {
         Objects.requireNonNull(exercise, "exercise");
         List<RosterEntry> roster = planRoster.findByPlanId(exercise.planId());
         state.beginExercise(exercise.id(), clock.instant(), roster);
+        loadIndoorGeometry(exercise);
         log.info("态势装载：exerciseId={}，想定={}，单元数={}", exercise.id(), exercise.planId(), roster.size());
         return roster.size();
+    }
+
+    /**
+     * 装载本场底图的室内解算几何（{@code beginExercise} 之后调用）。
+     *
+     * <p>{@code exercise.mapId} 为 null（室外纯 GPS）或底图行已删时显式传 null，让停在场内的
+     * 上一场几何被清掉——留着它会让新演习的 UWB 帧按旧图解算，产出**静默的错误坐标**
+     * （见 {@link SituationStateService#beginExercise}）。</p>
+     */
+    private void loadIndoorGeometry(Exercise exercise) {
+        UUID mapId = exercise.mapId();
+        if (mapId == null) {
+            state.loadIndoorMap(null);
+            return;
+        }
+        baseMaps.findById(mapId).ifPresentOrElse(
+                state::loadIndoorMap,
+                () -> {
+                    log.warn("本场底图不存在，室内解算不可用：exerciseId={}，mapId={}", exercise.id(), mapId);
+                    state.loadIndoorMap(null);
+                });
     }
 
     /**

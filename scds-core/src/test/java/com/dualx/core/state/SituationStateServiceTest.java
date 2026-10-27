@@ -1,9 +1,11 @@
 package com.dualx.core.state;
 
+import com.dualx.core.domain.BaseMap;
 import com.dualx.core.domain.CoordinateSystem;
 import com.dualx.core.domain.HitEvent;
 import com.dualx.core.domain.LinkKind;
 import com.dualx.core.domain.LinkState;
+import com.dualx.core.domain.MapType;
 import com.dualx.core.domain.MotionState;
 import com.dualx.core.domain.PollMode;
 import com.dualx.core.domain.PositionSource;
@@ -21,6 +23,8 @@ import com.dualx.protocol.Team;
 import com.dualx.protocol.VestStatus;
 import com.dualx.protocol.WeaponKind;
 import com.dualx.protocol.serial.SerialFrame;
+import com.dualx.protocol.uwb.UwbFrame;
+import com.dualx.solver.config.ScdsUwbProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -34,6 +38,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -55,6 +60,7 @@ class SituationStateServiceTest {
     private TrackSampler sampler;
     private TrackBatchWriter trackWriter;
     private SituationRevisionLog revisionLog;
+    private IndoorPositionResolver indoor;
     private SituationStateService state;
     /** 本场推送出去的全部信封（写侧是无条件推送的，改为记录以便逐帧断言）。 */
     private final List<SituationEnvelope> pushed = new ArrayList<>();
@@ -99,17 +105,23 @@ class SituationStateServiceTest {
         revisionLog = new SituationRevisionLog(16);
         pushed.clear();
         push = pushed::add;
+        ScdsUwbProperties uwb = new ScdsUwbProperties();
+        uwb.setMode(true);
+        indoor = new IndoorPositionResolver(uwb);
         state = newService();
         state.beginExercise(EXERCISE_ID, T0, List.of(
                 roster(1, "红军-01", Team.RED),
                 roster(2, "蓝军-01", Team.BLUE)));
+        // 解算几何随开演装载（真实流程是 binder 调 loadIndoorMap）；beginExercise 会先清空它，故在此之后装。
+        state.loadIndoorMap(indoorMap());
         revisionAfterLoad = state.revision();
         // 装载本身推的那一帧全量不属于被测行为，清掉基线，后续断言只看被测动作推了什么。
         pushed.clear();
     }
 
     private SituationStateService newService() {
-        return new SituationStateService(newQueue(), hitEvents, clock, sampler, trackWriter, revisionLog, push);
+        return new SituationStateService(newQueue(), hitEvents, clock, sampler, trackWriter, revisionLog,
+                indoor, push);
     }
 
     private static StateEventQueue newQueue() {
@@ -509,16 +521,72 @@ class SituationStateServiceTest {
     }
 
     @Test
-    void gpsStoresWgs84OnlyAndUwbFramesAreCountedNotSolved() {
+    void gpsStoresWgs84Only() {
         state.dispatch(new StateEvent.Serial(gps(2, 116.1, 39.1), SOURCE));
 
         assertThat(state.unit(2)).get().satisfies(u -> {
             assertThat(u.positionSource()).isEqualTo(PositionSource.GPS);
             assertThat(u.position().coordinateSystem()).isEqualTo(CoordinateSystem.OUTDOOR);
             assertThat(u.position().wgs84Lng()).isEqualTo(116.1);
+            assertThat(u.position().wgs84Lat()).isEqualTo(39.1);
             assertThat(u.position().lng())
                     .as("BD-09 换算规则未闭合（Q-LEGACY-RULE），本段不臆造").isNull();
         });
+    }
+
+    // ------------------------------------------------------------------ 室内定位（41B UWB 解算）
+
+    @Test
+    void uwbFrameIsSolvedIntoWholeImageIndoorCoordinate() {
+        state.dispatch(new StateEvent.Uwb(uwb(1, RANGES_AT_CENTRE), LinkKind.UWB_TCP_SERVER));
+
+        assertThat(state.unit(1)).get().satisfies(u -> {
+            assertThat(u.positionSource()).isEqualTo(PositionSource.UWB);
+            assertThat(u.position().coordinateSystem()).isEqualTo(CoordinateSystem.INDOOR);
+            // 解算态是 BS 外接框内的 0.5，写进态势的必须是整图百分比（少做一次映射会偏到图角）
+            assertThat(u.position().xPct()).isCloseTo(CENTRE_IMAGE_X, within(0.002));
+            assertThat(u.position().yPct()).isCloseTo(CENTRE_IMAGE_Y, within(0.002));
+            assertThat(u.position().wgs84Lng()).as("室内坐标不带 WGS-84").isNull();
+            assertThat(u.signalQuality())
+                    .as("signalQuality 记本帧实际用上的基站数（四站全用上）").isEqualTo(4);
+        });
+        assertThat(state.uwbFramesWithoutFix()).isZero();
+    }
+
+    @Test
+    void uwbFrameFromDeadUnitKeepsLastFix() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 0, 30, 30), SOURCE));
+        assertThat(state.unit(1)).get().extracting(UnitState::status).isEqualTo(VestStatus.DIE);
+
+        state.dispatch(new StateEvent.Uwb(uwb(1, RANGES_AT_CENTRE), LinkKind.UWB_TCP_SERVER));
+
+        assertThat(state.unit(1)).get().satisfies(u -> {
+            assertThat(u.position()).as("阵亡冻结后不再接受新坐标（D15-⑦）").isNull();
+            assertThat(u.positionSource()).isEqualTo(PositionSource.NONE);
+        });
+    }
+
+    @Test
+    void uwbFrameWithoutLoadedGeometryIsCountedNotSolved() {
+        // 本场无底图（室外纯 GPS 或想定未绑图）：帧照收，但不给坐标，只计数
+        state.loadIndoorMap(null);
+
+        state.dispatch(new StateEvent.Uwb(uwb(1, RANGES_AT_CENTRE), LinkKind.UWB_TCP_SERVER));
+
+        assertThat(state.unit(1)).get().satisfies(u -> {
+            assertThat(u.position()).isNull();
+            assertThat(u.positionSource()).isEqualTo(PositionSource.NONE);
+        });
+        assertThat(state.uwbFramesWithoutFix()).isEqualTo(1);
+    }
+
+    @Test
+    void uwbFrameFromUnknownVestIsNotSolved() {
+        state.dispatch(new StateEvent.Uwb(uwb(99, RANGES_AT_CENTRE), LinkKind.UWB_TCP_SERVER));
+
+        assertThat(state.unit(99)).isEmpty();
+        assertThat(state.framesFromUnknownVest()).isEqualTo(1);
+        assertThat(state.uwbFramesWithoutFix()).as("未知马甲不算「解不出坐标」").isZero();
     }
 
     @Test
@@ -532,6 +600,36 @@ class SituationStateServiceTest {
             java.util.UUID.fromString("11111111-2222-3333-4444-555555555555");
     private static final java.util.UUID OTHER_EXERCISE_ID =
             java.util.UUID.fromString("99999999-8888-7777-6666-555555555555");
+    private static final java.util.UUID MAP_ID =
+            java.util.UUID.fromString("12121212-3434-5656-7878-909090909090");
+
+    /**
+     * 2000×1600 像素、现场实测 30m×18m 的可解几何，与 {@code IndoorPositionResolverTest} 同一份。
+     *
+     * <p>编号照 {@code UwbSolver.Geometry} 的实际口径：{@code bs1→bs2} 为长度基准、{@code bs1→bs4}
+     * 为宽度基准，故四角按「左下 → 右下 → 右上 → 左上」。</p>
+     */
+    private static final String UWB_META = """
+            {"bs1":{"xPx":120,"yPx":1565},"bs2":{"xPx":1980,"yPx":1565},\
+            "bs3":{"xPx":1980,"yPx":240},"bs4":{"xPx":120,"yPx":240},\
+            "realLengthCm":3000,"realWidthCm":1800}""";
+
+    /** 物理矩形正中心：四角等距 √306 m ≈ 17.493 m。 */
+    private static final int[] RANGES_AT_CENTRE = {17493, 17493, 17493, 17493, 0, 0, 0, 0};
+
+    /** 整图 2000×1600 上，物理中心对应 (1050/2000, 902.5/1600)。 */
+    private static final double CENTRE_IMAGE_X = 0.525;
+    private static final double CENTRE_IMAGE_Y = 0.5640625;
+
+    private static BaseMap indoorMap() {
+        Instant epoch = Instant.parse("2026-01-01T00:00:00Z");
+        return new BaseMap(MAP_ID, "本场底图", MapType.INDOOR, "maps/test.png", 2000, 1600,
+                null, UWB_META, epoch, epoch);
+    }
+
+    private static UwbFrame uwb(int vestNum, int[] rangesMm) {
+        return new UwbFrame(0, vestNum, rangesMm, new byte[] {(byte) vestNum});
+    }
 
     /** 停演收尾 flush 后，累计落库的全部轨迹采样点（按批次顺序拼接）。 */
     @SuppressWarnings("unchecked")

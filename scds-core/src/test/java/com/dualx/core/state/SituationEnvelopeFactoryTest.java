@@ -16,6 +16,7 @@ import com.dualx.protocol.Team;
 import com.dualx.protocol.VestStatus;
 import com.dualx.protocol.WeaponKind;
 import com.dualx.protocol.serial.SerialFrame;
+import com.dualx.solver.config.ScdsUwbProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -97,7 +98,8 @@ class SituationEnvelopeFactoryTest {
                 hitEvents, clock,
                 new TrackSampler(1000, 0.05, 100),
                 new TrackBatchWriter(trackSamples, 500, 1_000_000, 1000, () -> 0),
-                revisionLog);
+                revisionLog,
+                new IndoorPositionResolver(new ScdsUwbProperties()));
     }
 
     // ------------------------------------------------------------------ 全量帧

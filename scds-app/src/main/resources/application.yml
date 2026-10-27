@@ -137,13 +137,15 @@ scds:
 
   # ===== 协议 B：UWB =====
   uwb:
+    # UWB 解算开关：关闭时 IndoorPositionResolver 不产出任何室内坐标（UWB 帧只计数）。
+    mode: true
     data-source: TCP_SERVER          # SERIAL | TCP_SERVER
     tcp-server-host: 0.0.0.0
     tcp-server-port: 12001
     tcp-read-timeout-ms: 20000
     tcp-idle-warn-min: 3
-    # UWB 连续坐标生效后，旧的 ff06 室内点位帧必须被丢弃
-    uwb-mode: enabled
+    # 注：UWB 连续坐标生效后，旧的 ff06 室内点位帧必须被丢弃（协议 §1.4④）；
+    # 该丢弃开关属标定分段，尚未接线，当前 ff06 只记 DEBUG。
 
   # ===== 硬件链路网关（设计 05 §4.6，D10 口径）=====
   # simulator 仅供开发与自动测试（进程内注入帧、不占串口、不监听 12001）；
