@@ -21,6 +21,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,8 +36,9 @@ import static org.mockito.Mockito.when;
  * 链路 WS 会话表的行为（设计 [02](../../../../../docs/design/02-push-ports.md) §4.6、§4.7、§4.8）。
  *
  * <p>纯单测：会话用 Mockito 替身，时钟用可控毫秒来源，不启 Spring、不占端口。这里证明的正是
- * 「只有装配起来才看得见」的四件事：<b>首帧是数组根类型的完整快照</b>（与 HTTP {@code getLinks}
- * 同构，判据 1 的链路侧）、每次变化推整份快照、队满丢帧并计数、空闲会被注销。</p>
+ * 「只有装配起来才看得见」的几件事：<b>首帧是数组根类型的完整快照</b>（与 HTTP {@code getLinks}
+ * 同构，判据 1 的链路侧）、每次变化推整份快照、队满丢帧并计数、空闲会被注销，以及
+ * <b>一个读不动的会话不阻塞投递方、也不拖住其他会话</b>（判据 7）。</p>
  *
  * <p>与 {@link SituationSessionRegistryTest} 的刻意差异：链路没有 revision 维度，因此这里
  * 断言的是「帧体是长度恒为 {@link LinkKind#values()} 的数组」而<b>不是</b> revision 单调。
@@ -97,6 +99,15 @@ class LinkSessionRegistryTest {
             return objectMapper.readTree(sent.get(index));
         } catch (Exception e) {
             throw new IllegalStateException("帧体不是合法 JSON：" + sent.get(index), e);
+        }
+    }
+
+    /** 从帧体里取首个链路的 {@code framesTotal}（用来确认第二帧带的是新值）。 */
+    private long framesTotalOf(String payload) {
+        try {
+            return objectMapper.readTree(payload).get(0).path("framesTotal").asLong();
+        } catch (Exception e) {
+            throw new IllegalStateException("帧体不是合法 JSON：" + payload, e);
         }
     }
 
@@ -166,6 +177,53 @@ class LinkSessionRegistryTest {
 
         awaitUntil(() -> sent.size() == 2);
         assertThat(sent.get(1)).isEqualTo("{\"action\":\"PONG\"}");
+    }
+
+    @Test
+    @DisplayName("判据 7（链路侧同构）：某个会话的发送永久阻塞时 broadcast 立即返回，其他会话照常收到整份快照")
+    void broadcastIsNonBlockingAndIsolatesASlowSession() throws Exception {
+        // 慢会话：sendMessage 永不自行返回，只有注销时的 interrupt 能让发送线程退出。
+        WebSocketSession slow = mock(WebSocketSession.class);
+        when(slow.getId()).thenReturn("slow");
+        when(slow.isOpen()).thenReturn(true);
+        AtomicReference<Thread> slowSender = new AtomicReference<>();
+        doAnswer(invocation -> {
+            slowSender.set(Thread.currentThread());
+            while (true) {
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            }
+        }).when(slow).sendMessage(any(TextMessage.class));
+
+        List<String> fastSent = Collections.synchronizedList(new ArrayList<>());
+        WebSocketSession fast = mock(WebSocketSession.class);
+        when(fast.getId()).thenReturn("fast");
+        when(fast.isOpen()).thenReturn(true);
+        doAnswer(invocation -> {
+            fastSent.add(((TextMessage) invocation.getArgument(0)).getPayload());
+            return null;
+        }).when(fast).sendMessage(any(TextMessage.class));
+
+        LinkSessionRegistry registry = registry(8, 30_000);
+        registry.register(slow);
+        registry.register(fast);
+        awaitUntil(() -> slowSender.get() != null);
+        awaitUntil(() -> fastSent.size() == 1);
+
+        long startedAt = System.nanoTime();
+        registry.broadcast(snapshot(42));
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
+
+        assertThat(elapsedMs).as("投递只做 offer：慢客户端不得把链路状态迁移路径拖住").isLessThan(500);
+        awaitUntil(() -> fastSent.size() == 2);
+        assertThat(framesTotalOf(fastSent.get(1))).as("快会话不受慢会话影响，且拿到的是新整份快照").isEqualTo(42L);
+
+        registry.close();
+        awaitUntil(() -> !slowSender.get().isAlive());
     }
 
     @Test

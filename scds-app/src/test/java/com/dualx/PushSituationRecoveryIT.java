@@ -39,16 +39,20 @@ import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 态势推送在<b>换场与补齐</b>两条路径上的端到端验收，即设计
- * [02-push-ports](../../docs/design/02-push-ports.md) §7 的<b>判据 6</b>（演习切换）与<b>判据 2</b>（补齐正确）。
+ * 态势推送在<b>换场、补齐与订阅衔接</b>三条路径上的端到端验收，即设计
+ * [02-push-ports](../../docs/design/02-push-ports.md) §7 的<b>判据 6</b>（演习切换）、<b>判据 2</b>
+ * （补齐正确）与<b>判据 8</b>（订阅无缝衔接）。
  *
- * <p><b>为什么单独一类</b>：这两条判据都要真开一场演习才有意义，而那意味着往库里写想定、编成与场次。
+ * <p><b>为什么单独一类</b>：这三条判据都要真开一场演习才有意义，而那意味着往库里写想定、编成与场次。
  * {@code PushIsomorphismIT} 的定位是「不落库、只比形状」，把生命周期夹具塞进去会同时破坏它的注释与
  * 清理策略，故另立本类，自带按 id 精确回收。</p>
  *
@@ -199,7 +203,103 @@ class PushSituationRecoveryIT {
         }
     }
 
+    @Test
+    @DisplayName("订阅无缝衔接（判据 8）：变化流中订阅——新客户端首帧仍是全量；从 Poll 的 revision 续订则逐帧续上，不跳号也不被全量插队")
+    void subscribingWhileChangesStreamKeepsContinuityAndCatchesUp() throws Exception {
+        stopIfRunning();
+        startExercise();
+
+        AtomicBoolean injecting = new AtomicBoolean(true);
+        AtomicReference<Throwable> injectorFailure = new AtomicReference<>();
+        Thread injector = Thread.ofVirtual().name("situation-injector").start(() -> {
+            while (injecting.get()) {
+                try {
+                    // 反复注入同一帧 GPS：只有阵亡才冻结坐标，故每次注入都过一次 publish()、稳定 +1，
+                    // 不必靠「值恰好不同」这种偶发条件来制造变化。
+                    links.injectSerial(GPS_VEST2);
+                } catch (RuntimeException e) {
+                    injectorFailure.set(e);
+                    return;
+                }
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        });
+
+        try {
+            // 阶段一（新客户端上线的路径）：不带 sinceRevision 订阅。首帧必须仍是全量——
+            // 增量绝不能被排在它之前，否则客户端会拿一条「相对未知基线」的增量去对齐本地空表。
+            FrameCollector collector = new FrameCollector(app.mapper);
+            try (Ws ignored = Ws.open(app.wsUrl("/ws/v1/situation"), app.admin, collector)) {
+                JsonNode first = collector.awaitFrame(PushSituationRecoveryIT::isEnvelope, Duration.ofSeconds(5));
+                assertThat(first.path("full").asBoolean())
+                        .as("订阅期间有变化在跑，首帧仍必须是全量")
+                        .isTrue();
+                awaitContiguousDeltas(collector, first.path("revision").asLong(), 12);
+            }
+
+            // 阶段二（判据 8 的原文场景）：先 Poll 拿到 revision R，再携 R 订阅——「订阅」这一动作
+            // 本身就有缝隙，缝隙里的变化必须由补齐帧原样续上，而不许整帧跳过。
+            long polled = app.situationEnvelope().path("revision").asLong();
+            FrameCollector joining = new FrameCollector(app.mapper);
+            try (Ws ignored = Ws.open(
+                    app.wsUrl("/ws/v1/situation?sinceRevision=" + polled), app.admin, joining)) {
+                JsonNode first = joining.awaitFrame(PushSituationRecoveryIT::isEnvelope, Duration.ofSeconds(5));
+                assertThat(first.path("full").asBoolean())
+                        .as("携合法 sinceRevision 续订不该退化成一帧全量")
+                        .isFalse();
+                assertThat(first.path("revision").asLong())
+                        .as("续订的第一帧只能是 R（缝隙内尚无新变化）或 R+1（第一件新变化）——再大就是把变化跳过去了")
+                        .isBetween(polled, polled + 1);
+                awaitContiguousDeltas(joining, first.path("revision").asLong(), 12);
+
+                // 阶段三：停注入后，仍在线的这条连接必须把剩下的增量收完，不停在旧 revision 上（判据 8 的「不漏」）。
+                injecting.set(false);
+                await("停注入后客户端追平服务端 revision",
+                        () -> query.revision() == joining.maxRevision());
+            }
+        } finally {
+            injecting.set(false);
+            injector.join(TimeUnit.SECONDS.toMillis(5));
+            stopExercise();
+        }
+        assertThat(injectorFailure.get()).as("注入线程不该失败").isNull();
+    }
+
     // ── 夹具 ────────────────────────────────────────────────────────────────
+
+    /**
+     * 按顺序收 {@code count} 帧增量，逐帧断言 revision 恰好 {@code +1}——跳号即漏事件。
+     *
+     * <p>遇到全量帧则重置基线而不判失败：那是发送线程的连续性检查发现跳号后的收敛出口
+     * （先改推全量、客户端凭它的 revision 对齐，设计 02 §4.5/§4.7），本身就是契约认可的一条路。</p>
+     *
+     * @return 收满后客户端手里应持有的 revision
+     */
+    private static long awaitContiguousDeltas(FrameCollector collector, long held, int count) throws Exception {
+        int deltas = 0;
+        while (deltas < count) {
+            JsonNode frame = collector.awaitFrame(PushSituationRecoveryIT::isEnvelope, Duration.ofSeconds(5));
+            long revision = frame.path("revision").asLong();
+            if (frame.path("full").asBoolean()) {
+                held = revision;
+                continue;
+            }
+            assertThat(revision).as("增量帧必须恰好 +1：跳号即漏事件").isEqualTo(held + 1);
+            held = revision;
+            deltas++;
+        }
+        return held;
+    }
+
+    /** 是不是态势信封（控制帧如 PONG 没有 revision；本类不主动 PING，但判据断言不该依赖这点）。 */
+    private static boolean isEnvelope(JsonNode node) {
+        return node.has("revision");
+    }
 
     /** 走真 HTTP 开演（真 LIFE → 真 binder → 真状态机），而不是直接调 binder。 */
     private static String startExercise() throws Exception {
@@ -267,6 +367,12 @@ class PushSituationRecoveryIT {
         private final BlockingQueue<String> frames = new LinkedBlockingQueue<>();
         private final ObjectMapper mapper;
 
+        /**
+         * 收过的最大 revision。单独记一份是为了让判据 8 的「追平」断言不依赖 {@code awaitFrame}
+         * 的消费顺序——被消费掉的帧不该从结论里消失。
+         */
+        private final AtomicLong maxRevision = new AtomicLong(Long.MIN_VALUE);
+
         FrameCollector(ObjectMapper mapper) {
             this.mapper = mapper;
         }
@@ -274,6 +380,18 @@ class PushSituationRecoveryIT {
         @Override
         protected void handleTextMessage(WebSocketSession session, TextMessage message) {
             frames.add(message.getPayload());
+            try {
+                JsonNode node = mapper.readTree(message.getPayload());
+                if (node.has("revision")) {
+                    maxRevision.accumulateAndGet(node.path("revision").asLong(), Math::max);
+                }
+            } catch (Exception e) {
+                // 解析失败不必在这里报：等待方会用自己的解析给出更清晰的失败信息。
+            }
+        }
+
+        long maxRevision() {
+            return maxRevision.get();
         }
 
         JsonNode awaitFrame(Predicate<JsonNode> accept, Duration timeout) throws Exception {

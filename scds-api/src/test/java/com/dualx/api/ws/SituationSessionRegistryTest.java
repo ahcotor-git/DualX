@@ -20,6 +20,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,7 +34,9 @@ import static org.mockito.Mockito.when;
  * 态势 WS 会话表的行为（设计 [02](../../../../../docs/design/02-push-ports.md) §4.7、§4.8）。
  *
  * <p>纯单测：会话用 Mockito 替身，时钟用可控毫秒来源，不启 Spring、不占端口。这里证明的正是
- * 「只有装配起来才看得见」的三件事：首帧先于增量、队满丢帧后自动收敛为全量、空闲会被注销。</p>
+ * 「只有装配起来才看得见」的几件事：首帧先于增量、队满丢帧后自动收敛为全量、空闲会被注销，
+ * 以及背压侧的两条——<b>一个读不动的会话不阻塞投递方、也不拖住其他会话</b>（判据 7），
+ * 和<b>注销后 per-session 发送线程确实退出</b>（不泄漏）。</p>
  */
 class SituationSessionRegistryTest {
 
@@ -48,11 +51,15 @@ class SituationSessionRegistryTest {
 
     private final AtomicLong nowMs = new AtomicLong(1_000_000L);
 
+    /** 最近一次 {@code sendMessage} 的执行线程，即该会话的发送线程（用于断言线程确实起来/退出）。 */
+    private final AtomicReference<Thread> lastSender = new AtomicReference<>();
+
     private WebSocketSession ws;
 
     @BeforeEach
     void setUp() {
         sent.clear();
+        lastSender.set(null);
         nowMs.set(1_000_000L);
         ws = mock(WebSocketSession.class);
         when(ws.getId()).thenReturn("s1");
@@ -68,12 +75,25 @@ class SituationSessionRegistryTest {
         // sendMessage 返回 void，只能用 doAnswer(...).when(...) 的形态打桩。
         AtomicInteger calls = new AtomicInteger();
         doAnswer(invocation -> {
+            lastSender.set(Thread.currentThread());
             if (blockFirstSend != null && calls.incrementAndGet() == 1) {
                 blockFirstSend.await(5, TimeUnit.SECONDS);
             }
             sent.add(((TextMessage) invocation.getArgument(0)).getPayload());
             return null;
         }).when(ws).sendMessage(any(TextMessage.class));
+    }
+
+    /** 造一个把帧体记进 {@code sink} 的替身会话（多会话用例需要把两个会话的帧分开看）。 */
+    private static WebSocketSession recordingSession(String id, List<String> sink) throws Exception {
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getId()).thenReturn(id);
+        when(session.isOpen()).thenReturn(true);
+        doAnswer(invocation -> {
+            sink.add(((TextMessage) invocation.getArgument(0)).getPayload());
+            return null;
+        }).when(session).sendMessage(any(TextMessage.class));
+        return session;
     }
 
     private List<Long> sentRevisions() {
@@ -194,6 +214,65 @@ class SituationSessionRegistryTest {
         registry.close();
         assertThat(registry.activeSessionCount()).isZero();
         assertThat(registry.droppedFrameCount()).as("已注销的会话不该再被计入丢帧").isZero();
+    }
+
+    @Test
+    @DisplayName("判据 7：某个会话的发送永久阻塞时 broadcast 立即返回，其他会话照常收到（推送不在调用线程上等 I/O）")
+    void broadcastIsNonBlockingAndIsolatesASlowSession() throws Exception {
+        // 慢会话：sendMessage 永不自行返回，只有注销时的 interrupt 能让发送线程退出（等价于读不动的客户端）。
+        WebSocketSession slow = mock(WebSocketSession.class);
+        when(slow.getId()).thenReturn("slow");
+        when(slow.isOpen()).thenReturn(true);
+        AtomicReference<Thread> slowSender = new AtomicReference<>();
+        doAnswer(invocation -> {
+            slowSender.set(Thread.currentThread());
+            while (true) {
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            }
+        }).when(slow).sendMessage(any(TextMessage.class));
+
+        List<String> fastSent = Collections.synchronizedList(new ArrayList<>());
+        WebSocketSession fast = recordingSession("fast", fastSent);
+
+        SituationSessionRegistry registry = registry(8, 30_000);
+        registry.register(slow, List.of(full(1)));
+        registry.register(fast, List.of(full(1)));
+        awaitUntil(() -> slowSender.get() != null);
+        awaitUntil(() -> fastSent.size() == 1);
+
+        long startedAt = System.nanoTime();
+        registry.broadcast(delta(2));
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
+
+        assertThat(elapsedMs).as("投递只做 offer：慢客户端不得把调用方（core 事件线程）拖住").isLessThan(500);
+        awaitUntil(() -> fastSent.size() == 2);
+        assertThat(revisionOf(fastSent.get(1))).as("快会话不受慢会话影响").isEqualTo(2L);
+
+        registry.close();
+        awaitUntil(() -> !slowSender.get().isAlive());
+    }
+
+    @Test
+    @DisplayName("注销后发送线程退出：per-session 虚拟线程不泄漏")
+    void senderThreadExitsAfterUnregister() throws Exception {
+        recordSends(null);
+        SituationSessionRegistry registry = registry(8, 30_000);
+        registry.register(ws, List.of(full(1)));
+        awaitUntil(() -> sent.size() == 1);
+
+        Thread sender = lastSender.get();
+        assertThat(sender).as("发送线程已起来").isNotNull();
+        assertThat(sender.isAlive()).isTrue();
+
+        registry.unregister("s1");
+
+        awaitUntil(() -> !sender.isAlive());
+        assertThat(sender.isAlive()).as("注销即中断发送线程，线程必须退出").isFalse();
     }
 
     private void verifyClose(int code) throws java.io.IOException {
