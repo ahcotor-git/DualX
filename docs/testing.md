@@ -7,6 +7,7 @@
 > ERR-01见第9节；TEST-01数据库隔离及521项最新全量结果见第10节。
 > M2 LEDGER台账/基站/绑定与681项最新全量结果见第12节。
 > M4 DEVICE-SELF单兵自身视角与1020项最新全量结果见第13节（第2节RT-SID行已被第13节取代）。
+> M4 T-STOP停机与立即重启及1021项最新全量结果见第14节（第3节T-STOP行已被第14节取代）。
 
 ## 1. 本次自动化结果
 
@@ -91,7 +92,7 @@ signing=true与false均成功，健康探测200，验证结束停止了本次启
 | T-HARDWARE | 链路 | 分片、重连、串口独占、配置绑定、12001启停、互斥、坏帧统计 | gateway为空 |
 | T-PUSH | 同构恢复 | 固定屏障首帧、订阅间隙、window超窗、跨代epoch、RESYNC、PING | 部分实现：单测覆盖首帧全量/逐帧补齐/RESYNC超窗/PING保活/注销（态势 `SituationWebSocketHandlerTest`、`SituationSessionRegistryTest`；链路 `LinkWebSocketHandlerTest`、`LinkSessionRegistryTest`），端到端已过判据1两端同构与判据3超窗（携「当前 revision − 窗口 − 1」握手 → close 4000 → 改全量重连，`PushIsomorphismIT`），判据2补齐逐帧（携「当前 revision − 3」握手 → 三帧 full=false、revision 连续无跳号）与判据6演习切换（正常停演一支：真 HTTP 开停演 → 下一帧 full=true 且 running/units 随之反转，`PushSituationRecoveryIT`；进程被杀一支：关掉第一代上下文而**不停演、不清库** → 第二代启动自愈按 `CRASH_RECOVERED` 补写收尾 → 客户端下一帧 full=true/running=false/units 空且与 Poll 同构，且僵尸不再占住唯一索引、新演习照样能开、同代内 revision 只增不减，`PushCrashRecoveryIT`），判据8订阅间隙（变化持续注入时订阅 → 首帧仍为 full=true；携 Poll 读到的 revision 续订 → 首帧只能是 R 或 R+1、其后增量逐帧 +1，停注入后追平服务端 revision，`PushSituationRecoveryIT`），判据9跨代恢复（同一 JVM 内先后起两个完整上下文＝两枚 epoch：新进程 revision 长过旧代 N 后携旧 N 重连，帧自报新代 epoch 并按新代序号补齐、证明数值无法辨别换代；客户端据此丢弃缓存改不带 sinceRevision 重连，取到与 Poll 同构的新代权威全量，`PushCrossProcessRecoveryIT`） |
 | T-BACKPRESSURE | 背压 | 慢客户端独立、满队列、全量后不回退、线程退出、30s无上行关闭 | 部分实现：队满丢帧不阻塞调用方、全量替代不回退、空闲超时关闭、注销后不投递、慢会话不阻塞投递已由两侧会话表单测覆盖（态势 `SituationSessionRegistryTest`、链路 `LinkSessionRegistryTest`）；线程退出（注销后发送线程退出）已由态势会话表单测覆盖；30s无上行关闭已端到端（覆写 `scds.push.idle-timeout-ms=1500ms` 证关闭码 1000/`IDLE_TIMEOUT`、会话注销、活跃数回落，并以持续 PING 收到 PONG 且不被断开证明判的是「距上次上行」，`PushKeepAliveIT`）；真填满 TCP 缓冲的慢客户端隔离已端到端（判据 4：裸 socket 走真 WS 握手、读掉连接首帧后停止读取，直至其 TCP 缓冲与队列表被填满而全局丢帧计数 > 0；同期健康会话的帧流全程 revision 零跳号、订阅后再无 `full=true`——以帧流等价取证「其余会话的计数为 0」；慢客户端恢复读取后先吐陈旧前缀、再被收敛为一帧 `full=true`，其后逐帧续上零缺口，`PushBackpressureIT`） |
-| T-STOP | 生命周期 | HTTP/WS/串口/TCP/DB队列完整关闭并立即重启 | 只人工启动/停止基础HTTP |
+| T-STOP | 生命周期 | HTTP/WS/串口/TCP/DB队列完整关闭并立即重启 | 已端到端（`ShutdownRestartIT`）：一次 `ConfigurableApplicationContext.close()` 后 WS 会话被服务端直接断开（按设计 02 §4.8 不广播关帧）、HTTP 端口不再被服务、硬约束 12001 交还、`scds-state-writer`/`uwb-boss`/`uwb-worker` 平台线程消失、Hikari 池关闭；随后同一 JVM 立即重启能在 12001 上重新开链。停机未释放链路的生产缺口（装配层补 `LinkShutdown`）即由本用例取证，见第14节 |
 | T-FILE | 文件 | 路径穿越、大小类型限制、下载授权、过期清理、断电恢复 | 未实现 |
 | T-CLIENT | Flutter | Android模拟器/真机与Windows、持续Poll、WS半开、重登、复盘 | 无工程 |
 | T-PROD | 部署 | TLS、独立密钥、offline、远端JWKS策略、迁移、备份恢复、单实例 | 未执行 |
@@ -654,4 +655,66 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 现存 Flyway MySQL 8.4 支持警告与 Mockito 动态 agent 提示未修改，与本段无关。
 `getVestLink` 仍为 501（`lastFrameType`/`framesTotal`/`droppedTotal` 在 `UnitState` 无数据源，单列任务）。
 `docs/api/openapi.yaml` 中 `deviceToken` 的注释已从「自身 + 所属队伍」更正为「仅自身」（与 D04 对齐）。
+本段为**代码验收**，不是生产发布批准。
+
+## 14. M4 T-STOP 停机与立即重启
+
+2026-10-27 按 T-STOP 工作包实施（`docs/requirements.md` 的 `INV-STOP`、设计 02 §4.8、设计 05 §4.2）。
+采「负例先行」：先写端到端用例实测取证，据结果再决定是否补生产代码。本节记录本段证据；
+第 3 节矩阵的 T-STOP 行是历史，被本节取代。
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动（链路句柄的 `close()` 本就齐备，缺的是调用方） |
+| core | 504 | 0/0/0 | 未改动 |
+| api | 135 | 0/0/0 | 未改动 |
+| app | 314 | 0/0/0 | 含新增 `ShutdownRestartIT` 1 |
+| solver/domain | 0 | 无测试 | 构建成功，不证明算法数值或状态业务 |
+| 总计 | **1021** | **0/0/0** | 全 reactor SUCCESS |
+
+### 14.1 实测暴露的生产缺口（本段修复）
+
+**现象**：只调一次 `ConfigurableApplicationContext.close()`，`scds.gateway.mode=real` 下 12001
+仍被本进程占用，直到 JVM 退出才交还——即 `server.shutdown=graceful` 承诺的「串口链路在退出前
+释放」实际没有发生（`application.yml` 第 15-16 行写明强杀会让下一次启动抢不到 COM 口）。
+
+**根因**：三种链路句柄各自的 `close()` 早已实现（设计 05 §4.2 要求句柄自持 Netty / 读线程并能
+在关闭时中断它们），但 `com.dualx.core.port.DeviceLinkAdmin` 上并没有「把三条一起关掉」的方法，
+于是「谁在停机时调用 `close`」一直没有归属——`RealDeviceLinkAdmin` / `SimulatedLinkAdapter`
+都不是 Spring bean，`scds-gateway` 又刻意零 Spring 依赖，`@PreDestroy` 无处可写。
+
+**修复**：在装配层 `com.dualx.config.GatewayConfig` 补一个 `LinkShutdown implements DisposableBean`
+的 bean，`destroy()` 里对 `DeviceLinkAdmin` 依次调 `closeSerial` / `closeUwbTcpServer` / `closeUwbSerial`。
+只依赖端口方法，因此真链路与仿真共用同一份释放逻辑；三条链路各自兜 `RuntimeException`，
+一条失败不影响其余两条被释放。依赖顺序保证它先于 `deviceLinkAdmin`、`linkRegistry` 被销毁。
+
+### 14.2 用例判据（`ShutdownRestartIT`，app，1）
+
+`shutdownReleasesEverythingAndImmediateRestartBindsSameHardPort`——完整生产入口 + 真实 MySQL +
+真实安全链，`scds.gateway.mode` 不覆盖（走 `application.yml` 的 `real` 默认值）：
+
+- 停机**前**先自证基线成立：装配的是 `RealDeviceLinkAdmin`、开 UWB TCP 后 12001 真被本进程占用、
+  链路状态 WS 已收到首帧且 `closed == false`（客户端不主动关，否则「已断开」不能归因于停机）、
+  `uwb-boss` 与 `scds-state-writer` 线程在位、HTTP 端口在服务。
+- 停机**后**逐项断言资源已还：WS 会话被服务端直接断开（设计 02 §4.8 裁定停机不广播关帧）；
+  12001 可再绑定；HTTP 端口 `connect` 被拒；`scds-state-writer`、`uwb-boss`、`uwb-worker`
+  平台线程全部消失；Hikari 池 `isClosed()`。断言前用 10s 轮询等待，因为停机是异步收尾。
+- **立即重启**：同一 JVM 内再起一个完整上下文 → `/actuator/health` 200，且能在硬约束 12001 上
+  重新开链并回 `state=OPEN`。
+
+**为什么必须用真机端口而非端口 0**：端口 0 每次分配新号，第二次绑定成功什么也证明不了。
+12001 是硬约束里唯一的固定监听口，故以它为准；被占用时按 `HwLinkHttpIT` 的先例以
+`Assumptions.assumeTrue` 跳过，而不是换端口重试（「换个端口也能跑」正是硬约束要禁掉的行为）。
+同理，**线程判据不可省**：Netty 事件循环与态势写手都是守护线程，端口没放掉 JVM 照样能退出，
+「停机没报错」不等于「资源已还」——端口是现象，线程是根因。
+
+### 14.3 边界
+
+本段只覆盖**优雅停机**这一条路径（`context.close()`）。现场强杀 / 断电不在本段，属 T-RECOVERY。
+WS 判据的口径是「会话被服务端断开」，不是「收到关闭帧」——后者与设计 02 §4.8 的裁定相反。
+`getVestLink` 与 COMMAND / CALIBRATION 仍未落地，与本段无关。
 本段为**代码验收**，不是生产发布批准。
