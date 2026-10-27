@@ -10,10 +10,13 @@ import com.dualx.core.domain.MotionState;
 import com.dualx.core.domain.PositionSource;
 import com.dualx.core.domain.SampleReason;
 import com.dualx.core.domain.TrackSample;
+import com.dualx.core.domain.BaseMap;
 import com.dualx.core.domain.BattleMode;
+import com.dualx.core.domain.MapType;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.HardwareEventSink;
 import com.dualx.core.push.UnitState;
+import com.dualx.core.repository.BaseMapRepository;
 import com.dualx.core.repository.ExerciseUnitRepository;
 import com.dualx.core.repository.HitEventRepository;
 import com.dualx.core.repository.TrackSampleRepository;
@@ -22,11 +25,14 @@ import com.dualx.core.state.SituationSessionBinder;
 import com.dualx.core.state.SituationStateService;
 import com.dualx.core.support.UuidV7;
 import com.dualx.gateway.sim.SimulatedLinkAdapter;
+import com.dualx.protocol.Hex;
 import com.dualx.protocol.HitPart;
+import com.dualx.protocol.ProtocolConstants;
 import com.dualx.protocol.Team;
 import com.dualx.protocol.VestStatus;
 import com.dualx.protocol.serial.SerialFrame;
 import com.dualx.protocol.serial.SerialFramer;
+import com.dualx.protocol.uwb.UwbFrame;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -47,6 +53,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * 态势状态机（STATE，设计 [06-state](../../../../docs/design/06-state.md) §5 S8）的端到端验收：
@@ -64,7 +71,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ol>
  *
  * <p><b>帧字节取自协议黄金样本</b>（{@code scds-protocol/src/test/resources/samples/golden_samples.json}），
- * 不自造字节——自算校验和等于自证。<b>这不是现场验收</b>：真实串口 115200 时序、UWB 盒子经 12001 的
+ * 不自造字节——自算校验和等于自证。唯一例外是 CAL-1 的 UWB 41B 帧：库里的 {@code uwb41} 样本是近场
+ * 毫米级测距、也没有本场编成编号（1/2/4/5）对应的样本，故按冻结成帧规则拼写（见 {@link #uwbFrameHex}），
+ * 并把「能否被真成帧器切出」写进断言。<b>这不是现场验收</b>：真实串口 115200 时序、UWB 盒子经 12001 的
  * 连续坐标、容量与长稳无法由仿真证明（设计 06 §7「现场待验收」）。</p>
  *
  * <p><b>刻意不覆盖的两条（已由 core 单测证明）</b>：</p>
@@ -108,6 +117,29 @@ class SituationStateIT {
     private static final UUID PLAN_ID = UuidV7.generate();
     private static final String PORT_NAME = "COM7";
 
+    // ── CAL-1 室内解算（UWB 41B）夹具 ────────────────────────────────────────
+
+    /** 本场室内底图 id（专属，{@link #cleanUp()} 按 id 精确回收）。 */
+    private static final UUID MAP_ID = UUID.fromString("3f1a2b4c-5d6e-4f70-8192-a3b4c5d6e7f8");
+
+    /**
+     * BS1~BS4 四角像素坐标 + 现场实测 30m×18m（与 {@code IndoorPositionResolverTest} 同一份可解几何）。
+     *
+     * <p>编号照 {@code UwbSolver.Geometry} 的口径：{@code bs1→bs2} 为长度基准、{@code bs1→bs4} 为宽度
+     * 基准，两基准须近似正交，故四角按「左下 → 右下 → 右上 → 左上」。</p>
+     */
+    private static final String UWB_META = """
+            {"bs1":{"xPx":120,"yPx":1565},"bs2":{"xPx":1980,"yPx":1565},\
+            "bs3":{"xPx":1980,"yPx":240},"bs4":{"xPx":120,"yPx":240},\
+            "realLengthCm":3000,"realWidthCm":1800}""";
+
+    /** 物理矩形正中心的一帧测距：四角等距 √306 m ≈ 17.493 m。 */
+    private static final int[] RANGES_AT_CENTRE = {17493, 17493, 17493, 17493, 0, 0, 0, 0};
+
+    /** 整图 2000×1600 上，物理中心对应 (1050/2000, 902.5/1600)。 */
+    private static final double CENTRE_IMAGE_X = 0.525;
+    private static final double CENTRE_IMAGE_Y = 0.5640625;
+
     private static ConfigurableApplicationContext context;
     private static SimulatedLinkAdapter links;
     private static SituationStateService state;
@@ -116,6 +148,7 @@ class SituationStateIT {
     private static HitEventRepository hitEvents;
     private static TrackSampleRepository trackSamples;
     private static ExerciseUnitRepository exerciseUnits;
+    private static BaseMapRepository baseMaps;
     private static JdbcClient jdbc;
 
     private static final List<UUID> createdExercises = new ArrayList<>();
@@ -139,12 +172,16 @@ class SituationStateIT {
         hitEvents = context.getBean(HitEventRepository.class);
         trackSamples = context.getBean(TrackSampleRepository.class);
         exerciseUnits = context.getBean(ExerciseUnitRepository.class);
+        baseMaps = context.getBean(BaseMapRepository.class);
         jdbc = context.getBean(JdbcClient.class);
 
         seedPlanAndRoster();
         // 注入上行帧要求链路已开（仿真下不开链路投喂是非法用法）。
         links.openSerial(new LinkConfig(LinkKind.SERIAL_VEST, PORT_NAME, null,
                 false, null, null, false, null, null, null));
+        // UWB 帧经 12001 接入（仿真下只登记链路状态，不真绑口）；CAL-1 的解算帧从这里注入。
+        links.openUwbTcpServer(new LinkConfig(LinkKind.UWB_TCP_SERVER, null, null,
+                false, "127.0.0.1", ProtocolConstants.UWB_TCP_SERVER_PORT, false, null, null, null));
     }
 
     @AfterAll
@@ -159,6 +196,8 @@ class SituationStateIT {
                     .param("planId", PLAN_ID.toString()).update();
             jdbc.sql("DELETE FROM t_plan WHERE id = :planId")
                     .param("planId", PLAN_ID.toString()).update();
+            jdbc.sql("DELETE FROM t_map WHERE id = :id")
+                    .param("id", MAP_ID.toString()).update();
         }
         if (context != null) {
             context.close();
@@ -346,14 +385,66 @@ class SituationStateIT {
                 .contains(SampleReason.STATE_CHANGE);
     }
 
+    @Test
+    @DisplayName("CAL-1：UWB 41B 帧走真成帧器与真库底图，解算写入整图室内坐标与可用基站数")
+    void uwbFrameResolvesIntoWholeImageIndoorCoordinate() {
+        seedIndoorMap();
+        UUID exerciseId = loadExerciseWithMap(MAP_ID);
+        long switchRevision = query.revision();
+        long withoutFixBefore = state.uwbFramesWithoutFix();
+
+        assertThat(positionOf(2)).as("开演只装载几何，不产生坐标").isNull();
+
+        List<UwbFrame> framed = links.injectUwb(uwbFrameHex(2, RANGES_AT_CENTRE));
+        assertThat(framed).as("自拼帧必须被真成帧器切出（帧头 / 帧尾 / 校验自洽）").hasSize(1);
+        assertThat(framed.getFirst().vestNum()).isEqualTo(2);
+        assertThat(framed.getFirst().rangesMm())
+                .as("成帧器解出的测距与拼入的字节一致")
+                .containsExactly(17493, 17493, 17493, 17493, 0, 0, 0, 0);
+
+        await("马甲 2 拿到整图室内坐标", () -> positionOf(2) != null);
+
+        UnitState located = unit(2);
+        assertThat(located.position().coordinateSystem()).isEqualTo(CoordinateSystem.INDOOR);
+        assertThat(located.position().xPct()).isCloseTo(CENTRE_IMAGE_X, within(0.002));
+        assertThat(located.position().yPct()).isCloseTo(CENTRE_IMAGE_Y, within(0.002));
+        assertThat(located.position().wgs84Lng()).as("室内坐标不带 WGS-84").isNull();
+        assertThat(located.positionSource()).isEqualTo(PositionSource.UWB);
+        assertThat(located.signalQuality()).as("本帧实际用上的基站数").isEqualTo(4);
+        assertThat(state.uwbFramesWithoutFix()).as("本帧解算成功，不进「无解」计数").isEqualTo(withoutFixBefore);
+        assertThat(query.changesSince(switchRevision).orElseThrow())
+                .as("解算是装载后的第一次单元变化").extracting(UnitState::vestNum).containsOnly(2);
+        assertThat(query.exerciseId()).isEqualTo(exerciseId);
+    }
+
+    @Test
+    @DisplayName("CAL-1：本场无底图时不臆造坐标，UWB 帧只进「无解」计数")
+    void uwbFramesWithoutLoadedGeometryAreCountedNotSolved() {
+        UUID exerciseId = loadExercise();   // mapId = null → 开演即清空解算几何
+        long withoutFixBefore = state.uwbFramesWithoutFix();
+
+        links.injectUwb(uwbFrameHex(2, RANGES_AT_CENTRE));
+        await("无几何的 UWB 帧被写手线程消费", () -> state.uwbFramesWithoutFix() > withoutFixBefore);
+
+        assertThat(state.uwbFramesWithoutFix()).isEqualTo(withoutFixBefore + 1);
+        assertThat(positionOf(2)).as("解不出坐标时什么都不改").isNull();
+        assertThat(unit(2).positionSource()).isEqualTo(PositionSource.NONE);
+        assertThat(query.exerciseId()).isEqualTo(exerciseId);
+    }
+
     // ── 夹具 ────────────────────────────────────────────────────────────────
 
     /** 装载一场新演习（编成来自真库 {@code t_plan_roster}，走真 {@link SituationSessionBinder}）。 */
     private static UUID loadExercise() {
+        return loadExerciseWithMap(null);
+    }
+
+    /** 装载一场带本场底图的演习：开演时 binder 会把 {@code uwb_meta} 几何交给室内解算器。 */
+    private static UUID loadExerciseWithMap(UUID mapId) {
         UUID exerciseId = UuidV7.generate();
         createdExercises.add(exerciseId);
         Instant now = Instant.now();
-        sessions.onExerciseStarted(new Exercise(exerciseId, PLAN_ID, "态势IT想定", null, BattleMode.TRAIN,
+        sessions.onExerciseStarted(new Exercise(exerciseId, PLAN_ID, "态势IT想定", mapId, BattleMode.TRAIN,
                 now, null, ROSTER.size(), 0, 0, now, now));
         assertThat(query.exerciseId()).isEqualTo(exerciseId);
         return exerciseId;
@@ -371,6 +462,45 @@ class SituationStateIT {
                     .param("vestNum", row.vestNum()).param("name", row.name())
                     .param("team", row.team().name()).update();
         }
+    }
+
+    /** 铺一张带 {@code uwb_meta} 的可解室内底图；先删后插，重跑不撞主键。 */
+    private static void seedIndoorMap() {
+        baseMaps.deleteById(MAP_ID);
+        baseMaps.insert(new BaseMap(MAP_ID, "态势IT室内底图", MapType.INDOOR, "maps/state-it.png",
+                2000, 1600, null, UWB_META, Instant.now(), Instant.now()));
+    }
+
+    /**
+     * 按协议 B 冻结成帧规则拼一帧 41B：帧头 {@code AA 29}、帧尾 {@code 55}、
+     * 校验 {@code sum(byte[0..38]) & 0xFF == byte[39]}（PROTOCOL.md §6.5）。
+     *
+     * <p><b>为什么自拼而不是取黄金样本</b>：{@code uwb41} 的样本测距只有几十~几百毫米（近场），解不出
+     * 30m×18m 的场；也没有本场编成编号（1/2/4/5）对应的样本。这里只按冻结规则写出字节，
+     * 「能否被真成帧器切出并交给状态机」由用例断言；UWB 成帧对真实捕获字节的验证由
+     * {@code UwbLinkTest} 覆盖，本类不重复。</p>
+     */
+    private static String uwbFrameHex(int vestNum, int[] rangesMm) {
+        byte[] frame = new byte[ProtocolConstants.UWB_FRAME_LEN];
+        frame[0] = (byte) 0xAA;
+        frame[1] = 0x29;
+        frame[2] = 0;                       // 保留字节，解算链路不读
+        for (int b = 0; b < 4; b++) {       // vestNum 小端 int32
+            frame[3 + b] = (byte) (vestNum >>> (8 * b));
+        }
+        for (int i = 0; i < UwbFrame.RANGE_COUNT; i++) {
+            for (int b = 0; b < UwbFrame.RANGE_BYTES; b++) {
+                frame[UwbFrame.RANGE_BASE + UwbFrame.RANGE_BYTES * i + b] =
+                        (byte) (rangesMm[i] >>> (8 * b));
+            }
+        }
+        int sum = 0;
+        for (int i = 0; i < ProtocolConstants.UWB_FRAME_LEN - 2; i++) {
+            sum += frame[i] & 0xFF;
+        }
+        frame[ProtocolConstants.UWB_FRAME_LEN - 2] = (byte) (sum & 0xFF);
+        frame[ProtocolConstants.UWB_FRAME_LEN - 1] = 0x55;
+        return Hex.encode(frame);
     }
 
     private static UnitState unit(int vestNum) {
