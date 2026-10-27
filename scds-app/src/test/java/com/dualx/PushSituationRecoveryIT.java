@@ -64,9 +64,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>帧字节取自协议黄金样本</b>，不自造（自算校验和等于自证）。仿真网关与真链路共用同一个
  * {@code LinkRegistry} 与同一个 {@code HardwareEventSink}，故「变化 → 推增量」这条链是同一条。</p>
  *
- * <p><b>刻意不覆盖跨代恢复（判据 9）</b>：那条判据要求同一 JVM 内先后起两个完整进程（两个 epoch），
- * 其机制是「新进程把窗口下界抬到旧 N 之上 → 旧 N 判超窗 → close 4000 → 改全量」，属于
- * 判据 3 的同一套出口加上 epoch 比对，留待单独一段实现，本类不假装覆盖。</p>
+ * <p><b>本类只覆盖同一代内</b>：跨代恢复（判据 9）要求同一 JVM 内先后起两个完整进程（两枚 {@code epoch}），
+ * 而它的机制<u>不是</u>「旧 N 判超窗」——旧 N 在数值上可以合法落在新进程的窗口内，唯一能识破换代的是
+ * 帧自报的 {@code epoch}。那需要真起两代上下文，由 {@code PushCrossProcessRecoveryIT} 单独覆盖，
+ * 本类不假装覆盖。</p>
  *
  * <p>不写成 {@code @Transactional}：请求走应用自己的线程与连接，测试事务帮不上忙。</p>
  */
