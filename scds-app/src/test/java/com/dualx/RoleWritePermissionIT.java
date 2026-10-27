@@ -9,6 +9,7 @@ import com.dualx.api.map.MapController;
 import com.dualx.api.replay.ReplayController;
 import com.dualx.api.security.ApiProblemAccessDeniedHandler;
 import com.dualx.api.security.ApiProblemAuthenticationEntryPoint;
+import com.dualx.api.security.DeviceScope;
 import com.dualx.api.security.JwtDecoderConfig;
 import com.dualx.api.security.SecurityConfig;
 import com.dualx.api.situation.SituationController;
@@ -105,7 +106,7 @@ class RoleWritePermissionIT {
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration(exclude = {DataSourceAutoConfiguration.class, FlywayAutoConfiguration.class})
     @Import({SecurityConfig.class, JwtDecoderConfig.class, ApiProblemAuthenticationEntryPoint.class,
-            ApiProblemAccessDeniedHandler.class, TraceIdFilter.class, ApiExceptionHandler.class,
+            ApiProblemAccessDeniedHandler.class, DeviceScope.class, TraceIdFilter.class, ApiExceptionHandler.class,
             ExerciseController.class, CommandController.class, SituationController.class,
             DeviceController.class, MapController.class, ReplayController.class})
     static class PermissionApplication {
@@ -291,8 +292,16 @@ class RoleWritePermissionIT {
                 dynamicTest("设备令牌只认自身端点，读全量态势 → 403", () -> assertProblem(
                         perform("GET", "/api/v1/situation", deviceToken()),
                         403, "AUTH_FORBIDDEN", "/api/v1/situation")),
-                dynamicTest("设备令牌可读自身链路状态 → 放行", () -> assertReached(
+                dynamicTest("设备令牌可读自身实时状态 → 放行", () -> assertReached(
                         "/api/v1/situation/vests/1", "device", perform("GET", "/api/v1/situation/vests/1", deviceToken()))),
+                // D04「单兵第一版仅自身」：设备令牌（sub=1）读他人马甲必须在授权层就拒掉，
+                // 而不是靠前端隐藏——这一条是那条约定的可执行形式。
+                dynamicTest("设备令牌读他人实时状态 → 403", () -> assertProblem(
+                        perform("GET", "/api/v1/situation/vests/2", deviceToken()),
+                        403, "AUTH_FORBIDDEN", "/api/v1/situation/vests/2")),
+                dynamicTest("指挥台令牌读任意马甲 → 放行", () -> assertReached(
+                        "/api/v1/situation/vests/999", "VIEWER",
+                        perform("GET", "/api/v1/situation/vests/999", token("VIEWER")))),
                 dynamicTest("刷新令牌调业务接口 → 403", () -> assertProblem(
                         perform("GET", "/api/v1/devices/vests", token("scds-refresh", List.of())),
                         403, "AUTH_FORBIDDEN", "/api/v1/devices/vests")));
@@ -369,7 +378,9 @@ class RoleWritePermissionIT {
         Instant now = Instant.now();
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
                 .issuer(ISSUER)
-                .subject("7")
+                // 设备令牌的 sub 即马甲编号：单兵自身范围（D04）以它为判据，
+                // 故这里必须与用例里请求的 vestNum 一致。
+                .subject("1")
                 .audience(audience)
                 .issueTime(Date.from(now))
                 .expirationTime(Date.from(now.plusSeconds(300)))

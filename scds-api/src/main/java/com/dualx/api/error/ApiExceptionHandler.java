@@ -16,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.ErrorResponse;
@@ -163,6 +164,21 @@ public class ApiExceptionHandler {
             builder.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.retryAfter().toSeconds()));
         }
         return builder.body(body);
+    }
+
+    /**
+     * 方法级鉴权拒绝（{@code @PreAuthorize}）：403，与安全链的 403 出口同形。
+     *
+     * <p>必须单列：{@code @PreAuthorize} 的拒绝发生在控制器调用之内，早于安全链的
+     * {@code ApiProblemAccessDeniedHandler}，不登记就会落进下面的兜底分支变成 500——
+     * 同一条规则在「filter chain 拒」与「方法级拒」两处给出不同状态，是前端最难处理的不一致。
+     * 文案与状态沿用 403 出口，前端只按 {@code code} 分流。</p>
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiProblem> handleMethodAccessDenied(AccessDeniedException ex,
+                                                               HttpServletRequest request) {
+        log.debug("方法级鉴权拒绝：{} {}（{}）", request.getMethod(), request.getRequestURI(), ex.getMessage());
+        return problem(HttpStatus.FORBIDDEN, ApiErrorCode.AUTH_FORBIDDEN, "无权访问该资源", request, null);
     }
 
     /** 兜底：未预期异常一律 500，且必须带 traceId 才能排障。 */
