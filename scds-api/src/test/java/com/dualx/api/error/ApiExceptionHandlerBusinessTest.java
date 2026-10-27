@@ -143,9 +143,29 @@ class ApiExceptionHandlerBusinessTest {
                     "持有的 revision 已超出服务端保留窗口，请改为全量拉取");
         }
 
+        @GetMapping("/boom/command-invalid-weapon")
+        void commandInvalidWeapon() {
+            throw new BusinessException(ApiErrorCode.COMMAND_INVALID_WEAPON_SLOT, "武器槽位非法");
+        }
+
+        @GetMapping("/boom/command-vest-offline")
+        void commandVestOffline() {
+            throw new BusinessException(ApiErrorCode.COMMAND_VEST_OFFLINE, "马甲离线");
+        }
+
+        @GetMapping("/boom/command-vest-dead")
+        void commandVestDead() {
+            throw new BusinessException(ApiErrorCode.COMMAND_VEST_DEAD, "马甲已阵亡");
+        }
+
+        @GetMapping("/boom/command-queue-full")
+        void commandQueueFull() {
+            throw new BusinessException(ApiErrorCode.COMMAND_QUEUE_FULL, "指令队列已满");
+        }
+
         @GetMapping("/boom/unmapped")
         void unmapped() {
-            throw new BusinessException(ApiErrorCode.COMMAND_QUEUE_FULL, "指令队列已满");
+            throw new BusinessException(ApiErrorCode.REPLAY_EXPORT_FAILED, "复盘导出失败");
         }
     }
 
@@ -216,8 +236,14 @@ class ApiExceptionHandlerBusinessTest {
             // 态势：revision 超窗（M4 PUSH-MODEL）。契约 getSituation 明确写 409——请求本身合法，
             // 只是与当前服务端状态冲突；客户端处置是「丢弃本地缓存改全量拉取」，不是「改参数重试」。
             "/boom/revision-too-old  | 409 | SITUATION_REVISION_TOO_OLD",
+            // 指挥指令（M3 COMMAND）：契约只对武器槽位写明了 400；离线/阵亡取 409、队列满取 503
+            // （容量问题，客户端动作是「稍后重试」，与 500 的「翻日志」严格分工）。
+            "/boom/command-invalid-weapon | 400 | COMMAND_INVALID_WEAPON_SLOT",
+            "/boom/command-vest-offline   | 409 | COMMAND_VEST_OFFLINE",
+            "/boom/command-vest-dead      | 409 | COMMAND_VEST_DEAD",
+            "/boom/command-queue-full     | 503 | COMMAND_QUEUE_FULL",
     })
-    @DisplayName("台账域、演习域、链路域与地图域错误码逐项按契约登记状态，不按前缀猜（DEVICE_* / EXERCISE_* 里既有 404 又有 409）")
+    @DisplayName("台账域、演习域、链路域、地图域、态势与指挥域错误码逐项按契约登记状态，不按前缀猜（DEVICE_* / EXERCISE_* / COMMAND_* 里既有 400 又有 404/409）")
     void ledgerCodesMapToTheirContractStatus(String path, int expectedStatus, String expectedCode) throws Exception {
         mockMvc.perform(MockMvcRequestBuilders.get(path.trim()))
                 .andExpect(status().is(expectedStatus))
@@ -241,12 +267,12 @@ class ApiExceptionHandlerBusinessTest {
     @DisplayName("未登记状态的错误码响亮地失败：500 并在响应里保留原码")
     void unmappedCodeFailsLoudlyInsteadOfGuessingAnHttpStatus() throws Exception {
         // 这条是刻意的绊线：状态映射表刻意不按前缀猜（同一前缀里既有 404 又有 409）。
-        // 台账域（M2 LEDGER）与演习块（M3 LIFE）登记完后，
-        // 绊线换到尚未落服务的 COMMAND_* 上；将来为 COMMAND_QUEUE_FULL 登记了状态，
+        // 台账域（M2 LEDGER）、演习块（M3 LIFE）、态势（M4）与指挥指令（M3 COMMAND）登记完后，
+        // 绊线换到尚未落服务的 REPLAY_* 上；将来为 REPLAY_EXPORT_FAILED 登记了状态，
         // 本用例会失败——那一刻请一并换成下一个未登记的码，而不是把默认分支改回「猜一个
         // 看起来合理的 4xx」。
         mockMvc.perform(MockMvcRequestBuilders.get("/boom/unmapped"))
                 .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.code").value("COMMAND_QUEUE_FULL"));
+                .andExpect(jsonPath("$.code").value("REPLAY_EXPORT_FAILED"));
     }
 }

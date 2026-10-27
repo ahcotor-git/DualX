@@ -315,10 +315,11 @@ class MvcProblemIT {
 
     @Test
     void businessUnregisteredMappingStillFailsLoudly() throws Exception {
-        // 绊线：台账域（DEVICE_VEST_*、EXERCISE_ALREADY_RUNNING）已登记状态后，
-        // 样例换到尚未落服务的 COMMAND_QUEUE_FULL。为它登记状态时本用例会失败，
-        // 那一刻请换成下一个未登记的码，而不是把默认分支改成「猜一个 4xx」。
-        problem(get("/err01/business"), 500, "COMMAND_QUEUE_FULL");
+        // 绊线：台账域（DEVICE_VEST_*、EXERCISE_ALREADY_RUNNING）、
+        // 指挥域（COMMAND_*）已登记状态后，样例换到尚未落服务的 REPLAY_EXPORT_FAILED。
+        // 为它登记状态时本用例会失败，那一刻请换成下一个未登记的码，
+        // 而不是把默认分支改成「猜一个 4xx」。
+        problem(get("/err01/business"), 500, "REPLAY_EXPORT_FAILED");
     }
 
     @Test
@@ -394,7 +395,7 @@ class MvcProblemIT {
             throw new BusinessException(ApiErrorCode.RATE_LIMITED, "rate", Duration.ofSeconds(123));
         }
         @GetMapping("/err01/business")
-        public void business() { throw new BusinessException(ApiErrorCode.COMMAND_QUEUE_FULL, "queue full"); }
+        public void business() { throw new BusinessException(ApiErrorCode.REPLAY_EXPORT_FAILED, "export failed"); }
         @GetMapping("/err01/unexpected")
         public void unexpected() { throw new IllegalStateException("secret-server-detail"); }
     }
