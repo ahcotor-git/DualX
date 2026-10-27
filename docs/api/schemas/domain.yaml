@@ -352,8 +352,9 @@ CommandAck:
     accepted:
       type: boolean
       description: |
-        false 表示指令未入队（如马甲离线、队列满）。契约约定：HTTP 200 + accepted=false
-        仍属「成功受理」语义，前端应提示「已下发但设备未确认」。
+        false 表示指令未入队（如马甲离线、队列满）：此时未下发任何字节，queuedAt 为空，
+        也不落队列、不写审计。契约约定：HTTP 200 + accepted=false 仍属「成功受理」语义
+        （请求本身没错，稍后可重试），但前端应提示「未下发」，而不是「已下发但设备未确认」。
     queuedAt:
       type: string
       format: date-time
