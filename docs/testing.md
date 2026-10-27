@@ -88,7 +88,7 @@ signing=true与false均成功，健康探测200，验证结束停止了本次启
 | T-STATE | 状态机 | 5000ms边界、阵亡坐标绝不改、判活、无效UWB/GPS、ff06分流 | 未实现 |
 | T-ALGORITHM | 冻结对拍 | Solver/Filter旧新数值序列、参数默认值、LOST/重捕获/离群、Y映射 | 仅迁移差异核查 |
 | T-HARDWARE | 链路 | 分片、重连、串口独占、配置绑定、12001启停、互斥、坏帧统计 | gateway为空 |
-| T-PUSH | 同构恢复 | 固定屏障首帧、订阅间隙、window超窗、跨代epoch、RESYNC、PING | 部分实现：单测覆盖首帧全量/逐帧补齐/RESYNC超窗/PING保活/注销（态势 `SituationWebSocketHandlerTest`、`SituationSessionRegistryTest`；链路 `LinkWebSocketHandlerTest`、`LinkSessionRegistryTest`），端到端已过判据1两端同构与判据3超窗（携「当前 revision − 窗口 − 1」握手 → close 4000 → 改全量重连，`PushIsomorphismIT`）；订阅间隙与跨代epoch的端到端仍缺 |
+| T-PUSH | 同构恢复 | 固定屏障首帧、订阅间隙、window超窗、跨代epoch、RESYNC、PING | 部分实现：单测覆盖首帧全量/逐帧补齐/RESYNC超窗/PING保活/注销（态势 `SituationWebSocketHandlerTest`、`SituationSessionRegistryTest`；链路 `LinkWebSocketHandlerTest`、`LinkSessionRegistryTest`），端到端已过判据1两端同构与判据3超窗（携「当前 revision − 窗口 − 1」握手 → close 4000 → 改全量重连，`PushIsomorphismIT`），判据2补齐逐帧（携「当前 revision − 3」握手 → 三帧 full=false、revision 连续无跳号）与判据6演习切换（真 HTTP 开停演 → 下一帧 full=true 且 running/units 随之反转，`PushSituationRecoveryIT`）；订阅间隙与跨代epoch的端到端仍缺 |
 | T-BACKPRESSURE | 背压 | 慢客户端独立、满队列、全量后不回退、线程退出、30s无上行关闭 | 部分实现：队满丢帧不阻塞调用方、全量替代不回退、空闲超时关闭、注销后不投递已由两侧会话表单测覆盖；线程退出清理与30s无上行关闭的端到端仍缺 |
 | T-STOP | 生命周期 | HTTP/WS/串口/TCP/DB队列完整关闭并立即重启 | 只人工启动/停止基础HTTP |
 | T-FILE | 文件 | 路径穿越、大小类型限制、下载授权、过期清理、断电恢复 | 未实现 |
