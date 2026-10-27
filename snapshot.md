@@ -1,8 +1,8 @@
 # scds-next 交接快照
 
 > 更新：2026-10-27，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M3 CAL-2 UWB 中心基准校准（标定本体）已写完代码与测试，全量 `mvn test` 1077 项全绿；
-> 工作树中含 CAL-2c 改动，尚未提交**。
+> 当前任务：**M3 CAL-2 UWB 中心基准校准（标定本体）已交付**——代码、测试与文档均已提交为三笔
+> 本地提交（`c503a06` / `88377be` / `ceb2698`），但**推送因 GitHub 443 连接超时未成功**，远端仍为 `07ce6cc`。
 > 最新全量 `mvn test` **1077 项，失败/错误/跳过均 0**（见 testing 第 15~18 节）。
 > 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~18 节冲突处，以该处为准。
 
@@ -33,10 +33,11 @@ Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源代码HEAD | `07ce6cc`（CAL-2b 第二笔）已入远端 `main` |
-| 实际远端main | 与本地 HEAD `07ce6cc` 一致；前几次 `git push` 曾因 443 连接被重置/超时失败，改用 `git -c http.version=HTTP/1.1 push` 后成功 |
+| 源码本地HEAD | `ceb2698`（CAL-2c 第三笔，docs）**仅在本机** |
+| 实际远端main | 仍是 `07ce6cc`（CAL-2b 第二笔）；本轮三笔提交推送失败：连续 3 次 `git -c http.version=HTTP/1.1 push` 均在 ~21s 后 `Failed to connect to github.com:443`（连接超时，非认证问题），已停止重试 |
 | 已推送 | `880ae1b`（feat 标定状态机）、`15334f1`（feat 采样接入写手线程）、`6a3da21`（feat 链路未开拒绝码）、`07ce6cc`（feat 标定三端点接线），以及更早的 CAL-1 系列与 MR-1~MR-3 |
-| 本轮继续成果 | **工作树含 CAL-2c 改动，尚未提交**：`V11__map_calibration.sql`（新增）+ `BaseMapRepository` / `MapLedgerService` / `TestCoreApplication` / `BaseMapRepositoryIT`（core）+ `MapBaseHttpIT` / `SituationStateIT` / `ApplicationStartupIT`（app）+ `decision-register.md` / `design/05-hw-link.md` / `design/06-state.md` / `testing.md`（docs）；全量 `mvn test` 1077 项全绿 |
+| 未推送（仅本机） | `c503a06`（feat V11 校准列 + saveUwbMeta 落库）、`88377be`（test CAL-2 端到端 + 两处迁移清单守卫）、`ceb2698`（docs CAL-2 口径/证据/快照）；三笔按功能分开，可原样推送 |
+| 本轮继续成果 | CAL-2c 全部内容（迁移 `V11__map_calibration.sql` + core 仓储/服务 + app 端到端 IT + 5 份文档）已提交；工作树干净；合入后全量 `mvn test` 1077 项全绿 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
