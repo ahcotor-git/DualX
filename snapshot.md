@@ -18,22 +18,22 @@ HTTP/WS唯一契约入口是 [openapi.yaml](docs/api/openapi.yaml)。
 M2 PLAN（想定与编成、导入导出）、M2 MAP-BASE（底图 CRUD / 图片 / 楼层点位）、
 M3 LIFE（开停演与恢复门禁、单实例保护）、M3 STATE（态势状态机与读侧）、
 M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停机释放链路），
-以及 **M3 COMMAND MR-1 + MR-2 + MR-3**。
+**M3 COMMAND MR-1 + MR-2 + MR-3**，以及 **M3 CAL-1（UWB 室内解算链路）**。
 
-下一原子任务的候选（详见 testing 第 16.3 节与第 3 节矩阵）：COMMAND 剩余的
-`move`（等地图置位写入口）；M3 CALIBRATION（UWB 标定，仍 501）；
-M5 EXPORT（replay 导出，仍 501）；`getVestLink` 仍 501；Flutter 客户端（Android 单兵端 /
-Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不照搬本快照的瞬时结论。
-提交/推送仍须当次授权；含 MR-3 在内的本轮提交推送状态见第 2 节，网络失败时不得写成已入远端。
+下一原子任务的候选（详见 testing 第 16.3 节与第 3 节矩阵）：M3 **CAL-2**（UWB 标定本体：
+三端点去 501、进程内状态机、`V11` 校准列、现场实测长宽覆盖写回 `uwb_meta`）；COMMAND 剩余的
+`move`（等地图置位写入口）；M5 EXPORT（replay 导出，仍 501）；`getVestLink` 仍 501；Flutter 客户端
+（Android 单兵端 / Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不照搬本快照的瞬时结论。
+提交/推送仍须当次授权；含 CAL-1 在内的本轮提交推送状态见第 2 节，网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源代码HEAD | 本轮 4 个提交已全部入远端 `main`（`91d4724..e939fa0`）；本次回写补记推送状态 |
-| 实际远端main | 与本地 HEAD 一致；前几次 `git push` 曾因 443 连接被重置失败，改用 `git -c http.version=HTTP/1.1 push` 后成功 |
-| 已推送 | `a27b3ea`（feat 两条指令）、`4f2a45f`（test MR-2 验收）、`43e9d39`（docs vestNum 说明）、`e939fa0`（docs 证据与过期记录清理） |
+| 源代码HEAD | 本轮 4 个提交已全部入远端 `main`（`76ae4b7..eda1b1a`）；本次回写补记推送状态 |
+| 实际远端main | 与本地 HEAD 一致；前几次 `git push` 曾因 443 连接被重置/超时失败，改用 `git -c http.version=HTTP/1.1 push` 后成功 |
+| 已推送 | `78ce05e`（feat 室内解算 IndoorPositionResolver）、`05563a7`（docs 四角编号更正为 bs1↔bs4）、`0c80727`（feat 41B 帧解算接入态势写侧）、`eda1b1a`（docs CAL-1 口径回写） |
 | 本轮继续成果 | 工作树干净，暂存区为空 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
@@ -56,8 +56,14 @@ MVC统一Problem及真实Boot共存回归；核心IT独立库、初始化前门�
 新增已完成（**M3 COMMAND MR-3**）：`ExerciseCommandExpiryTask`（core `@Component`，
 `scds.command.sent-ttl` 默认 30s、`@Scheduled` 5s 一拍，只扫 `SENT` 且按 `sent_at` 判超时，
 写 `SYSTEM` 存证后作废并清终态行）与仓储 `findSentBefore`。
+新增已完成（**M3 CAL-1 UWB 解算链路**）：`IndoorPositionResolver`（41B 帧 → **整图**百分比坐标，
+每马甲自持 `UwbFilter`/`UwbSolver` 状态）、`SituationStateService.applyUwb` / `loadIndoorMap`
+（解算几何随本场底图装载，开演/停演各清一次；解不出只计数 `uwbFramesWithoutFix` 而不改坐标）、
+`SituationSessionBinder` 注入 `BaseMapRepository` 按 `exercise.mapId` 读 `t_map`；
+修复 `application.yml` 死配置键（`uwb-mode: enabled` → `mode: true`，原键从未生效）。
 未完成：COMMAND 的 `move`（手动置位，等地图置位写入口）；`getVestLink` 仍 501；
-M3 CALIBRATION（UWB 标定）与 M5 EXPORT（replay 导出）仍 501；
+M3 **CAL-2**（UWB 标定本体：三端点去 501、`V11` 校准列、现场实测长宽覆盖写回 `uwb_meta`）与
+M5 EXPORT（replay 导出）仍 501；
 replay / file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
 
