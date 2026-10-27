@@ -718,3 +718,87 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 WS 判据的口径是「会话被服务端断开」，不是「收到关闭帧」——后者与设计 02 §4.8 的裁定相反。
 `getVestLink` 与 COMMAND / CALIBRATION 仍未落地，与本段无关。
 本段为**代码验收**，不是生产发布批准。
+
+## 15. M3 COMMAND 指令下发（MR-1 + MR-2）
+
+2026-10-27 按 M3 COMMAND 工作包实施（`docs/implementation-plan.md` 第 90 行；决策 D04、D11；
+契约 `docs/api/paths/command.yaml`）。分两段落地：MR-1 收 5 条单兵即时指令，MR-2 收全体充弹与覆盖配置。
+本节记录本段证据；`docs/review.md` 中 R08 / R21 称「command 业务方法占位、COMMAND 默认 500」
+的描述是 2026-10-21 的时点记录，已被本节取代。
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动（下行帧由既有 `DownlinkCommands` 组帧） |
+| gateway | 49 | 0/0/0 | 未改动（14B 配置帧的重发缓存早已在 `SerialVestLink` 里） |
+| core | 504 | 0/0/0 | 新增编排 `CommandService`（普通类，装配点在 `scds-app` 的 `CommandConfig`） |
+| api | 139 | 0/0/0 | `ApiSkeletonSmokeIT` 判据是「非 404」，去 501 不破该判据 |
+| app | 318 | 0/0/0 | 含 `CommandHttpIT` 4（MR-1 两例 + MR-2 两例） |
+| solver/domain | 0 | 无测试 | 构建成功，不证明算法数值或状态业务 |
+| 总计 | **1029** | **0/0/0** | 全 reactor SUCCESS |
+
+模块计数与第 14 节不同处，以本节为准（第 14 节是 T-STOP 时点的记录）。
+
+### 15.1 落地范围与口径
+
+8 类指令接口已落地 **7 条**：判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 全体充弹 / 覆盖配置。
+`move`（手动置位）仍为 501——它依赖地图置位写入口，单列任务。
+
+**顺序即纪律：先发字节，成功后落库。** 契约把「受理」定义为「指令进入发送队列」，而物理下发
+一旦发生就无法回滚（决策 D11：不得把 Accepted 当设备执行成功）。因此编排不写 `PENDING` 再走
+`markSent` 两段式，而是把已发事实**一次性**落成 `state=SENT` 的行——库里的行恒为「真的发过」，
+不会出现「发了但库说 PENDING」或「库里说 SENT 但字节没出去」两种自相矛盾。
+
+`accepted=false` 只有两种成因：**链路未开**与**串口队列满**，两者都**不落库、不写日志**
+（D11 的裁定是「false = 未入队」，不是「已受理待重连」）。马甲心跳离线**不拦**：离线只说明网关
+这一侧没收到心跳，判死/判活这类指令正是发给它的。
+
+| 指令 | 下行帧 | 队列行 | 审计 |
+|---|---|---|---|
+| 5 条单兵即时 | 11B 单播 `01 .. <num:2BE> ..` | `state=SENT` | 按 `ExerciseLogType` 记一行 |
+| 全体充弹 | 11B 广播 `01 14 FF FF FF <ammo:2BE> <weapon> <sum> AF FA` | `vest_num=0`、`command=RELOAD_ALL` | `RELOAD`，`vest_num` 记 **NULL** |
+| 覆盖配置 | 14B `02 00 <num:2BE> <mode> <hp> <ammo1:2BE> <ammo2:2BE> <team> <sum> AF FA` | `command=CONFIG` | **不写**（协议 `LogType` 无 `CONFIG`） |
+
+**全体充弹的「全体」由帧内的 `FF FF FF` 表达，而不是由调用次数表达**：只发一帧，回执 `vestNum=0`
+（真实编号下界为 1，0 不会与之混淆）；队列行给 0 是因为 `t_exercise_command.vest_num` 是 `NOT NULL`；
+审计的 `vest_num` 记 **NULL**（与 V4 建表注释「与马甲无关的系统级日志为 NULL」一致）。广播路径
+**刻意不判编成**：契约 `reloadAllVests` 只登记 400 与 409、**没有 404**，拿编成去卡它等于凭空造
+一条契约没有的失败路径。
+
+**覆盖配置的「未传字段保持原值」以本场想定编成为来源**（`t_plan_roster`），不是态势：`UnitState`
+本来就没有 `mode` 字段，若拿态势当原值来源，mode 仍需回落编成，等于两个来源混用。参数快照记的是
+**合并后的生效值**，不是「只传了 hp」这个原始请求。14B 帧的轮询重发由网关侧既有缓存承担，
+故本接口是**覆盖配置**语义、不是即时单次指令。
+
+### 15.2 用例判据（`CommandHttpIT`，app，4）
+
+完整生产入口 + 真实 MySQL + 真实安全链 + `scds.gateway.mode=simulator`（并先断言装配出来的是
+`SimulatedLinkAdapter`）；仿真链路 `sentCommands()` 同步记录、不起线程，故下行字节断言是确定性的、
+不与时间赛跑。写入用随机想定名与专属编号段（62400+），在 `cleanUp()` 里按 id / 编号精确回收。
+
+1. `commandDownlinkReachesSimulatedLinkAndPersistsSentRowWithAudit`——判死与充弹走真实 HTTP，
+   下行字节逐位等于 `DownlinkCommands` 的输出，库里落 `SENT` 行与审计行；超范围指令照发但不写审计。
+2. `closedLinkIsAcceptedWithoutEnqueueAndContextFailuresAreContractShaped`——链路未开时**受理但未入队**
+   （`accepted=false`、不落库不写日志）；无演习 409；不在编成 404。
+3. `reloadAllBroadcastsOneFrameAndAuditsWithoutVestNum`——11B 广播帧只发一帧、回执与队列行的 `vest_num=0`、
+   审计 `RELOAD` 一行且 `vest_num IS NULL`（用 `COUNT(*) ... AND vest_num IS NULL` 与「记成 0」区分开）；
+   `weapon=TURRET` 为 400，而不是被静默当成 PRIMARY。
+4. `setVestConfigMergesWithRosterAndSendsPollConfigFrame`——编成写进 `mode=MANUAL / ammo1=12 / ammo2=7`
+   后只传 `hp`，14B 帧逐位等于 `pollConfig(num, MODE_MANUAL, 80, 12, 7, RED)` 的输出，参数快照是合并后的
+   生效值，只落队列行不写审计；编成外仍报同一个 `DEVICE_VEST_NOT_FOUND`（未因内部改走编成表而换码）。
+
+### 15.3 边界
+
+`ApiSkeletonSmokeIT` 的 70 条契约路由按「非 404」判定；已落地的指令端点在建线前即按令牌/参数失败
+（401 / 400），不会被该判据放过。它的 501 断言用例仍用真占位端点 `GET /devices/vests/1/link`。
+`move` 与 `getVestLink` 仍 501，与本段无关。`CommandService` 刻意不加 `@Transactional`：
+物理下发已不可回滚，只把两个库写包成事务会给出一种并不存在的「整体回滚」错觉。
+
+**已知缺口（本次不拦，单列任务）**：`t_plan_roster` 的 `hp` / `ammo1` / `ammo2` 在库层与 PLAN 写入侧
+都没有范围校验（`ck_plan_roster` 只覆盖 `team` / `mode` / `vest_num`），而请求体侧的 `@Max` 又会被
+「未传时取编成原值」这条路绕过；越界原值（如 hp=300）会在 14B 组帧时静默截断。`CONFIG` 也不写审计，
+故这类覆盖没有留痕。
+
+本段为**代码验收**，不是生产发布批准。

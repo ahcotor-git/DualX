@@ -1,8 +1,9 @@
 # scds-next 交接快照
 
-> 更新：2026-10-21，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：SEC-01/SEC-02/ERR-01、TEST-01（隔离库 + 完整应用启动）、AUTH-HTTP、DEVICE-AUTH、
-> AUTH-HARDEN 与 **M2 LEDGER（台账/基站/绑定闭环）** 均已完成；LEDGER 成果**尚未提交**。
+> 更新：2026-10-27，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
+> 当前任务：**M3 COMMAND（MR-1 五条单兵即时指令 + MR-2 全体充弹与覆盖配置）已完成并本地提交**；
+> 最新全量 `mvn test` **1029 项，失败/错误/跳过均 0**（见 testing 第 15 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~15 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -12,31 +13,35 @@
 [测试](docs/testing.md)和[下一对话提示词](docs/next-chat-prompt.md)。
 HTTP/WS唯一契约入口是 [openapi.yaml](docs/api/openapi.yaml)。
 
-LEDGER 已完成（见 testing 第12节）：`VestLedgerService` / `AnchorLedgerService`、
-`DeviceController` 台账与基站接线、D03-4 绑定闭环、`SecurityConfig` 绑定路径 ADMIN 规则。
-最新全量 `mvn clean verify`：**681 项，失败/错误/跳过均 0**。
-契约计数修订为 **69 REST + 2 WS**（requirements/implementation-plan 已同步）。
+已完成的里程碑（逐项证据在 testing 第 7~15 节）：SEC-01 / SEC-02 / ERR-01、TEST-01（隔离库 +
+完整应用启动）、AUTH-HTTP / DEVICE-AUTH / AUTH-HARDEN、M2 LEDGER（台账/基站/绑定闭环）、
+M2 PLAN（想定与编成、导入导出）、M2 MAP-BASE（底图 CRUD / 图片 / 楼层点位）、
+M3 LIFE（开停演与恢复门禁、单实例保护）、M3 STATE（态势状态机与读侧）、
+M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停机释放链路），
+以及 **M3 COMMAND MR-1 + MR-2**。
 
-下一原子任务：**M2 MAP-BASE**（地图 CRUD、图片、楼层点位、引用与文件安全），
-前置 D09、D15 仍需先确认；LEDGER 遗留的 501 路径（链路开关、串口枚举）等 `gateway` 有主源码再排。
-LEDGER 工作树成果需先取得**当次提交/推送授权**，再进入下一工作包。
-本次“继续”不扩展为后续自动提交推送；自动测试全绿不等于允许生产发布。
+下一原子任务的候选（详见 testing 第 15.3 节与第 3 节矩阵）：COMMAND 剩余的
+`move`（等地图置位写入口）与队列过期扫描；M3 CALIBRATION（UWB 标定，仍 501）；
+M5 EXPORT（replay 导出，仍 501）；`getVestLink` 仍 501；Flutter 客户端（Android 单兵端 /
+Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不照搬本快照的瞬时结论。
+提交/推送仍须当次授权；本轮的本地提交在网络恢复前不得写成已入远端。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源代码HEAD | fae966dafeaf6d994b42d33f5a0b0bbce85f068f（`docs(auth): 回写 D01/D04 与 R27 的落地口径`） |
-| 实际远端main | 本地跟踪的 origin/main 为 `44fa450`；HEAD **领先 4 个提交**，本轮未联网 fetch/ls-remote，远端实际状态未核验 |
-| 已推送 | 前序提交（含设备登录接线之前）已在远端；这 4 个提交仅本地 |
-| 本轮继续成果 | LEDGER 全部改动（源码/测试/契约/文档）**尚未提交**，暂存区为空 |
+| 源代码HEAD | 43e9d393482ce154e2f6b48fe04bcca752a5c7af（`docs(command): 说明广播指令回执的 vestNum 为 0`） |
+| 实际远端main | 本地跟踪的 origin/main 为 `91d4724`；HEAD **领先 3 个提交**；本轮 `git push` 三次均因网络（443 连接被重置 / 无法连接）失败，**远端实际状态未核验** |
+| 已推送 | `91d4724` 及其之前已在远端；本轮 3 个提交（`a27b3ea` / `4f2a45f` / `43e9d39`）仅本地 |
+| 本轮继续成果 | 工作树干净，暂存区为空 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
-未推送的 4 个提交：`e6100d5`（写权限矩阵）、`5a49194`（限流键用库内身份）、
-`548b716`（TTL 配错启动失败）、`fae966d`（D01/D04 与 R27 落地回写）。
-LEDGER 改动叠加在工作树上，提交/推送须逐次授权，不得因“上次批准过”自动续用。
-未改生产配置、pom、协议、算法或历史迁移。不得恢复用户已删除的临时提交信息文件。
+本地领先远端的 3 个提交：`a27b3ea`（feat：全体充弹与覆盖配置两条指令）、
+`4f2a45f`（test：MR-2 端到端验收）、`43e9d39`（docs：CommandAck.vestNum 广播说明）。
+网络失败只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，不得因
+“上次批准过”自动续用。未改生产配置、pom、协议、算法或历史迁移。
+不得恢复用户已删除的临时提交信息文件。
 
 ## 3. 实际实现状态
 
@@ -50,20 +55,23 @@ MVC统一Problem及真实Boot共存回归；核心IT独立库、初始化前门�
 `AnchorLedgerService`（基站 list/upsert，bs1~4 必开）、`DeviceController` 台账/基站接线、
 `SecurityConfig` 绑定路径 ADMIN 规则。
 
-未完成：device 域 10 条已接线，链路开关与串口枚举等仍 501；exercise/command/situation/map/replay
-业务方法全部占位；device/me 仍 501。
-gateway零主源码，演习/态势/指令业务链未实现。
-WS只有PING/PONG，首帧、补齐、背压、保活扫描尚缺。
-Flutter工程尚无。
+未完成：COMMAND 的 `move`（手动置位，等地图置位写入口）与队列过期扫描；`getVestLink` 仍 501；
+M3 CALIBRATION（UWB 标定）与 M5 EXPORT（replay 导出）仍 501；
+replay / file / map 其余业务方法按 testing 第 3 节矩阵推进。
+Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
 
 实际版本为Java21、Spring Boot **3.5.7**、MySQL本机8.4.11；
 以pom和当前代码为准，不沿用历史记忆里的Boot3.3.5。
-Flyway文件V1-V7、V9，共8份；18张业务表，另有Flyway历史表。
-原预留V8自愈迁移未创建，而本地已应用V9。
+Flyway文件V1-V7、V9-V10，共9份；18张业务表，另有Flyway历史表。
+原预留V8自愈迁移未创建，而本地已应用V9；V10为演习存活/自愈迁移。
 
 ## 4. 验证证据与局限
 
-最新`mvn clean verify`：2026-10-21 18:48:41 +08:00，
+**当前**全量`mvn test`：2026-10-27，**1029项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core504 + api139 + app318（solver/domain无测试）。
+本段新增证据为 `CommandHttpIT` 4 例（MR-1 两例 + MR-2 两例），详见 testing 第 15 节。
+
+当时`mvn clean verify`：2026-10-21 18:48:41 +08:00，
 **681项，失败/错误/跳过均0**：protocol19 + core281 + api100 + app281。
 35份XML与testcase计数一致，8个reactor成功。历史309/361/458/485/521/558不改写。
 本段新增证据：`VestLedgerServiceIT`16、`AnchorLedgerServiceIT`5、`ApiSkeletonSmokeIT`70、
@@ -73,7 +81,7 @@ AuthServiceIT有17项真实MySQL测试，包含refresh/logout并发、
 API骨架使用standalone且只断言非404，不能证明真实Security或业务闭环。
 
 历史fat jar在signing=true/false下均人工启动验证HTTP，已停止；本次未重复完整fat jar验收。
-原实测缺陷的当前状态：
+原实测缺陷的当前状态（下表 2026-10-21 的实测列只反映当时；R07 / R08 已被后续工作包取代）：
 
 | 审查ID | 实测 |
 |---|---|
@@ -82,18 +90,18 @@ API骨架使用standalone且只断言非404，不能证明真实Security或业�
 | R04 | ERR-01已修；Boot MVC回归27项，含3项真实Tomcat上传检查 |
 | R05 | signing=false时无token账号login返回401，目标404 |
 | R06 | 设备登录已按 D02 接线为**边缘本地签发**；只验签实例上该端点仍注册并抛500，是否改为条件注册属独立决策 |
-| R07 | DeviceAuthService、SID单端在线与换绑清SID已实现并回归；device/me 仍按裁定留501 |
-| R08 | auth 6 与 device 10 已接线；其余 exercise/command/situation/map/replay 业务方法仍占位，gateway 零源码 |
+| R07 | **已闭合**：DeviceAuthService、SID单端在线与换绑清SID已实现；`device/me` 已接线，见 testing 第 13 节 |
+| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线；仅 `move`、`getVestLink`、UWB 标定与 replay 导出仍 501 |
 
 R05 仍未修复；R06 的只验签分支待决策。R23数据库隔离子任务已完成；
 R18-R28其他风险仍待对应工作包验证。
-无真实硬件、solver数值对拍、物理断网、WS帧序列、Flutter或生产节点验证。
+无真实硬件、solver数值对拍、物理断网、Flutter或生产节点验证。
 发布结论：**不可生产发布**。完整问题及测试矩阵见review/testing。
 
 ## 5. 环境接续
 
-最后检查：scds-local-mysql healthy，127.0.0.1:13306监听；
-11001/12001无监听，本轮应用进程均已停止。新对话必须重新核查，不照搬瞬时状态。
+最后检查（2026-10-27）：scds-local-mysql `Up (healthy)`，127.0.0.1:13306监听；
+全量测试已跑完，应用进程均已停止。新对话必须重新核查，不照搬瞬时状态。
 实际.env有DB秘密及JWT文件路径，没有SCDS_ADMIN_USERNAME/PASSWORD。
 首次建号实现不等于已部署管理员，不擅自补凭据。
 
@@ -111,14 +119,14 @@ SCDS_TEST_MYSQL_USER、SCDS_TEST_MYSQL_PASSWORD。
 初始化前门禁拒绝误连、连接覆盖及危险Flyway模式；不允许指向生产。
 AuthServiceIT仍真实提交、按自身UUID清理；多数仓储IT回滚。
 测试库默认保留，Initialize-TestDatabase.ps1仅首次运行，已有库/账号/文件均拒绝覆盖。
-空库已迁移V1-V7/V9，两库8份迁移校验和一致；开发与测试account/refresh/exercise均0。
+空库已迁移V1-V7/V9/V10，两库校验和一致；开发与测试account/refresh/exercise均0。
 
 ## 6. 已确认与待确认
 
 已确认：refresh按令牌原文SHA-256的token_hash查库，core不解析JWT；
 logout无请求体，撤账号全部refresh；access无主动撤销。
-管理员部署.env明文、首次BCrypt建号、不写seed；
-device/me本阶段留501；公开dev密钥仅开发。
+管理员部署.env明文、首次BCrypt建号、不写seed；公开dev密钥仅开发。
+（原「`device/me` 本阶段留 501」已作废：该端点随后已接线，见 testing 第 13 节。）
 自愈写SYSTEM证据后删该场残留指令，同事务；
 协议LogType不能加SYSTEM；谁持状态谁调推送端口。
 2026-10-21新增已确认D14：同容器独立库、独立测试账号和凭据、保留库、
@@ -129,11 +137,18 @@ device/me本阶段留501；公开dev密钥仅开发。
 =`首次绑定`/`换绑`/`解绑`（解绑幂等、保留摘要）；绑定路径写权限单列 `ADMIN`；
 `bs1~4` 必须保持启用；`listVests.status` 按心跳近似且 `DIE` 返回空集。
 
-待确认：只验签实例的设备签发能力；自愈是否用下一递增V10；
-链路两通道的数组/信封根类型；跨进程revision恢复；
-WS超窗409/close语义；权限与单兵可见性；UWB SERIAL/启停；
+2026-10-27新增已确认（M3 COMMAND，见 testing 第 15 节）：
+指令 `accepted=false` 只表示**未入队**（链路未开 / 串口队列满），两种成因都不落库不写日志；
+顺序为**先发字节、成功后一次性落 `state=SENT`**；全体充弹回执与队列行 `vest_num=0`、审计 `vest_num` 记 NULL；
+覆盖配置未传字段取**本场想定编成**原值、不写审计（协议 LogType 无 CONFIG）；
+`t_plan_roster` 的 hp/ammo 范围校验**单列任务**，本次不拦。
+
+待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
+下列原待确认项已被后序工作包裁定并落地，不再挂起：自愈迁移号（已定为 V10）、
+链路两通道的数组/信封根类型、跨进程 revision 恢复、WS 超窗 close 语义
+（见 testing 第 3 节 T-PUSH / T-BACKPRESSURE 矩阵与对应提交）。
 
 ## 7. 不可越过的边界
 
@@ -162,5 +177,7 @@ WS超窗409/close语义；权限与单兵可见性；UWB SERIAL/启停；
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新M2 LEDGER的证据、边界与限制详见testing第12节；TEST-01全量应用启动详见第11节。
-本快照和新对话提示已同步681项、LEDGER交付及下一任务（MAP-BASE），不要求重做已完成SEC/ERR/AUTH/LEDGER。
+最新证据：COMMAND（MR-1/MR-2）详见 testing 第 15 节；T-STOP 详见第 14 节；
+DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
+本快照已同步 1029 项测试、COMMAND MR-1/MR-2 交付与下一任务候选，
+不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND。

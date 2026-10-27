@@ -5,6 +5,15 @@
 > 测试集及旧算法迁移差异。包含全量构建和关键HTTP真实复现，不是正式渗透/CVE审计或现场验收。
 > 本次只改文档、契约说明与环境模板，不修业务代码，不自动替未确认设计作决定。
 
+> **现状更新（2026-10-27）**：本文是 2026-10-21 的时点审查（基线 `da02622`），只反映当时状态。
+> 此后 SEC-01/SEC-02/ERR-01、TEST-01、AUTH-HTTP/DEVICE-AUTH/AUTH-HARDEN、M2 LEDGER、M2 PLAN、
+> M2 MAP-BASE、M3 LIFE/STATE/COMMAND 与 M4 PUSH-WS/DEVICE-SELF/T-STOP 各工作包相继落地；
+> 表中 R07（`device/me` 与 SID 单端在线）、R08（auth 与 60 条业务方法占位、gateway 零源码）、
+> R12（链路两通道根类型）、R13（revision 跨代恢复）、R17（无真实 Security/WS/完整 app 自动测试）、
+> R21 中 COMMAND 相关部分（`t_exercise_command` 的状态与 `COMMAND_*` 码映射）**均已被取代**，
+> 逐项证据见 [testing.md](testing.md) 第 7~15 节与第 3 节测试矩阵。其余条目未被重新核验，
+> 仍以本文为准（尤其 R05、R06、R26 Flutter 客户端、R27 容量与保留）。本文保留为历史记录。
+
 ## 1. 结论
 
 项目是可构建的多模块后端基础工程，协议、仓储和部分账号核心能力已验证，
