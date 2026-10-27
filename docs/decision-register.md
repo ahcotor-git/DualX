@@ -742,11 +742,15 @@ S8 装配层与端到端 IT 已落地。
    S5 的 `scds.situation.revision-window`（1024 条）瞬间被刷空，增量通道失去意义。status 跳变才 +1。
 2. **`combatRole` 恒为 `null`**：编号区间→`CombatRole` 的划分仍未裁定（见上文第 5 条）；
    `weaponKind` 已按 `WeaponKind.fromNum` 填。
-3. **UWB 坐标解算与 `ff06` 室内定位未接入**：二者需要地图域 `uwb_meta` + `UwbSolver`，属后续分段；
-   当前 `UwbFrame` 只计数（`uwbFramesUnhandled`）、`ff06` 只打 DEBUG，室内坐标不产生。
+3. **UWB 室内坐标解算已接入（CAL-1）**：41B 帧经 `IndoorPositionResolver` 解成**整图**百分比坐标，写入
+   `GeoPoint(INDOOR, xPct, yPct)`、`positionSource = UWB`；解算几何随本场底图装载
+   （`SituationStateService.loadIndoorMap`，由 `SituationSessionBinder` 按 `exercise.mapId` 读 `t_map` 后调用，
+   开演/停演各清一次）。解不出坐标的情形（UWB 未开、本场无底图或标定残缺、单帧降级）**只累加
+   `uwbFramesWithoutFix` 而不改坐标**，避免把上一帧坐标冒充成新的可信值。`ff06` 仍只打 DEBUG；
+   「UWB 生效时丢弃 `ff06`」的判别开关属 CAL-2。
 4. **GPS 只落 WGS-84**：`GeoPoint.lng/lat`（BD-09）的换算规则是 `requirements.md` 里未闭合的
    **Q-LEGACY-RULE**，本段不臆造，留空。
-5. **`signalQuality` 未填**：其来源是 UWB 解算的可用基站数，随第 3 条一并延后。
+5. **`signalQuality` 记本帧实际用上的基站数**（CAL-1 起填；契约 0~8，&lt; 2 时坐标不可信）。
 6. **停演终局只到内存出口**：S3 的 `endExercise()` 返回 `UnitOutcome` 列表，
    真正调 `ExerciseUnitRepository.freezeOutcome` 落库的编排属 S6。
 

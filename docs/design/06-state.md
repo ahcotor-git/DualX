@@ -74,7 +74,9 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 - 不搬线载荷 `SituationEnvelope` / `TeamSummary` / `HitEvent`（M4 按 [设计 02](02-push-ports.md) 下沉）。
 - 不做 `epoch`/跨代恢复（D08）：本包的 revision 环形窗口只保证**同代**增量。
 - 不做 COMMAND（8 类指令的下行与回执状态机）——本包只**消费**指令造成的状态后果（判活解除冻结等由 COMMAND 下发、STATE 记账）。
-- 不做 CALIBRATION（UWB 标定三端点）、REPLAY、EXPORT。
+- 不做 CALIBRATION 的**标定本体**（三端点、现场实测长宽覆盖写回 `uwb_meta`，属 CAL-2）、REPLAY、EXPORT。
+  其中 UWB **解算链路**已作为 CAL-1 前置落地：41B 帧经 `IndoorPositionResolver` 解成整图百分比坐标写入态势
+  （见 §4.6 开演装载）。
 - 不改协议字节、端口、轮询周期、5000ms 窗口与解算参数。
 - 不做容量结论（D10 未闭合，见 §4.7）。
 
@@ -164,6 +166,11 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
   > 而装载要的正是带这三项的 `RosterEntry`（即 `t_plan_roster` 的领域记录）。两份编成在开演时同源
   > （演习快照由 `startExercise` 从想定编成而来），故改读想定编成，**不新造默认值**。
   > 另：`revision` 依 §4.5 在装载时**递增**（只增不减、不归零），切换点即本次递增值。
+  > **CAL-1 落地补充**：装载编成之后紧接装载**室内解算几何**——`SituationSessionBinder` 按
+  > `exercise.mapId` 读 `t_map` 的 `uwb_meta` 与图片像素尺寸，调
+  > `SituationStateService.loadIndoorMap(map)`；`mapId` 为 null（室外纯 GPS）或底图行已删时显式传 null
+  > 清空。`beginExercise` 自身也先清一次几何：留着上一场的底图会让新演习的 UWB 帧按旧场几何解算出
+  > **静默的错误坐标**，比解不出来更难发现。停演由 `endExercise()` 统一清空。
 - **停演**：在 LIFE 调 `freezeAndClose` **之前**，STATE 先对全体单位写一次终局
   （复用 `ExerciseUnitRepository.freezeOutcome`：存活写 `LIVE`、阵亡写 `DIE` + `dead_at` + 终值 `kills/hitsDealt`），
   **再 flush 轨迹缓冲**。顺序反了会让 `freezeAndClose` 读到 0 阵亡（它读的是库里的终局）。
@@ -252,6 +259,8 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 - [ ] 命中落库字段逐字段正确（含 `shooterIsSoldier` / `shooterWeaponKind` / 危险物编号）
 - [ ] `kills` / `hitsDealt` 与命中表一致；队伍汇总与编成一致
 - [ ] 四类 `sampleReason` 各自可触发一次；停演时缓冲被 flush
+- [ ] 41B UWB 帧经解算写入 `GeoPoint(INDOOR, xPct, yPct)`（**整图**百分比）+ `positionSource=UWB` +
+      `signalQuality=usedCount`；本场未装底图几何、标定残缺或该帧降级时**只计数**（`uwbFramesWithoutFix`）不改坐标
 - [ ] 读侧全量/增量/超窗 409 `SITUATION_REVISION_TOO_OLD` 三条分支（HTTP 状态码由 M4 映射，本包验语义与 `code`）
 - [ ] 无演习 → 读侧 `running=false` + 空 `units`（D15-⑥）；未知马甲 → 读侧未命中（M4 映射 404）
 - [ ] 队列溢出按策略处理且不阻塞调用方；`real` 模式上行帧仍走同一路径
