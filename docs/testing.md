@@ -6,6 +6,7 @@
 > SEC-02字段/时间校验的新验证记录见第8节，后续结果不覆盖历史证据。
 > ERR-01见第9节；TEST-01数据库隔离及521项最新全量结果见第10节。
 > M2 LEDGER台账/基站/绑定与681项最新全量结果见第12节。
+> M4 DEVICE-SELF单兵自身视角与1020项最新全量结果见第13节（第2节RT-SID行已被第13节取代）。
 
 ## 1. 本次自动化结果
 
@@ -602,3 +603,55 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 本段为**代码验收**，不是生产发布批准；不提交、不推送，工作树成果保留。
 `getVestLink`/`getLinks`/`listSerialPorts` 与串口/UWB 开关仍为 501——`scds-gateway` 无主源码。
 `t_anchor` 与 `t_map.uwb_meta` 的双源问题按设计缺口登记，本段不写 `uwb_meta`。
+
+## 13. M4 DEVICE-SELF 单兵自身视角
+
+2026-10-27 按 DEVICE-SELF 工作包分三段实施：越权收口（`DeviceScope`）、SID 单端在线接线与
+`device/me` 去 501、端到端验收。本节记录本段证据；第 12 节的 681 项与第 2 节的 RT-SID 行是历史，
+被本节取代。
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 504 | 0/0/0 | `DeviceAuthService` 新增 `requireActiveSession`（SID 校验的首个生产调用方） |
+| api | 135 | 0/0/0 | 新增 `DeviceScope`；`SituationController` 加 `@PreAuthorize`；`device/me` 去 501 |
+| app | 313 | 0/0/0 | 含新增 `DeviceSelfHttpIT` 3；`RoleWritePermissionIT` 65 |
+| solver/domain | 0 | 无测试 | 构建成功，不证明算法数值或状态业务 |
+| 总计 | **1020** | **0/0/0** | 全 reactor SUCCESS |
+
+### 13.1 本段新增/更新的用例
+
+- `DeviceSelfHttpIT`（app，3，完整生产入口 + 真实 MySQL + 真实安全链）：
+  - 设备令牌读 `auth/device/me` → 200，编号/名称/队伍来自台账、`state` 来自本场编成（装载后未收帧为 `OFFLINE`）；
+  - 设备令牌读自身实时状态 200、读他人马甲 403 `AUTH_FORBIDDEN`（决策 04 D04「仅自身」的可执行形式）；
+  - 重登顶掉旧会话后，旧设备令牌在 `device/me` 上 401 `AUTH_TOKEN_INVALID`。
+- `RoleWritePermissionIT`（app，65）：矩阵新增三条——设备令牌读自身放行、读他人 403、指挥台读任意马甲放行。
+- `ApiSkeletonSmokeIT`（api，71）：`device/me` 不再是占位，501 形状改用仍为占位的 `devices/vests/{n}/link`。
+
+### 13.2 两处只在方法级鉴权上才看得见的约定
+
+- **域级 matcher 表达不了「同一 URL 内的资源级范围」**：`/api/v1/situation/vests/**` 的
+  `hasAnyAuthority(AUD_DEVICE, AUD_EDGE)` 有意保持不变，收口交给 `@PreAuthorize("@deviceScope.allowSelf(...)")`
+  ——依据 `docs/design/03-auth.md` §6 Q8「按需补」的例外条款。
+- **方法级拒绝必须单列 403 出口**：`@PreAuthorize` 的 `AccessDeniedException` 抛在 DispatcherServlet 之内，
+  不走安全链的 `ApiProblemAccessDeniedHandler`；不登记就会落进 `handleUnexpected` 变成 500，
+  于是「filter chain 拒」与「方法级拒」给出不同状态。`ApiExceptionHandler` 已补同形 403
+  （同 `code`、同 `instance`）。
+
+### 13.3 RT-SID 行的现状（取代第 2 节）
+
+第 2 节 `RT-SID` 记录的是「device token 携带不存在 SID 访问 `auth/device/me` → **501**，SID 校验尚缺」。
+本段已把该缺口补齐：同一请求现在得到 **401 `AUTH_TOKEN_INVALID`**，由
+`DeviceAuthService.requireActiveSession` 比对令牌 `sid` 与 `t_vest.device_session_sid` 判定
+（换绑/退役会把该列置 NULL，同一马甲重登会覆盖为新值）。第 2 节保留为历史证据，不作为当前行为。
+
+### 13.4 边界
+
+现存 Flyway MySQL 8.4 支持警告与 Mockito 动态 agent 提示未修改，与本段无关。
+`getVestLink` 仍为 501（`lastFrameType`/`framesTotal`/`droppedTotal` 在 `UnitState` 无数据源，单列任务）。
+`docs/api/openapi.yaml` 中 `deviceToken` 的注释已从「自身 + 所属队伍」更正为「仅自身」（与 D04 对齐）。
+本段为**代码验收**，不是生产发布批准。

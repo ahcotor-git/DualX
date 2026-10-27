@@ -220,7 +220,8 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-    # 单兵终端（马甲 App）专用：可见字段被裁剪到「自身 + 所属队伍」。
+    # 单兵终端（马甲 App）专用：可见范围裁剪为「自身」——第一版仅自身（决策 04 D04）。
+    # 「己方全队 / 敌方仅阵亡」须独立契约 + 服务端字段裁剪，不是前端拿全量后隐藏。
     # 与账号令牌同由本地实例签发、同走Authorization: Bearer，服务端按aud区分用途。
     deviceToken:
       type: http
