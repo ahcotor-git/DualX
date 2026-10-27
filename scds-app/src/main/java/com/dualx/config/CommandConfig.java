@@ -6,6 +6,7 @@ import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.repository.AccountRepository;
 import com.dualx.core.repository.ExerciseCommandRepository;
 import com.dualx.core.repository.ExerciseLogRepository;
+import com.dualx.core.repository.PlanRosterRepository;
 import com.dualx.core.state.SituationQuery;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,11 +27,13 @@ public class CommandConfig {
     @Bean
     public CommandService commandService(ExerciseLifecycleService lifecycle,
                                          SituationQuery situations,
+                                         PlanRosterRepository planRoster,
                                          DeviceLinkAdmin deviceLinkAdmin,
                                          ExerciseCommandRepository commands,
                                          ExerciseLogRepository logs,
                                          AccountRepository accounts,
                                          Clock clock) {
-        return new CommandService(lifecycle, situations, deviceLinkAdmin, commands, logs, accounts, clock);
+        return new CommandService(lifecycle, situations, planRoster, deviceLinkAdmin, commands, logs,
+                accounts, clock);
     }
 }

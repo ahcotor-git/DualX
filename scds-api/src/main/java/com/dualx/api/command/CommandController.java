@@ -30,9 +30,8 @@ import java.util.UUID;
  * <p>全部指令行 POST/PUT，响应统一为 {@link CommandAck}；路径不与类级前缀拼装，
  * 每个方法写完整绝对路径，便于与 openapi.yaml 逐条对照。</p>
  *
- * <p><b>已落地 5 条单兵即时指令</b>（判死 / 判活 / 判伤 / 超范围 / 单兵充弹），编排在
- * {@link CommandService}。其余三条仍是骨架：{@code reload-all} 与 {@code config} 属 M3 第二段，
- * {@code move} 依赖地图置位写入口，单列任务。</p>
+ * <p><b>已落地 7 条</b>（判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 全体充弹 / 覆盖配置），编排在
+ * {@link CommandService}。{@code move}（依赖地图置位写入口）仍是骨架，另行单列任务。</p>
  *
  * <p>失败不经控制器判定：语境（无演习 → 409）、编成（马甲不在编成 → 404）与下行失败都在
  * {@link CommandService} 里抛 {@link BusinessException}，由全局异常出口统一映射——控制器里再判
@@ -50,8 +49,11 @@ public class CommandController {
 
     /** 全体充弹：对当前编成内所有马甲下发 11B 充弹帧。 */
     @PostMapping("/api/v1/command/reload-all")
-    public CommandAck reloadAllVests(@RequestBody @Valid ReloadRequest request) {
-        throw new NotImplementedException("reloadAllVests");
+    public CommandAck reloadAllVests(@RequestBody @Valid ReloadRequest request,
+                                     @AuthenticationPrincipal Jwt jwt) {
+        int weapon = request.weapon() == WeaponSlot.SECONDARY
+                ? DownlinkCommands.WEAPON_SECONDARY : DownlinkCommands.WEAPON_PRIMARY;
+        return toAck(commands.reloadAll(request.ammo(), weapon, operatorId(jwt)));
     }
 
     /** 判死：下发 8B 判死帧，阵亡后坐标冻结。 */
@@ -90,8 +92,13 @@ public class CommandController {
 
     /** 修改马甲运行参数（队伍 / HP / 弹药 / 轮询模式），覆盖配置语义。 */
     @PutMapping("/api/v1/command/vests/{vestNum}/config")
-    public CommandAck setVestConfig(@PathVariable int vestNum, @RequestBody @Valid VestConfigRequest request) {
-        throw new NotImplementedException("setVestConfig");
+    public CommandAck setVestConfig(@PathVariable int vestNum,
+                                    @RequestBody @Valid VestConfigRequest request,
+                                    @AuthenticationPrincipal Jwt jwt) {
+        return toAck(commands.setVestConfig(vestNum,
+                new CommandService.ConfigPatch(request.mode(), request.hp(), request.ammo1(),
+                        request.ammo2(), request.team()),
+                operatorId(jwt)));
     }
 
     /** 手动置位（联调专用）：直接把马甲坐标置为指定楼层/点位。 */
