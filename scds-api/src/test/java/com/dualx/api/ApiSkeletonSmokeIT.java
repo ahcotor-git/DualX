@@ -190,10 +190,11 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
-        // 单兵即时指令已接 core 的编排服务 CommandService（要三个仓储、硬件下行端口与态势读侧，
-        // 各自都要数据源），本测试不启 Spring 上下文。替身一律抛占位异常，使这五条端点在本测试里
-        // 稳定表现为 501（只证明路由注册）。编排口径（先发字节再落 SENT、链路未开即未入队、
-        // 无演习 409、编成外 404）由 scds-app 的 CommandHttpIT 端到端证明。
+        // 指令端点（8 条里已落地 7 条）已接 core 的编排服务 CommandService（要四个仓储、硬件下行
+        // 端口与态势读侧，各自都要数据源），本测试不启 Spring 上下文。替身一律抛占位异常；已落地的
+        // 端点在建线前就会先按令牌/参数失败（401 / 400），仍只证明路由注册——本测试的判据是「非 404」。
+        // 编排口径（先发字节再落 SENT、链路未开即未入队、无演习 409、编成外 404、广播 vest_num=0）
+        // 由 scds-app 的 CommandHttpIT 端到端证明。
         CommandService commandService = Mockito.mock(CommandService.class, invocation -> {
             if (invocation.getMethod().getDeclaringClass() == Object.class) {
                 return invocation.callRealMethod();
