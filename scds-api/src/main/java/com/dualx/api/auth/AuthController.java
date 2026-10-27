@@ -5,14 +5,17 @@ import com.dualx.api.dto.auth.DeviceSelf;
 import com.dualx.api.dto.auth.DeviceTokenPair;
 import com.dualx.api.dto.auth.TokenPair;
 import com.dualx.api.dto.auth.User;
-import com.dualx.api.error.NotImplementedException;
 import com.dualx.core.auth.AccountSession;
 import com.dualx.core.auth.AuthService;
 import com.dualx.core.auth.DeviceAuthService;
 import com.dualx.core.auth.IssuedTokens;
 import com.dualx.core.domain.Account;
+import com.dualx.core.domain.Vest;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.ledger.VestLedgerService;
+import com.dualx.core.port.DeviceTokenClaims;
+import com.dualx.core.state.SituationQuery;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -31,8 +34,8 @@ import java.util.UUID;
  * 不条件注册。签发端点 {@code login} / {@code refresh} / {@code logout} 在
  * {@link AccountAuthController}，它们只在 {@code signing-enabled=true} 时存在。</p>
  *
- * <p>{@code device/login} 已接 {@link DeviceAuthService}（绑定密钥校验 + SID 单端在线）；
- * {@code device/me} 仍是骨架期占位——它要回答实时状态，归态势域，本阶段不接线也不擅改语义。</p>
+ * <p>{@code device/login} 与 {@code device/me} 都已接 {@link DeviceAuthService}（绑定密钥校验 +
+ * SID 单端在线）：{@code me} 的身份来自台账、实时状态来自态势读侧，两者都不是本层自己的数据。</p>
  *
  * <p>包内共享的「服务结果 → 契约 DTO」映射也放在本类：它是包里唯一无条件存在的控制器，
  * 让条件注册的 {@link AccountAuthController} 反向依赖它，方向才稳定。</p>
@@ -42,10 +45,15 @@ public class AuthController {
 
     private final AuthService authService;
     private final DeviceAuthService deviceAuthService;
+    private final VestLedgerService vestLedger;
+    private final SituationQuery situations;
 
-    public AuthController(AuthService authService, DeviceAuthService deviceAuthService) {
+    public AuthController(AuthService authService, DeviceAuthService deviceAuthService,
+                          VestLedgerService vestLedger, SituationQuery situations) {
         this.authService = authService;
         this.deviceAuthService = deviceAuthService;
+        this.vestLedger = vestLedger;
+        this.situations = situations;
     }
 
     /** 获取当前登录用户。 */
@@ -62,10 +70,23 @@ public class AuthController {
                 httpRequest.getRemoteAddr()));
     }
 
-    /** 单兵终端获取自身信息与实时状态。 */
+    /**
+     * 单兵终端获取自身信息与实时状态。
+     *
+     * <p>顺序有意义：先校 SID 单端在线，再读台账。换绑 / 退役会把 {@code device_session_sid}
+     * 置 NULL，于是「已退役但令牌还在手上」在第一步就是 401，不会先掉进 404 分支；
+     * 反过来先读台账会让退役马甲拿到一个语义错误的 404。</p>
+     *
+     * <p>{@code state} 是契约里唯一允许为空的部分：无演习进行中、或本马甲不在本场编成内即为空。
+     * 身份三项（编号 / 名称 / 队伍）来自台账，只要令牌在有效期且会话有效就一直有。</p>
+     */
     @GetMapping("/api/v1/auth/device/me")
-    public DeviceSelf getDeviceSelf() {
-        throw new NotImplementedException("getDeviceSelf");
+    public DeviceSelf getDeviceSelf(@AuthenticationPrincipal Jwt jwt) {
+        DeviceTokenClaims claims = deviceClaims(jwt);
+        deviceAuthService.requireActiveSession(claims);
+        Vest vest = vestLedger.get(claims.vestNum());
+        return new DeviceSelf(vest.vestNum(), vest.name(), vest.team(),
+                situations.unit(claims.vestNum()).orElse(null));
     }
 
     /**
@@ -80,6 +101,25 @@ public class AuthController {
             return UUID.fromString(subject);
         } catch (IllegalArgumentException | NullPointerException invalid) {
             throw new BusinessException(ApiErrorCode.AUTH_TOKEN_INVALID, "令牌主体不是有效账号");
+        }
+    }
+
+    /**
+     * 从已认证的设备令牌取设备身份：{@code sub} 是马甲编号、{@code sid} 是会话 ID。
+     *
+     * <p>两者缺一或形状不对，说明这不是本实例签发的设备令牌（或签发时就不完整）——
+     * 归为令牌不成立（401），不当作服务端缺陷。{@code sid} 必须解析成 UUID 才能与
+     * {@code t_vest.device_session_sid} 的存法一致地比对。</p>
+     */
+    static DeviceTokenClaims deviceClaims(Jwt jwt) {
+        if (jwt == null) {
+            throw new BusinessException(ApiErrorCode.AUTH_TOKEN_INVALID, "设备令牌主体不成立");
+        }
+        try {
+            return new DeviceTokenClaims(Integer.parseInt(jwt.getSubject()),
+                    UUID.fromString(jwt.getClaimAsString("sid")));
+        } catch (IllegalArgumentException | NullPointerException invalid) {
+            throw new BusinessException(ApiErrorCode.AUTH_TOKEN_INVALID, "设备令牌主体不成立");
         }
     }
 

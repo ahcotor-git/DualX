@@ -7,6 +7,8 @@ import com.dualx.core.auth.AuthService;
 import com.dualx.core.auth.DeviceAuthService;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.ledger.VestLedgerService;
+import com.dualx.core.state.SituationQuery;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -102,6 +104,18 @@ class MvcProblemIT {
                     .thenThrow(new BusinessException(ApiErrorCode.AUTH_DEVICE_NOT_BOUND,
                             "马甲编号或绑定密钥不正确"));
             return service;
+        }
+
+        // device/me 已接台账与态势读侧。本测试只验证 MVC 出口，两者都不会被调到，故给空替身
+        // ——本切片已排掉 DataSource，真实台账服务压根装配不起来。
+        @Bean
+        VestLedgerService vestLedgerService() {
+            return Mockito.mock(VestLedgerService.class);
+        }
+
+        @Bean
+        SituationQuery situationQuery() {
+            return Mockito.mock(SituationQuery.class);
         }
     }
 

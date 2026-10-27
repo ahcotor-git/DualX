@@ -191,7 +191,7 @@ class ApiSkeletonSmokeIT {
         });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
-                        new AuthController(authService, deviceAuthService),
+                        new AuthController(authService, deviceAuthService, vestLedgerService, situationQuery),
                         new ExerciseController(planService, lifecycle, situationQuery),
                         new CommandController(),
                         new SituationController(situationEnvelopeFactory),
@@ -323,15 +323,15 @@ class ApiSkeletonSmokeIT {
     @DisplayName("未实现接口统一 501 + application/problem+json + code=NOT_IMPLEMENTED + traceId")
     void notImplementedIsReportedAsProblem() throws Exception {
         String traceId = "smoke-trace-0001";
-        // 用仍是真占位的设备端点，而不是已接核心服务的 /auth/me。
-        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/auth/device/me")
+        // 用仍是真占位的马甲链路端点，而不是已接核心服务的 /auth/me 与 /auth/device/me。
+        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/devices/vests/1/link")
                         .header(TraceIdFilter.HEADER, traceId))
                 .andExpect(status().isNotImplemented())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(header().string(TraceIdFilter.HEADER, traceId))
                 .andExpect(jsonPath("$.status").value(501))
                 .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"))
-                .andExpect(jsonPath("$.instance").value("/api/v1/auth/device/me"))
+                .andExpect(jsonPath("$.instance").value("/api/v1/devices/vests/1/link"))
                 .andExpect(jsonPath("$.traceId").value(traceId));
     }
 }

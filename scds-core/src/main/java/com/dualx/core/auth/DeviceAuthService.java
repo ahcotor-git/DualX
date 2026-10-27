@@ -91,6 +91,25 @@ public class DeviceAuthService {
         return new IssuedDeviceToken(deviceToken, Math.toIntExact(tokenSigner.deviceTokenTtl().toSeconds()));
     }
 
+    /**
+     * 校验这份设备身份仍是该马甲当前有效的那一个会话（SID 单端在线，设计 03 §4.9）。
+     *
+     * <p>验签只证明令牌是本站签发的，不证明它还属于当前登录的那台设备。每次设备登录都会写入
+     * 新的 {@code device_session_sid}，换绑 / 退役会把该列置 NULL，于是「同一马甲换了设备或
+     * 退了役，而手里的旧令牌在 12h 有效期内仍可用」这件事必须在这里挡掉。设计 03b §4 的
+     * 口径是：单兵自身可见性与 SID 业务检查不因验签通过而省略。</p>
+     *
+     * <p>不等一律按 {@link ApiErrorCode#AUTH_TOKEN_INVALID}（401）拒绝，而不是 403：设备端应
+     * 重新走一次 {@code device/login}，403 会把它引向「换令牌」的错误方向。</p>
+     */
+    public void requireActiveSession(DeviceTokenClaims claims) {
+        String current = sessions.findSessionSid(claims.vestNum()).orElse(null);
+        if (current == null || !current.equals(claims.sessionId().toString())) {
+            log.debug("设备会话已失效：vestNum={}", claims.vestNum());
+            throw new BusinessException(ApiErrorCode.AUTH_TOKEN_INVALID, "设备令牌已失效，请重新登录");
+        }
+    }
+
     private void requireSigning() {
         if (!tokenSigner.enabled()) {
             throw new IllegalStateException("Token signing is disabled");
