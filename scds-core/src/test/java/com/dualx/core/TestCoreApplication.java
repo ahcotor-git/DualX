@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
 
+import java.time.Clock;
 import java.util.Set;
 
 import static org.mockito.Mockito.mock;
@@ -59,6 +60,16 @@ class TestCoreApplication {
         } catch (IllegalArgumentException unresolvedPlaceholder) {
             return false;
         }
+    }
+
+    /**
+     * 时钟。生产侧由 {@code scds-app} 的 {@code SituationStateConfig} 提供同一类型；
+     * 本测试上下文没有那套装配，而底图台账在写标定时要取时刻（{@code t_map.calibrated_at}），
+     * 故补一个真实 UTC 时钟——被测的是「写没写这一列」，不是时刻本身。
+     */
+    @Bean
+    Clock clock() {
+        return Clock.systemUTC();
     }
 
     /** 核心集成测试只替换签发适配器，业务服务与数据库仍使用真实实现。 */

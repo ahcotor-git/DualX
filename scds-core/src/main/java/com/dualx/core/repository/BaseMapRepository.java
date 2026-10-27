@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -18,6 +19,10 @@ import java.util.UUID;
  * 底图仓储（{@code t_map}）。列表按「新建时间倒序」返回，与前端底图列表一致。
  *
  * <p>{@code uwb_meta} 以原始 JSON 文本存取：结构由契约冻结，解析属 API 层职责。
+ *
+ * <p><b>{@code calibrated_at} 刻意不进 {@link #COLUMNS}</b>：它是「标定时刻」的证据列，
+ * 只由 {@link #markCalibrated} 单向写入，当前没有任何读取方（契约的 {@code MapDetail}
+ * 只有 {@code calibrated} 布尔），因此不进读取投影，也不落到 {@code BaseMap} 上。
  */
 @Repository
 public class BaseMapRepository {
@@ -118,6 +123,22 @@ public class BaseMapRepository {
                 .param("imageHeight", map.imageHeight())
                 .param("remark", map.remark())
                 .param("uwbMeta", map.uwbMeta())
+                .update();
+    }
+
+    /**
+     * 记录标定生效时刻；只改 {@code calibrated_at} 一列。
+     *
+     * <p>与 {@link #update} 分开而不是并进去，是因为语义不同：改名换型不该刷新标定时刻，
+     * 而 {@code updated_at} 被 {@code ON UPDATE} 带着走，表达不了「只改标定时刻」。
+     * 该列只在标定写入成功时前进（{@code MapLedgerService.saveUwbMeta}）。</p>
+     *
+     * @return 影响行数，正常为 1
+     */
+    public int markCalibrated(UUID id, Instant calibratedAt) {
+        return jdbc.sql("UPDATE t_map SET calibrated_at = :calibratedAt WHERE id = :id")
+                .param("calibratedAt", SqlTime.toDb(calibratedAt))
+                .param("id", id.toString())
                 .update();
     }
 

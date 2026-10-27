@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
 
@@ -42,8 +43,10 @@ import java.util.UUID;
  * {@code PAYLOAD_TOO_LARGE} / {@code UNSUPPORTED_MEDIA_TYPE}）都已登记到
  * {@code ApiExceptionHandler} 的「一码一状态」表。</p>
  *
- * <p><b>不在本类</b>：UWB 校准三端点需 {@code scds-gateway} 的采样端口与校准状态存储，
- * 本仓库尚不具备，仍为 501。</p>
+ * <p><b>标定时刻的落点</b>：标定有两条写入路径——手工 {@code putUwbMeta}（录四角几何）与
+ * {@code UwbCalibrationService} 的中心基准校准（回写卷尺实测长宽）。两者最终都汇到
+ * {@link #saveUwbMeta}，因此 {@code t_map.calibrated_at} 统一在这里落库：
+ * 标定的「内容」（{@code uwb_meta}）与「时刻」（{@code calibrated_at}）永远由同一次写入产生。</p>
  *
  * <p><b>已知缺口</b>：落盘与更新行之间进程被杀（或提交阶段连接断开）会留下一个没人引用的
  * 图片文件——占磁盘但不影响任何读取路径。库行才是唯一真相，故本类宁可留孤立文件，
@@ -83,14 +86,24 @@ public class MapLedgerService {
     /** 图片上限（D09-⑥）取自配置而非硬编码：现场更换底图规格时不该改代码。 */
     private final FileStorageProperties files;
 
+    /**
+     * 标定时刻的来源。
+     *
+     * <p>取注入的 {@link Clock} 而不是 {@code Instant.now()}：标定时刻是可断言的结果，
+     * 与态势时间戳、指令时间戳同一取向（全仓的时钟都由装配层给，测试才可注入固定时刻）。</p>
+     */
+    private final Clock clock;
+
     public MapLedgerService(BaseMapRepository maps, MapFloorRepository floors, PlanRepository plans,
-                            ExerciseRepository exercises, FileStore store, FileStorageProperties files) {
+                            ExerciseRepository exercises, FileStore store, FileStorageProperties files,
+                            Clock clock) {
         this.maps = maps;
         this.floors = floors;
         this.plans = plans;
         this.exercises = exercises;
         this.store = store;
         this.files = files;
+        this.clock = clock;
     }
 
     /**
@@ -292,6 +305,9 @@ public class MapLedgerService {
      *
      * <p>只改 {@code uwb_meta} 一列，其余字段从当前行原样带回——与 {@link #update} 同一理由：
      * 标定不该顺手把底图名字或图片抹掉。</p>
+     *
+     * <p>同事务顺带把 {@code calibrated_at} 推到现在：这是全仓唯一的标定写入点，
+     * 手工录四角与中心基准校准都经过这里，因此「内容齐备」与「时刻有值」不会脱节。</p>
      */
     @Transactional
     public void saveUwbMeta(UUID mapId, String uwbMetaJson) {
@@ -300,6 +316,7 @@ public class MapLedgerService {
         maps.update(new BaseMap(current.id(), current.name(), current.mapType(), current.imagePath(),
                 current.imageWidth(), current.imageHeight(), current.remark(), uwbMetaJson,
                 current.createdAt(), current.updatedAt()));
+        maps.markCalibrated(mapId, clock.instant());
     }
 
     // ── 读取模型 ────────────────────────────────────────────────────────────
