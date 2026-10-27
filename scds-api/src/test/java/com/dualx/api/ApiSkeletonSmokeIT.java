@@ -19,6 +19,7 @@ import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.map.UwbCalibrationService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileStore;
 import com.dualx.core.port.FileUrlSigner;
@@ -125,6 +126,15 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // UWB 中心基准校准状态机已接上三端点（CAL-2）。它在本测试里同样给抛占位异常的替身：
+        // 放行的 start / status / clear 因此稳定返回 501。真状态机（采样、静止校验、写回
+        // uwb_meta、链路未开 409）由 UwbCalibrationServiceTest 与 scds-app 的端到端覆盖。
+        UwbCalibrationService uwbCalibrationService = Mockito.mock(UwbCalibrationService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         // 底图详情要签 imageUrl，但本测试里底图相关调用一律在替身处就抛占位异常，签名端口不会真被用到；
         // 给个同样会抛的替身，是为了让「装配缺件」以断言失败的形式暴露，而不是静默返回 null。
         FileUrlSigner fileUrlSigner = Mockito.mock(FileUrlSigner.class, invocation -> {
@@ -210,7 +220,7 @@ class ApiSkeletonSmokeIT {
                         new DeviceController(vestLedgerService, anchorLedgerService, deviceLinkAdmin),
                         // standalone 不装配 Spring 上下文，ObjectMapper 只能自备：本测试里
                         // 底图相关的 JSON 进出都会被替身的占位异常截断，用默认配置即可。
-                        new MapController(mapLedgerService, new ObjectMapper(), fileUrlSigner),
+                        new MapController(mapLedgerService, uwbCalibrationService, new ObjectMapper(), fileUrlSigner),
                         new FileController(fileStore, fileUrlSigner),
                         new ReplayController())
                 .setControllerAdvice(new ApiExceptionHandler())

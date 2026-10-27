@@ -8,14 +8,15 @@ import com.dualx.api.dto.map.MapDetail;
 import com.dualx.api.dto.map.MapPage;
 import com.dualx.api.dto.map.MapUpsertRequest;
 import com.dualx.api.dto.map.UwbCalibrationRequest;
+import com.dualx.api.dto.map.UwbCalibrationState;
 import com.dualx.api.dto.map.UwbCalibrationStatus;
 import com.dualx.api.dto.map.UwbMeta;
-import com.dualx.api.error.NotImplementedException;
 import com.dualx.core.domain.BaseMap;
 import com.dualx.core.domain.MapType;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.map.UwbCalibrationService;
 import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
@@ -53,14 +54,18 @@ import java.util.UUID;
  * <p><b>已接线</b>：底图台账 CRUD（{@code listMaps} / {@code createMap} / {@code getMap} /
  * {@code updateMap} / {@code deleteMap}）、楼层点位表（{@code listFloorPoints} /
  * {@code replaceFloorPoints}）、UWB 标定参数（{@code getUwbMeta} / {@code putUwbMeta}）
- * 与底图图片（{@code uploadMapImage} / {@code getMapImage}）走 {@link MapLedgerService}。
- * 本层只做契约形状的搬运（DTO ↔ 读取模型 ↔ 冻结 JSON ↔ 图片字节），「能不能删」
- * 「标定参数自不自洽」「这张图是不是真图片」这类判断全在服务层——写进控制器会让同一规则
- * 在 REST 与将来的 WS 入口上各写一遍。</p>
+ * 与底图图片（{@code uploadMapImage} / {@code getMapImage}）走 {@link MapLedgerService}；
+ * UWB 中心基准校准三端点（{@code startUwbCalibration} / {@code getUwbCalibration} /
+ * {@code clearUwbCalibration}）走 {@link UwbCalibrationService}。
+ * 本层只做契约形状的搬运（DTO ↔ 读取模型 ↔ 冻结 JSON ↔ 图片字节 ↔ 校准状态快照），
+ * 「能不能删」「标定参数自不自洽」「这张图是不是真图片」「链路开没开」这类判断全在服务层
+ * ——写进控制器会让同一规则在 REST 与将来的 WS 入口上各写一遍。</p>
  *
- * <p><b>仍是占位（501）</b>：UWB 校准三端点（{@code startUwbCalibration} /
- * {@code getUwbCalibration} / {@code clearUwbCalibration}，需 {@code scds-gateway} 的采样端口
- * 与校准状态存储，本仓库尚不具备）。它们属后续段落，本段只保证路由与 DTO 已按契约立起。</p>
+ * <p><b>校准状态机的存活期</b>：{@link UwbCalibrationService} 是进程内单例，它同时在
+ * HTTP 请求线程（{@code start}/{@code status}/{@code clear}）与态势写手线程
+ * （逐帧采样）上被调用；本层不做任何加锁或轮询，只把一次调用搬到一次响应上——
+ * {@code startUwbCalibration} 是 202 语义（受理即返回，进度靠 {@code getUwbCalibration} 轮询），
+ * 在这里等采样完成会把一个 HTTP 线程按采样帧数挂住。</p>
  *
  * <p>不设类级路径前缀，逐方法写完整绝对路径。</p>
  */
@@ -84,8 +89,18 @@ public class MapController {
      */
     private final FileUrlSigner signer;
 
-    public MapController(MapLedgerService ledger, ObjectMapper json, FileUrlSigner signer) {
+    /**
+     * UWB 中心基准校准的进程内状态机（CAL-2）。
+     *
+     * <p>它同时被态势写手线程逐帧喂采样，因此**必须与本进程的那一份是同一实例**——
+     * 装配在 {@code scds-app} 的 {@code SituationStateConfig}，这里只消费。</p>
+     */
+    private final UwbCalibrationService calibration;
+
+    public MapController(MapLedgerService ledger, UwbCalibrationService calibration, ObjectMapper json,
+                         FileUrlSigner signer) {
         this.ledger = ledger;
+        this.calibration = calibration;
         this.json = json;
         this.signer = signer;
     }
@@ -213,25 +228,47 @@ public class MapController {
         return body;
     }
 
-    /** 触发 UWB 中心基准校准（异步，用 GET 查进度）。 */
+    /**
+     * 触发 UWB 中心基准校准（异步：202 受理，进度靠 {@link #getUwbCalibration} 轮询）。
+     *
+     * <p>请求体整段可省（{@code @RequestBody(required = false)}）：不带体即「用配置的采样帧数、
+     * 不改任何实测长宽」，但服务层会因为没有实测值而回 400 {@code MAP_UWB_META_INCOMPLETE}——
+     * 契约要的是「至少一个卷尺实测值才能写回」，这个判据在服务层，本层不重写一遍。</p>
+     *
+     * <p>回 202 而不是 200：响应体里那份 {@code RUNNING} 是**受理时刻**的快照，采样在
+     * 态势写手线程上继续跑。前端不该把它当作终态——终态只能靠轮询或下一次读状态拿到。</p>
+     */
     @PostMapping("/api/v1/maps/{mapId}/uwb-calibration")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public UwbCalibrationStatus startUwbCalibration(
             @PathVariable String mapId, @RequestBody(required = false) @Valid UwbCalibrationRequest body) {
-        throw new NotImplementedException("startUwbCalibration");
+        UwbCalibrationRequest request = body == null ? new UwbCalibrationRequest(null, null, null) : body;
+        return toStatus(calibration.start(mapId(mapId), request.sampleFrames(),
+                request.bs1ToBs2Cm(), request.bs1ToBs3Cm()));
     }
 
-    /** 查询 UWB 校准状态。 */
+    /**
+     * 查询 UWB 校准状态。
+     *
+     * <p>这张图从没标过时回 200 + {@code IDLE}，不是 404：与 {@link #getUwbMeta} 的
+     * {@code MAP_NOT_CALIBRATED} 不同——那里「没有四角骨架」是缺资源，这里「还没开始标定」
+     * 是正常状态，前端拿到 {@code IDLE} 就知道可以发起下一次。</p>
+     */
     @GetMapping("/api/v1/maps/{mapId}/uwb-calibration")
     public UwbCalibrationStatus getUwbCalibration(@PathVariable String mapId) {
-        throw new NotImplementedException("getUwbCalibration");
+        return toStatus(calibration.status(mapId(mapId)));
     }
 
-    /** 清除 UWB 校准结果。 */
+    /**
+     * 清除 UWB 校准状态（**也承担取消**：正在跑的那次会被一并丢弃）。
+     *
+     * <p>只清进程内状态。已被写回 {@code uwb_meta} 的实测长宽是现场原创数据，清除标定不等于
+     * 把它们改回去——要改回去就再标一次或走 {@code putUwbMeta}。</p>
+     */
     @DeleteMapping("/api/v1/maps/{mapId}/uwb-calibration")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void clearUwbCalibration(@PathVariable String mapId) {
-        throw new NotImplementedException("clearUwbCalibration");
+        calibration.clear(mapId(mapId));
     }
 
     // ── 契约形状的搬运 ──────────────────────────────────────────────────────
@@ -247,6 +284,27 @@ public class MapController {
         } catch (IllegalArgumentException malformed) {
             throw new BusinessException(ApiErrorCode.MAP_NOT_FOUND, "底图不存在：" + raw);
         }
+    }
+
+    /**
+     * core 的标定状态快照 → 契约 {@code UwbCalibrationStatus}。
+     *
+     * <p>状态枚举用 {@code switch} 逐项映射而不是 {@code valueOf(name())}：两侧枚举目前逐字同名，
+     * 但它们是两层各自的定义，{@code valueOf} 会在某天只改一边时**运行期**才炸；{@code switch}
+     * 缺项直接编译不过。</p>
+     *
+     * <p>{@code sampledFrames} 从 core 的 {@code int} 装箱成契约的 {@code Integer}——
+     * 契约里这个字段可空（从来没有过标定时给 0 更直白，故实际恒非 null）。</p>
+     */
+    private static UwbCalibrationStatus toStatus(UwbCalibrationService.Status status) {
+        UwbCalibrationState state = switch (status.state()) {
+            case IDLE -> UwbCalibrationState.IDLE;
+            case RUNNING -> UwbCalibrationState.RUNNING;
+            case SUCCEEDED -> UwbCalibrationState.SUCCEEDED;
+            case FAILED -> UwbCalibrationState.FAILED;
+        };
+        return new UwbCalibrationStatus(state, status.progressPct(), status.sampledFrames(),
+                status.appliedAt(), status.message());
     }
 
     /**

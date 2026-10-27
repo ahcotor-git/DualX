@@ -19,11 +19,13 @@ import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.map.UwbCalibrationService;
 import com.dualx.core.plan.PlanService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
+import com.dualx.solver.config.ScdsUwbProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -131,6 +133,14 @@ class RoleWritePermissionIT {
         @Bean
         MapLedgerService mapLedgerService() {
             return stub(MapLedgerService.class);
+        }
+
+        // UWB 中心基准校准三端点（CAL-2）走核心的 UwbCalibrationService：真构造要底图台账与
+        // 链路运行态快照，而本切片已排掉 DataSource 与硬件链路。故用上面的台账替身 + 空链路快照
+        // 构造出真实例：放行的标定请求因此稳定返回 501（台账替身第一步就抛占位异常），不是 401/403。
+        @Bean
+        UwbCalibrationService uwbCalibrationService(MapLedgerService mapLedger) {
+            return new UwbCalibrationService(mapLedger, new ScdsUwbProperties(), Clock.systemUTC(), List::of);
         }
 
         // 想定 / 编成 / 模板导入已接核心 PlanService（要四个仓储，各自要 JdbcClient），
