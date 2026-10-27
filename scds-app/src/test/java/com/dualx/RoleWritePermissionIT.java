@@ -14,6 +14,7 @@ import com.dualx.api.security.JwtDecoderConfig;
 import com.dualx.api.security.SecurityConfig;
 import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
+import com.dualx.core.command.CommandService;
 import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
@@ -151,6 +152,14 @@ class RoleWritePermissionIT {
         @Bean
         SituationQuery situationQuery() {
             return stub(SituationQuery.class);
+        }
+
+        // 指挥指令已接核心的编排服务 CommandService（要三个仓储、硬件下行端口与态势读侧），
+        // 本切片已排掉 DataSource。放行的指令请求因此稳定返回 501；给替身即可，
+        // 本测试只问「授权层放不放行」。
+        @Bean
+        CommandService commandService() {
+            return stub(CommandService.class);
         }
 
         // 态势控制器已改接核心的信封组装器。组装器无状态、不碰数据库，给真实实例即可；

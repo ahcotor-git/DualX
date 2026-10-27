@@ -268,7 +268,7 @@ public class ApiExceptionHandler {
 
             // ── 台账域（M2 LEDGER）──────────────────────────────────────────────
             // 逐项按契约登记，不按前缀猜：同一前缀里既有 404（马甲不存在）又有 409（编号冲突）。
-            // 尚未落服务的码（COMMAND_*、REPLAY_*、MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
+            // 尚未落服务的码（REPLAY_*、MAP_CALIBRATION_IN_PROGRESS 等）继续走 default——
             // 落地那一刻再补进这张表，而不是现在替它们猜一个看着合理的状态。
             case DEVICE_VEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case DEVICE_VEST_NUM_CONFLICT, DEVICE_VEST_ALREADY_BOUND, DEVICE_VEST_NOT_BOUND ->
@@ -279,6 +279,19 @@ public class ApiExceptionHandler {
             // 重复开启请求，`DEVICE_LINK_SERIAL_BUSY` 是物理资源冲突（串口被本进程另一条链路持有，
             // 或打开时被系统拒绝）。前端按 code 分流，不依赖 title 文案。
             case DEVICE_LINK_ALREADY_OPEN, DEVICE_LINK_SERIAL_BUSY -> HttpStatus.CONFLICT;
+
+            // ── 指挥指令（M3 COMMAND）──────────────────────────────────────────
+            // 逐项登记，理由同上：同一前缀里两种状态。契约只在 reloadVest / reloadAllVests 的 400
+            // 上写明了 COMMAND_INVALID_WEAPON_SLOT；马甲离线与队列满在契约里是「HTTP 200 +
+            // accepted=false 的受理回执」，**不走失败路径**——这里登记它们，是为了万一从别的路径
+            // 漏出来时有一个明确的状态可排障，而不是落进 default 变成 500。
+            //
+            // 离线/阵亡取 409：「当前状态不允许这个动作」，与其它 409 同义。
+            // 队列满取 503：那是**容量**问题（稍后重试即可），不是请求内容或状态冲突；
+            // 把它当 500 会让现场把一次瞬时过载读成服务缺陷。
+            case COMMAND_INVALID_WEAPON_SLOT -> HttpStatus.BAD_REQUEST;
+            case COMMAND_VEST_OFFLINE, COMMAND_VEST_DEAD -> HttpStatus.CONFLICT;
+            case COMMAND_QUEUE_FULL -> HttpStatus.SERVICE_UNAVAILABLE;
 
             // ── 地图域（M2 MAP-BASE）────────────────────────────────────────────
             // 底图台账：查不到是 404；被想定引用/演习在用是 409

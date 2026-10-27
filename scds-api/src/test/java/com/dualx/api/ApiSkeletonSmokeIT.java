@@ -14,6 +14,7 @@ import com.dualx.api.situation.SituationController;
 import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.auth.AuthService;
 import com.dualx.core.auth.DeviceAuthService;
+import com.dualx.core.command.CommandService;
 import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
@@ -189,11 +190,21 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 单兵即时指令已接 core 的编排服务 CommandService（要三个仓储、硬件下行端口与态势读侧，
+        // 各自都要数据源），本测试不启 Spring 上下文。替身一律抛占位异常，使这五条端点在本测试里
+        // 稳定表现为 501（只证明路由注册）。编排口径（先发字节再落 SENT、链路未开即未入队、
+        // 无演习 409、编成外 404）由 scds-app 的 CommandHttpIT 端到端证明。
+        CommandService commandService = Mockito.mock(CommandService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService, vestLedgerService, situationQuery),
                         new ExerciseController(planService, lifecycle, situationQuery),
-                        new CommandController(),
+                        new CommandController(commandService),
                         new SituationController(situationEnvelopeFactory),
                         new DeviceController(vestLedgerService, anchorLedgerService, deviceLinkAdmin),
                         // standalone 不装配 Spring 上下文，ObjectMapper 只能自备：本测试里
