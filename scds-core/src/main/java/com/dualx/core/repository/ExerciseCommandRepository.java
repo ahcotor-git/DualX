@@ -78,6 +78,30 @@ public class ExerciseCommandRepository {
     }
 
     /**
+     * 已下发但超过时限仍未拿到回执的指令（{@code state='SENT' AND sent_at < :deadline}），按 id 升序。
+     *
+     * <p>与 {@link #findPending(int)}、{@link #findResidualByExerciseId(UUID)} 的区别是口径：
+     * 这里是**全局 + 时间窗**——队列只承载当前这场演习在途的指令，超时判定与场次无关，
+     * 多一层 exercise_id 过滤只会让 {@code ix_exercise_command_pending (state, queued_at)} 白建。
+     * 按 id 升序让存证日志的行序可复现，与 {@link #findResidualByExerciseId(UUID)} 同理。
+     *
+     * <p>只挑 {@code SENT}：{@code PENDING} 是「还没发出去」的语义，等的是重连而不是回执，
+     * 判它超时等于把派发层的责任推给过期扫描。
+     *
+     * @param deadline 超时下界，{@code sent_at} 早于它的行才算逾期
+     * @param limit    单拍最多挑出多少条，避免积压时把整个队列读进内存
+     */
+    public List<ExerciseCommand> findSentBefore(Instant deadline, int limit) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM t_exercise_command"
+                        + " WHERE state = :sent AND sent_at < :deadline ORDER BY id LIMIT :limit")
+                .param("sent", ExerciseCommandState.SENT.name())
+                .param("deadline", SqlTime.toDb(deadline))
+                .param("limit", limit)
+                .query(ExerciseCommandRepository::map)
+                .list();
+    }
+
+    /**
      * 下发：PENDING → SENT，同时落定下行原文（组帧在此之前完成）。
      *
      * @return 影响行数。0 表示该指令不是 PENDING（已被别的路径处理）
