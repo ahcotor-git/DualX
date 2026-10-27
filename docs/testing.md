@@ -740,6 +740,7 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 | 总计 | **1029** | **0/0/0** | 全 reactor SUCCESS |
 
 模块计数与第 14 节不同处，以本节为准（第 14 节是 T-STOP 时点的记录）。
+本节是 **MR-2 时点**的记录，模块计数已被第 16 节（MR-3）取代。
 
 ### 15.1 落地范围与口径
 
@@ -800,5 +801,88 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 都没有范围校验（`ck_plan_roster` 只覆盖 `team` / `mode` / `vest_num`），而请求体侧的 `@Max` 又会被
 「未传时取编成原值」这条路绕过；越界原值（如 hp=300）会在 14B 组帧时静默截断。`CONFIG` 也不写审计，
 故这类覆盖没有留痕。
+
+本段为**代码验收**，不是生产发布批准。
+
+## 16. M3 COMMAND 队列过期扫描（MR-3）
+
+2026-10-27 按 M3 COMMAND 工作包的最后一块实施（`docs/implementation-plan.md` 第 90 行
+「过期和审计」；决策 D11 要求区分「未入队」「已发送」「已确认」）。本节记录本段证据，
+**其模块计数与总计取代第 15 节的表**。
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 510 | 0/0/0 | 新增 `ExerciseCommandExpiryTaskIT` 6；仓储新增 `findSentBefore` |
+| api | 139 | 0/0/0 | 未改动 |
+| app | 318 | 0/0/0 | 未改动；`CommandHttpIT` 4 在 `@EnableScheduling` 真生效下仍通过 |
+| solver/domain | 0 | 无测试 | 构建成功，不证明算法数值或状态业务 |
+| 总计 | **1035** | **0/0/0** | 全 reactor SUCCESS |
+
+### 16.1 落地范围与口径
+
+**载体**：`scds-core` 的 `ExerciseCommandExpiryTask`（`@Component`），`@Scheduled(fixedDelay = 5000)`。
+它只依赖两个 core 仓储，故不必像 `CommandService` 那样把装配点挪到 `scds-app`；
+`@EnableScheduling` 仍只在唯一入口 `ScdsNextApplication` 上开启，因此它**在应用内自动跑、
+在 `scds-core` 的测试上下文里不会自己跑**（测试手工调 `tick()`），与 `ExerciseHeartbeatTask` 同一约定。
+
+**配置**：`scds.command.sent-ttl`，默认 `30s`。绑定即校验，非正时长**启动失败**——零或负的超时窗
+会把每一条刚发出的指令在下一拍就判死，而现场从配置上看不出异常。时间取 `Instant.now()` 而不注入
+`Clock`：`Clock` bean 只在 `scds-app` 的 `SituationStateConfig` 里，core 测试上下文没有它，
+依赖它会让 504 项 core 测试起不来；「超时」由测试回填 `sent_at` 制造，不需要假时钟。
+
+**扫描范围**：只 `state = 'SENT' AND sent_at < now - ttl`。`PENDING` 在本实现下**不会产生**
+（第 15.1 节的「先发字节、一次性落 `SENT`」），而它语义上是「还没发出去、等重连」，判它超时
+等于把派发层的责任挪给过期扫描。单拍最多处理 200 条；无逾期指令时只做一次查询即返回，不写库也不打日志。
+
+**动作与顺序**：先写 `SYSTEM` 存证 → 再 `markFinished(EXPIRED, REASON='SENT_TIMEOUT')` → 再
+`deleteFinished()` 清理终态行；三者同一事务（方法标了 `@Transactional`）。与收尾路径同源的理由：
+队列表不保留历史，**永久证据只有 `t_exercise_log`**，先删后记一旦失败那些字节就永久消失。把存证放在
+最前，即便进程崩在中间也只多出一条日志，不会丢证据。`fail_reason` 用 `SENT_TIMEOUT`，与自愈的
+`INSTANCE_RESTART` 并列，现场可据此区分「进程重启丢的」与「发下去没有回音」。
+
+**与停演收尾的分工**：收尾走 `markExpiredByExerciseId` + `deleteByExerciseId`（**按场次**，失败原因
+`INSTANCE_RESTART`）；本任务走 `markFinished` + `deleteFinished`（**全局 + 时间窗**）。两者守卫同源
+（`state IN (PENDING, SENT)`），并发时 `markFinished` 返回 0 只是「这一条已被别的路径推进过」，
+不当作故障，也不影响存证（证据由推进它的那条路径负责）。
+
+### 16.2 用例判据（`ExerciseCommandExpiryTaskIT`，core，6）
+
+测试上下文不带 `@EnableScheduling`，任务不会自己跑，故先断言「没调 `tick()` 就没动」，再手工驱动一拍。
+「超时」靠回填 `sent_at` 制造，不依赖真实等待。全类跑在测试事务里，断言一律限定到本用例新生成的
+`exerciseId`，全库性的 `deleteFinished()` 随事务回滚。
+
+1. `defaultTtl_isThirtySeconds`——`scds.command.sent-ttl` 的默认绑定确为 30s。
+2. `tick_expiresOverdueSentCommandAndLeavesSystemEvidence`——60s 前下发的 `SENT` 行被判死：
+   队列行消失，且恰有一条 `SYSTEM` 存证，其 `vestNum` 为原马甲号、`operatorName` 为 NULL、
+   `downlinkHex` 等于下发原文、`detail` 含队列主键 / 指令名 / 马甲号 / `原状态SENT` / `SENT_TIMEOUT`。
+3. `tick_leavesFreshSentCommandInFlight`——5s 前下发的行仍在 `SENT` 且无存证（超时窗 30s 够不到它）。
+4. `tick_leavesPendingCommandsAlone`——10 分钟前入队的 `PENDING` 行不动、无存证；
+   判据是「只扫 `SENT`」，与「入队时间有多老」无关。
+5. `tick_onlyTouchesTheOverdueRowsAndKeepsTheRestOfTheQueue`——120s 前的逾期行与 5s 前的新鲜行
+   分属两场演习，只有前者被处理，后者的场次无存证。
+6. `tick_isIdempotentAcrossTicks`——连跑两拍只有一条存证：第一拍已把它作废并清出队列，第二拍扫不到它。
+
+### 16.3 边界
+
+**「行消失」是 EXPIRED 的间接证据**：`deleteFinished()` 只删终态（`ACKED` / `FAILED` / `EXPIRED`），
+`PENDING` / `SENT` 一律保留；本段没有任何路径会把 `SENT` 改成 `ACKED`，故「原来是 `SENT` 的行现在
+查不到」只可能是已被本任务作废。这条推理依赖 `deleteFinished()` 的守卫不自相矛盾，用例 4 从反面
+（`PENDING` 不动）做了对照。
+
+本任务在 `scds-app` 的所有 IT 里都会随 `@EnableScheduling` **自动运行**。`CommandHttpIT` 的下行断言
+在发出后数秒内完成，30s 的超时窗够不到它，回归已通过。`deleteFinished()` 是**全库口径**，会顺带清掉
+别处的终态行——队列本就是瞬态表（见 `ExerciseCommandRepository` 类注释「队列是瞬态的」），
+历史由 `t_exercise_log` 承载。
+
+**不做「等回执」**：协议没有回执帧，`ACKED` 至今无人写入（`markAcked` 保留备用），因此本任务的超时是
+**队列卫生**语义，不是「真的在等某个 ACK」。现场若要解释「指令为什么变成 EXPIRED」，答案应当是
+「发出去后没有回音，按 TTL 收口」，而不是「确认超时」。
+
+`move`（手动置位）、`getVestLink`、M3 CALIBRATION、M5 EXPORT 仍 501，与本段无关。
 
 本段为**代码验收**，不是生产发布批准。

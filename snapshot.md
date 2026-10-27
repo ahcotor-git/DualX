@@ -1,9 +1,9 @@
 # scds-next 交接快照
 
 > 更新：2026-10-27，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M3 COMMAND（MR-1 五条单兵即时指令 + MR-2 全体充弹与覆盖配置）已完成并本地提交**；
-> 最新全量 `mvn test` **1029 项，失败/错误/跳过均 0**（见 testing 第 15 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~15 节冲突处，以该处为准。
+> 当前任务：**M3 COMMAND MR-1（五条单兵即时指令）+ MR-2（全体充弹与覆盖配置）+ MR-3（队列过期扫描）
+> 已完成并本地提交**；最新全量 `mvn test` **1035 项，失败/错误/跳过均 0**（见 testing 第 15、16 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~16 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -13,18 +13,18 @@
 [测试](docs/testing.md)和[下一对话提示词](docs/next-chat-prompt.md)。
 HTTP/WS唯一契约入口是 [openapi.yaml](docs/api/openapi.yaml)。
 
-已完成的里程碑（逐项证据在 testing 第 7~15 节）：SEC-01 / SEC-02 / ERR-01、TEST-01（隔离库 +
+已完成的里程碑（逐项证据在 testing 第 7~16 节）：SEC-01 / SEC-02 / ERR-01、TEST-01（隔离库 +
 完整应用启动）、AUTH-HTTP / DEVICE-AUTH / AUTH-HARDEN、M2 LEDGER（台账/基站/绑定闭环）、
 M2 PLAN（想定与编成、导入导出）、M2 MAP-BASE（底图 CRUD / 图片 / 楼层点位）、
 M3 LIFE（开停演与恢复门禁、单实例保护）、M3 STATE（态势状态机与读侧）、
 M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停机释放链路），
-以及 **M3 COMMAND MR-1 + MR-2**。
+以及 **M3 COMMAND MR-1 + MR-2 + MR-3**。
 
-下一原子任务的候选（详见 testing 第 15.3 节与第 3 节矩阵）：COMMAND 剩余的
-`move`（等地图置位写入口）与队列过期扫描；M3 CALIBRATION（UWB 标定，仍 501）；
+下一原子任务的候选（详见 testing 第 16.3 节与第 3 节矩阵）：COMMAND 剩余的
+`move`（等地图置位写入口）；M3 CALIBRATION（UWB 标定，仍 501）；
 M5 EXPORT（replay 导出，仍 501）；`getVestLink` 仍 501；Flutter 客户端（Android 单兵端 /
 Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不照搬本快照的瞬时结论。
-提交/推送仍须当次授权；本轮 4 个提交已入远端（见第 2 节），网络失败时不得写成已入远端。
+提交/推送仍须当次授权；含 MR-3 在内的本轮提交推送状态见第 2 节，网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
 
@@ -53,7 +53,10 @@ MVC统一Problem及真实Boot共存回归；核心IT独立库、初始化前门�
 `AnchorLedgerService`（基站 list/upsert，bs1~4 必开）、`DeviceController` 台账/基站接线、
 `SecurityConfig` 绑定路径 ADMIN 规则。
 
-未完成：COMMAND 的 `move`（手动置位，等地图置位写入口）与队列过期扫描；`getVestLink` 仍 501；
+新增已完成（**M3 COMMAND MR-3**）：`ExerciseCommandExpiryTask`（core `@Component`，
+`scds.command.sent-ttl` 默认 30s、`@Scheduled` 5s 一拍，只扫 `SENT` 且按 `sent_at` 判超时，
+写 `SYSTEM` 存证后作废并清终态行）与仓储 `findSentBefore`。
+未完成：COMMAND 的 `move`（手动置位，等地图置位写入口）；`getVestLink` 仍 501；
 M3 CALIBRATION（UWB 标定）与 M5 EXPORT（replay 导出）仍 501；
 replay / file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
@@ -65,9 +68,10 @@ Flyway文件V1-V7、V9-V10，共9份；18张业务表，另有Flyway历史表。
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn test`：2026-10-27，**1029项，失败/错误/跳过均0**：
-protocol19 + gateway49 + core504 + api139 + app318（solver/domain无测试）。
-本段新增证据为 `CommandHttpIT` 4 例（MR-1 两例 + MR-2 两例），详见 testing 第 15 节。
+**当前**全量`mvn test`：2026-10-27，**1035项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core510 + api139 + app318（solver/domain无测试）。
+本段新增证据为 `ExerciseCommandExpiryTaskIT` 6 例（MR-3），详见 testing 第 16 节；
+MR-1/MR-2 的证据是 `CommandHttpIT` 4 例，详见 testing 第 15 节。
 
 当时`mvn clean verify`：2026-10-21 18:48:41 +08:00，
 **681项，失败/错误/跳过均0**：protocol19 + core281 + api100 + app281。
@@ -141,6 +145,13 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 覆盖配置未传字段取**本场想定编成**原值、不写审计（协议 LogType 无 CONFIG）；
 `t_plan_roster` 的 hp/ammo 范围校验**单列任务**，本次不拦。
 
+2026-10-27新增已确认（M3 COMMAND MR-3 队列过期扫描，见 testing 第 16 节）：
+超时窗 `scds.command.sent-ttl` 默认 **30s**、扫描周期 **5s**；只扫 `state='SENT'`（`PENDING` 在本实现下
+不产生，是「等重连」的派发语义，不判超时）；顺序为**先写 SYSTEM 存证 → 再作废 EXPIRED
+（`fail_reason='SENT_TIMEOUT'`）→ 再 `deleteFinished()` 清终态行**，同一事务；
+载体为 core `@Component` + `Instant.now()`（不注入 `Clock`，否则 core 测试上下文起不来）；
+超时是**队列卫生**语义而非「等回执」（协议无回执帧，`ACKED` 仍无人写入）。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -175,7 +186,7 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：COMMAND（MR-1/MR-2）详见 testing 第 15 节；T-STOP 详见第 14 节；
+最新证据：COMMAND MR-3 详见 testing 第 16 节、MR-1/MR-2 详见第 15 节；T-STOP 详见第 14 节；
 DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1029 项测试、COMMAND MR-1/MR-2 交付与下一任务候选，
+本快照已同步 1035 项测试、COMMAND MR-1/MR-2/MR-3 交付与下一任务候选，
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND。
