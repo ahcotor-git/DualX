@@ -894,7 +894,7 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 `docs/design/06-state.md` §4.6「CAL-1 落地补充」、§7 判据）。CALIBRATION 拆为
 **CAL-1（解算链路）** 与 **CAL-2（标定本体）** 两段，CAL-1 再拆三步：
 CAL-1a 解算器与单测 → CAL-1b 装配接线 → CAL-1c app 端到端。本节记录三段合起来的证据，
-**其模块计数与总计取代第 16 节的表**；CAL-2 尚未开工。
+**其模块计数与总计取代第 16 节的表**；CAL-2 已在本节之后交付，见第 18 节。
 
 命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
 IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
@@ -965,7 +965,112 @@ app（`SituationStateIT`，2）：
 **在线态不受影响**：本段不引入新的在线判定，仍只由心跳驱动（5000ms），UWB 帧不刷新
 `lastHeartbeatAt`；因此「只有 UWB、没有心跳」的马甲不会被判在线——这是既有口径，非本轮回归。
 
-**CAL-2 仍未完成**：三个标定端点去 501、进程内标定状态机、`V11` 校准列、现场实测长宽覆盖
-写回 `uwb_meta`。`move`（手动置位）、`getVestLink`、M5 EXPORT 仍 501，与本段无关。
+**CAL-2 已收口**：三个标定端点去 501、进程内标定状态机、`V11` 校准列、现场实测长宽覆盖
+写回 `uwb_meta` 均已交付，证据见第 18 节。`move`（手动置位）、`getVestLink`、M5 EXPORT 仍 501，
+与本段无关。
 
 本段为**代码验收**，不是生产发布批准；UWB 盒子经 12001 的连续坐标、容量与长稳属现场待验收。
+
+## 18. M3 CAL-2 UWB 中心基准校准（标定本体）
+
+2026-10-27 按 `docs/implementation-plan.md` 第 91 行的 CALIBRATION 工作包实施，是把
+MAP-BASE 分段 E 时期留下的**三端点 501** 收口的那一段。按用户裁定拆三步：
+CAL-2a core 状态机 + 单测 → CAL-2b 端点接线 → CAL-2c `V11` 校准列 + app 端到端 + 文档回写。
+本节记录三步合起来的证据，**其模块计数与总计取代第 17 节的表**。
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动（协议字节、成帧规则一字未动） |
+| gateway | 49 | 0/0/0 | 未改动（`UwbTcpServerLink` 的 41B 帧通路已由 CAL-1 接出） |
+| core | 548 | 0/0/0 | CAL-2a 新增 `UwbCalibrationServiceTest` 18；CAL-2c 新增 `BaseMapRepositoryIT` 2（`markCalibrated` 与「清标定不回头改实测值」） |
+| api | 139 | 0/0/0 | 未改动 |
+| app | 322 | 0/0/0 | CAL-2b 新增 `MapBaseHttpIT.uwbCalibrationEndpointsOverRealHttp`；CAL-2c 新增 `SituationStateIT.uwbCalibrationWritesTapeMeasuresBackThroughTheWriterThread` |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1077** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+### 18.1 落地范围与口径
+
+**CAL-2a（`UwbCalibrationService`，`scds-core`）**：进程内标定状态机（`IDLE` / `RUNNING` /
+`SUCCEEDED` / `FAILED`），**不落库**——标定状态是运行态，重启即丢；正因如此，「标定时刻」才必须
+落库（CAL-2c 的 `calibrated_at`）才有可查证据。`start/status/clear/onFrame` 四个入口，采样在
+`onFrame` 里累计；`finish` 用逐角**中位数**做静止一致性校验（`calibStaticMaxDiffCm`，默认 50.0mm），
+再用请求里的卷尺实测值**覆盖**写回 `realLengthCm/realWidthCm`。**采样只承担一致性校验，不反推几何**：
+现场量出来的才是真相，UWB 只是用来确认「这个马甲刚才没动」。
+
+**判据顺序固定**（`start`，一处判完）：`uwb_meta` 缺四角 → 404 `MAP_NOT_CALIBRATED`；帧数非正 →
+400 `VALIDATION_FAILED`；两个实测值都缺 → 400 `MAP_UWB_META_INCOMPLETE`；实测值非正整数厘米 → 400；
+**UWB 链路未开 → 409 `DEVICE_LINK_NOT_OPEN`**；已有进行中的标定 → 409 `MAP_CALIBRATION_IN_PROGRESS`。
+「至少要一个实测值」刻意排在「链路未开」之前：前者是**请求自身的合法性**，不该被设备的当前状态掩盖。
+`uwbLinkOpen()` 只认 `LinkState.OPEN`（`OPENING` 不算「已开」）。
+
+**CAL-2b（端点接线）**：`MapController` 三端点去 501 —— `POST`（202 受理，响应体是**受理时刻**
+的快照，采样仍在写手线程上跑）、`GET`（200，从未标定回 `IDLE` 而非 404：这里「还没开始标定」
+是正常状态，与 `getUwbMeta` 的「缺四角骨架 = 缺资源」不同）、`DELETE`（204，**兼作取消**，
+正在跑的那次一并丢弃）。新增错误码 `DEVICE_LINK_NOT_OPEN` 按纪律**先登记 openapi 的
+`Problem.code` 描述、再回 `ApiErrorCode` 补枚举**，并由 `ApiExceptionHandler` 的「一码一状态」表
+映射到 409。`/api/v1/maps/*/uwb-calibration` 的 `POST`/`DELETE` 归 `ADMIN`/`DIRECTOR`。
+
+**CAL-2c（V11 + 端到端）**：新增迁移 `V11__map_calibration.sql`，只给 `t_map` 加一列
+`calibrated_at DATETIME(3) NULL`（UTC 挂钟值，NULL = 从未标定）。版本号取 **V11** 而非预留的 V8：
+V9/V10 已应用、V8 从未创建，直接补 V8 会成为低于当前版本的未应用迁移并受 Flyway 校验/顺序限制；
+**不改任何历史迁移、不开启 out-of-order**（同 V10 口径）。`calibrated_at` 只在
+`MapLedgerService.saveUwbMeta` 一处前进（手工 `putUwbMeta` 与标定回写都汇到这里），
+因此「`uwb_meta` 齐备 ⟺ `calibrated_at` 非空」；改名、换图型**不刷新**它。该列**刻意不进**
+`BaseMapRepository.COLUMNS`、不落到 `BaseMap` 上，所以「有没有落库」只能直查表。
+
+**采样入口挂在唯一写手线程**：`SituationStateService.applyUwb` 里 `calibration.onFrame(...)`
+**刻意早于**编成判定（`units.get` 早退）——标定发生在**开演之前**，布场阶段还没有编成，
+若放在编成判定之后，标定将永远采不到帧。
+
+### 18.2 用例判据
+
+core（`UwbCalibrationServiceTest` 18 / `BaseMapRepositoryIT` 11，其中 CAL-2c 新增 2）覆盖状态机语义：
+未标定几何即拒、帧数非正即拒、两个实测值都缺即拒、非正整数厘米即拒、链路未开 409、重复开标定 409、
+采满转 `SUCCEEDED` 且 `progressPct=100`、静止超阈值转 `FAILED`（逐角中位数口径）、
+写回失败折叠成 `FAILED` 而**不抛出**（采样在写手线程上，抛出去会打断整条态势流水线）、
+`clear` 兼作取消；仓储侧 `markCalibrated` 写时刻、清标定**不**回头改实测值。
+
+app：
+
+1. `MapBaseHttpIT.uwbCalibrationEndpointsOverRealHttp`（HTTP 形状，真生产入口 + 真安全链）——
+   无四角时 `POST` → 404 `MAP_NOT_CALIBRATED`；`GET` → 200 `IDLE`/`sampledFrames=0`/`appliedAt` null；
+   `PUT uwb-meta` 后 `POST` → 409 `DEVICE_LINK_NOT_OPEN`（默认 `gateway.mode=real` 且未手动开链路），
+   复查状态仍是 `IDLE`（失败不留痕）；`DELETE` → 204。请求体 helper 必须带一个卷尺实测值
+   （见 18.3）。
+2. `SituationStateIT.uwbCalibrationWritesTapeMeasuresBackThroughTheWriterThread`（成功路径端到端）——
+   真装配 + 真库底图 + 真成帧器：先 `endExercise()` 证明**标定不必先开演**，自拼 41B 帧经
+   `links.injectUwb` 连投 3 帧，断言采满转 `SUCCEEDED`、`progressPct=100`、`appliedAt` 非空；
+   再回查 `uwb_meta` —— 卷尺实测长度**覆盖**成 2450（与底图自带的 3000 刻意不同，写回才可辨）、
+   未提供的维保持 1800、四角几何 `bs1.xPx` 不被改写；最后直查 `t_map.calibrated_at` 非空。
+   日志实证采样确实走在唯一写手线程上（线程名 `[ds-state-writer]`，`UWB 标定完成：… 采样帧数=3`）。
+
+### 18.3 边界与不变式
+
+**HTTP 用例的请求体必须带卷尺实测值**：`start` 的判据顺序是「先查至少一个实测值（400
+`MAP_UWB_META_INCOMPLETE`），再查链路（409 `DEVICE_LINK_NOT_OPEN`）」。若请求体只给
+`sampleFrames`，用例会先拿到 400、走不到那条 409 —— 那就测错了分支。
+
+**同时更新两处迁移清单守卫**（`TestDatabaseGuardTest.allExistingMigrationsAppliedWithoutChangingHistory`
+与 `ApplicationStartupIT` 的同名断言）：这两条断言的是「已应用的迁移版本序列**完全等于**一份字面清单」，
+本就是用来拦「历史迁移被偷偷改写」的，因此新增 V11 后必须同步 `"11"`。表数量断言（19）不变——
+V11 只加列不加表。
+
+**契约字段名与语义错位（留档不改）**：`UwbCalibrationRequest.bs1ToBs3Cm` 字面是「bs1→bs3」，
+而 bs1→bs3 是**对角线**；契约把它描述为「现场卷尺实测**宽度**」。按裁定**保留字段名不动**
+（改字段名要动冻结契约与两个客户端），语义以描述为准 = `realWidthCm`（宽度基准 bs1↔bs4）。
+详见 [决策清单](decision-register.md)「CAL-2 口径」。
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、成帧与校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不开启 out-of-order。
+
+**在线态不受影响**：本段不引入新的在线判定，仍只由心跳驱动（5000ms）。
+
+本段为**代码验收**，不是生产发布批准。现场待验收项（连同本段一起挂起）：
+`calibrated_at` 的可读性、UWB 盒子经 12001 的静止一致性阈值（50mm）是否适配现场噪声，
+以及**底图四角编号须按 `bs1` 左下 → `bs2` 右下 → `bs3` 右上 → `bs4` 左上录入**，
+即 `bs4` 必须与 `bs1` 构成宽度基准（`bs1→bs4`）、`bs2` 与 `bs1` 构成长度基准（`bs1→bs2`），
+两基准近似正交——标定回写的 `realWidthCm` 对应的正是 `bs1↔bs4` 这条边，编号错了宽度就落错边。

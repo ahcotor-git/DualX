@@ -1,9 +1,10 @@
 # scds-next 交接快照
 
 > 更新：2026-10-27，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M3 CAL-1 UWB 室内解算链路（解算器 + 装配接线 + app 端到端）已完成并本地提交**；
-> 最新全量 `mvn test` **1055 项，失败/错误/跳过均 0**（见 testing 第 15、16、17 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~17 节冲突处，以该处为准。
+> 当前任务：**M3 CAL-2 UWB 中心基准校准（标定本体）已写完代码与测试，全量 `mvn test` 1077 项全绿；
+> 工作树中含 CAL-2c 改动，尚未提交**。
+> 最新全量 `mvn test` **1077 项，失败/错误/跳过均 0**（见 testing 第 15~18 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~18 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -13,29 +14,29 @@
 [测试](docs/testing.md)和[下一对话提示词](docs/next-chat-prompt.md)。
 HTTP/WS唯一契约入口是 [openapi.yaml](docs/api/openapi.yaml)。
 
-已完成的里程碑（逐项证据在 testing 第 7~17 节）：SEC-01 / SEC-02 / ERR-01、TEST-01（隔离库 +
+已完成的里程碑（逐项证据在 testing 第 7~18 节）：SEC-01 / SEC-02 / ERR-01、TEST-01（隔离库 +
 完整应用启动）、AUTH-HTTP / DEVICE-AUTH / AUTH-HARDEN、M2 LEDGER（台账/基站/绑定闭环）、
 M2 PLAN（想定与编成、导入导出）、M2 MAP-BASE（底图 CRUD / 图片 / 楼层点位）、
 M3 LIFE（开停演与恢复门禁、单实例保护）、M3 STATE（态势状态机与读侧）、
-M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停机释放链路），
-**M3 COMMAND MR-1 + MR-2 + MR-3**，以及 **M3 CAL-1（UWB 室内解算链路：CAL-1a 解算器 /
-CAL-1b 装配接线 / CAL-1c app 端到端）**。
+M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停机释放链路）、
+**M3 COMMAND MR-1 + MR-2 + MR-3**、**M3 CAL-1（UWB 室内解算链路）**，以及
+**M3 CAL-2（UWB 中心基准校准：CAL-2a 状态机 / CAL-2b 端点接线 / CAL-2c V11 + 端到端）**。
 
-下一原子任务的候选（详见 testing 第 17 节与第 3 节矩阵）：M3 **CAL-2**（UWB 标定本体：
-三端点去 501、进程内状态机、`V11` 校准列、现场实测长宽覆盖写回 `uwb_meta`）；COMMAND 剩余的
-`move`（等地图置位写入口）；M5 EXPORT（replay 导出，仍 501）；`getVestLink` 仍 501；Flutter 客户端
-（Android 单兵端 / Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不照搬本快照的瞬时结论。
-提交/推送仍须当次授权；含 CAL-1c 在内的本轮提交推送状态见第 2 节，网络失败时不得写成已入远端。
+下一原子任务的候选（详见 testing 第 18 节与第 3 节矩阵）：COMMAND 剩余的 `move`（等地图置位
+写入口）；M5 EXPORT（replay 导出，仍 501）；`getVestLink` 仍 501；CAL-2 的**现场验收**
+（`calibrated_at` 可读性、50mm 静止阈值是否适配现场噪声）；Flutter 客户端（Android 单兵端 /
+Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不照搬本快照的瞬时结论。
+提交/推送仍须当次授权；含 CAL-2c 在内的本轮改动仍在工作树、未提交，网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源代码HEAD | 上一步 `ce2b33d` 已入远端 `main`；本轮 CAL-1c 的 test + docs 两个提交随后补推 |
-| 实际远端main | 本次提交前与本地 HEAD `ce2b33d` 一致；前几次 `git push` 曾因 443 连接被重置/超时失败，改用 `git -c http.version=HTTP/1.1 push` 后成功 |
-| 已推送 | `78ce05e`（feat 室内解算 IndoorPositionResolver）、`05563a7`（docs 四角编号更正为 bs1↔bs4）、`0c80727`（feat 41B 帧解算接入态势写侧）、`eda1b1a`（docs CAL-1 口径回写）、`ce2b33d`（docs CAL-1 推送状态与里程碑） |
-| 本轮继续成果 | 工作树含 CAL-1c 改动：`scds-app/.../SituationStateIT.java`（+2 用例）+ `docs/testing.md`（第 17 节）；合入 CAL-1c 后全量 1055 项全绿 |
+| 源代码HEAD | `07ce6cc`（CAL-2b 第二笔）已入远端 `main` |
+| 实际远端main | 与本地 HEAD `07ce6cc` 一致；前几次 `git push` 曾因 443 连接被重置/超时失败，改用 `git -c http.version=HTTP/1.1 push` 后成功 |
+| 已推送 | `880ae1b`（feat 标定状态机）、`15334f1`（feat 采样接入写手线程）、`6a3da21`（feat 链路未开拒绝码）、`07ce6cc`（feat 标定三端点接线），以及更早的 CAL-1 系列与 MR-1~MR-3 |
+| 本轮继续成果 | **工作树含 CAL-2c 改动，尚未提交**：`V11__map_calibration.sql`（新增）+ `BaseMapRepository` / `MapLedgerService` / `TestCoreApplication` / `BaseMapRepositoryIT`（core）+ `MapBaseHttpIT` / `SituationStateIT` / `ApplicationStartupIT`（app）+ `decision-register.md` / `design/05-hw-link.md` / `design/06-state.md` / `testing.md`（docs）；全量 `mvn test` 1077 项全绿 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -66,24 +67,33 @@ MVC统一Problem及真实Boot共存回归；核心IT独立库、初始化前门�
 CAL-1c 在 `scds-app` 的 `SituationStateIT` 以真 Spring 装配 + 真库底图 + 真 `UwbFramer` 新增 2 例：
 可解几何下解算写入整图 `INDOOR` 坐标 / `positionSource=UWB` / `signalQuality=4`；
 无底图时只进「无解」计数、不臆造坐标（该帧按冻结成帧规则自拼，理由见 testing 第 17.3 节）。
+新增已完成（**M3 CAL-2 UWB 中心基准校准**，分三步：CAL-2a 状态机 / CAL-2b 端点接线 / CAL-2c V11+端到端）：
+`UwbCalibrationService`（core 进程内状态机 `IDLE/RUNNING/SUCCEEDED/FAILED`，`start/status/clear/onFrame`；
+`finish` 用逐角中位数做静止一致性校验后，以请求里的**卷尺实测值覆盖**写回 `realLengthCm/realWidthCm`——
+采样只做一致性校验、不反推几何）；`MapController` 三端点去 501（`POST` 202 / `GET` 200 / `DELETE` 204，
+`DELETE` 兼作取消）；新增错误码 `DEVICE_LINK_NOT_OPEN`（409）；迁移 `V11__map_calibration.sql` 给
+`t_map` 加 `calibrated_at DATETIME(3) NULL`，由 `MapLedgerService.saveUwbMeta` 与 `uwb_meta`
+同一次写入落库；`SituationStateService.applyUwb` 里 `calibration.onFrame` **刻意早于**编成判定，
+使标定能在**开演之前**采到帧。
 未完成：COMMAND 的 `move`（手动置位，等地图置位写入口）；`getVestLink` 仍 501；
-M3 **CAL-2**（UWB 标定本体：三端点去 501、`V11` 校准列、现场实测长宽覆盖写回 `uwb_meta`）与
 M5 EXPORT（replay 导出）仍 501；
 replay / file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
 
 实际版本为Java21、Spring Boot **3.5.7**、MySQL本机8.4.11；
 以pom和当前代码为准，不沿用历史记忆里的Boot3.3.5。
-Flyway文件V1-V7、V9-V10，共9份；18张业务表，另有Flyway历史表。
-原预留V8自愈迁移未创建，而本地已应用V9；V10为演习存活/自愈迁移。
+Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表。
+原预留V8自愈迁移未创建，而本地已应用V9；V10为演习存活/自愈迁移，V11为底图标定时刻列。
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn test`：2026-10-27，**1055项，失败/错误/跳过均0**：
-protocol19 + gateway49 + core528 + api139 + app320（solver/domain无测试）。
-本段新增证据为 CAL-1（解算链路）共 3 段：core `IndoorPositionResolverTest` 12 +
-`SituationStateServiceTest` +4 + `SituationSessionBinderTest` +2（CAL-1a/1b），
-app `SituationStateIT` +2（CAL-1c，真装配 + 真库底图 + 真 `UwbFramer` 端到端），详见 testing 第 17 节；
+**当前**全量`mvn test`：2026-10-27，**1077项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core548 + api139 + app322（solver/domain无测试）。
+本段新增证据为 CAL-2（标定本体）共 3 段：core `UwbCalibrationServiceTest` 18 +
+`BaseMapRepositoryIT` +2（CAL-2a/2c），app `MapBaseHttpIT` +1 与 `SituationStateIT` +1
+（CAL-2b/2c，真装配 + 真库底图 + 真成帧器端到端），详见 testing 第 18 节；
+CAL-1 的证据见第 17 节（core `IndoorPositionResolverTest` 12 + `SituationStateServiceTest` +4 +
+`SituationSessionBinderTest` +2，app `SituationStateIT` +2）；
 MR-3 的证据是 `ExerciseCommandExpiryTaskIT` 6 例，详见 testing 第 16 节；
 MR-1/MR-2 的证据是 `CommandHttpIT` 4 例，详见 testing 第 15 节。
 
@@ -107,7 +117,7 @@ API骨架使用standalone且只断言非404，不能证明真实Security或业�
 | R05 | signing=false时无token账号login返回401，目标404 |
 | R06 | 设备登录已按 D02 接线为**边缘本地签发**；只验签实例上该端点仍注册并抛500，是否改为条件注册属独立决策 |
 | R07 | **已闭合**：DeviceAuthService、SID单端在线与换绑清SID已实现；`device/me` 已接线，见 testing 第 13 节 |
-| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线；仅 `move`、`getVestLink`、UWB 标定与 replay 导出仍 501 |
+| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线（UWB 标定三端点已于 CAL-2 接线）；仅 `move`、`getVestLink` 与 replay 导出仍 501 |
 
 R05 仍未修复；R06 的只验签分支待决策。R23数据库隔离子任务已完成；
 R18-R28其他风险仍待对应工作包验证。
@@ -135,7 +145,7 @@ SCDS_TEST_MYSQL_USER、SCDS_TEST_MYSQL_PASSWORD。
 初始化前门禁拒绝误连、连接覆盖及危险Flyway模式；不允许指向生产。
 AuthServiceIT仍真实提交、按自身UUID清理；多数仓储IT回滚。
 测试库默认保留，Initialize-TestDatabase.ps1仅首次运行，已有库/账号/文件均拒绝覆盖。
-空库已迁移V1-V7/V9/V10，两库校验和一致；开发与测试account/refresh/exercise均0。
+空库已迁移V1-V7/V9-V11，两库校验和一致；开发与测试account/refresh/exercise均0。
 
 ## 6. 已确认与待确认
 
@@ -165,6 +175,16 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 （`fail_reason='SENT_TIMEOUT'`）→ 再 `deleteFinished()` 清终态行**，同一事务；
 载体为 core `@Component` + `Instant.now()`（不注入 `Clock`，否则 core 测试上下文起不来）；
 超时是**队列卫生**语义而非「等回执」（协议无回执帧，`ACKED` 仍无人写入）。
+
+2026-10-27新增已确认（M3 CAL-2 标定本体，见 testing 第 18 节）：
+标定结果**覆盖写回** `uwb_meta` 的 `realLengthCm/realWidthCm`，并以请求里的**卷尺实测值**为准，
+采样只做静止一致性校验、不反推几何（阈值 `calibStaticMaxDiffCm` 默认 50.0mm，逐角中位数口径）；
+新增迁移 **V11** 给 `t_map` 加一列 `calibrated_at`（**取 V11 而非预留的 V8**：V9/V10 已应用、V8 从未创建，
+补 V8 会受 Flyway 校验/顺序限制；不改历史迁移、不开 out-of-order），
+标定的**内容与时刻由 `saveUwbMeta` 一次写入产生**；标定状态是**进程内**的（重启即丢）；
+`start` 判据顺序固定为「几何 → 帧数 → 至少一个实测值 → 正整数 → 链路未开 409 → 进行中 409」；
+新增错误码 `DEVICE_LINK_NOT_OPEN`（409，只认 `LinkState.OPEN`）；
+`UwbCalibrationRequest.bs1ToBs3Cm` **保留契约字段名**（字面 bs1→bs3 是对角线），语义按描述解释为**宽度**。
 
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
@@ -200,7 +220,8 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：M3 CAL-1（含 CAL-1c）详见 testing 第 17 节；COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
+最新证据：M3 CAL-2（标定本体，含 CAL-2c）详见 testing 第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
+COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1055 项测试、M3 CAL-1 交付与下一任务候选（CAL-2），
-不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1。
+本快照已同步 1077 项测试、M3 CAL-2 交付（代码与文档已就位、待授权提交）与下一任务候选（`move` / EXPORT / Flutter），
+不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。

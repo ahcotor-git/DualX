@@ -76,7 +76,9 @@ app 装配的是显式日志型 sink（[LoggingHardwareEventSink](../../scds-app
 - 不做 COMMAND（8 类指令的下行与回执状态机）——本包只**消费**指令造成的状态后果（判活解除冻结等由 COMMAND 下发、STATE 记账）。
 - 不做 CALIBRATION 的**标定本体**（三端点、现场实测长宽覆盖写回 `uwb_meta`，属 CAL-2）、REPLAY、EXPORT。
   其中 UWB **解算链路**已作为 CAL-1 前置落地：41B 帧经 `IndoorPositionResolver` 解成整图百分比坐标写入态势
-  （见 §4.6 开演装载）。
+  （见 §4.6 开演装载）。**CAL-2 已补上标定本体**：`applyUwb` 在编成判定**之前**就把帧喂给
+  `UwbCalibrationService`，因此标定能在**开演之前**采样（标定发生在布场阶段，此时还没有编成）；
+  标定只按卷尺实测值覆盖写回 `realLengthCm/realWidthCm`，不改四角像素几何，采样只做静止一致性校验。
 - 不改协议字节、端口、轮询周期、5000ms 窗口与解算参数。
 - 不做容量结论（D10 未闭合，见 §4.7）。
 

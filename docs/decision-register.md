@@ -295,9 +295,12 @@ D09 与 D15 的剩余实现细节（签名 URL 的 `exp` 精度与时钟偏移�
   严格反解仍在 `scds-solver` 的 `Geometry` 里（那里才需要它），保存侧只拦结构性与边界性错误。
 - **`replaceFloorPoints` 是单楼层替换**（路径里带 `floorNum`），不是整图替换：
   仓储层补单楼层 upsert，不再借 `replaceByMapId` 的「先删全图再插」。
-- **UWB 校准三端点（`startUwbCalibration` / `getUwbCalibration` / `clearUwbCalibration`）继续 501**：
+- **UWB 校准三端点（`startUwbCalibration` / `getUwbCalibration` / `clearUwbCalibration`）当时继续 501**：
   `scds-gateway` 无 Java 源码，没有可注入的采样端口；库内也没有校准状态表（迁移 V1~V9），
   无法真实实现。`MAP_CALIBRATION_IN_PROGRESS` 与 `MAP_IMAGE_MISSING` 因此**不预登记**到状态表。
+  ——**本条已被 CAL-2 取代（2026-10-27）**：CAL-1 先补齐网关侧的 UWB 采样端口与解算链路，
+  CAL-2 再把三端点接到进程内标定状态机，`MAP_CALIBRATION_IN_PROGRESS` / `MAP_IMAGE_MISSING` 以及
+  新增的 `DEVICE_LINK_NOT_OPEN` 均已登记到状态表；细节见文末「CAL-2 口径」。
 
 ### MAP-BASE 分段 F 口径（2026-10-21/22，图片落盘 + 签名文件下载）
 
@@ -1057,5 +1060,45 @@ L4b 让 `ExerciseController` 依赖 `ExerciseLifecycleService` + `SituationQuery
 
 **阻塞面**：M4 PUSH-MODEL 的「Poll 查询 + 链路同构」与 M4 PUSH-WS 的「首帧屏障 / 补齐 / 超窗 / 跨代
 恢复」现已可依本口径开工。
+
+### CAL-2 口径（2026-10-27，UWB 中心基准校准）
+
+CAL-1（解算链路）交付后开工的**标定本体**，把 MAP-BASE 分段 E 时期留下的三端点 501 收口。
+用户逐项裁定（均取推荐口径）：
+
+| 项 | 裁定 |
+|---|---|
+| 标定结果写到哪 | **覆盖写回 `uwb_meta`**（`realLengthCm` / `realWidthCm`），并**新增迁移 V11** 给 `t_map` 加一列 `calibrated_at` |
+| 采样的作用 | **以请求里的卷尺实测值为准**；采样只做**静止一致性校验**，不反推几何 |
+| 契约字段名与语义错位（`bs1ToBs3Cm` 实际是「宽度」） | **保留契约字段名**，语义按契约描述解释为宽度（`realWidthCm`） |
+| 「链路没开就想标定」的回码 | **新增 `DEVICE_LINK_NOT_OPEN`（409）** |
+| 状态机位置 | **core 服务层**（进程内状态机），不落库 |
+| 落地分段 | **三段**：CAL-2a core 状态机 + 单测 → CAL-2b 端点接线 → CAL-2c V11 + app 端到端 |
+| 标定状态作用域 | **进程内**（重启即丢），因此「标定时刻」必须落库才有可查证据 |
+
+落地口径：
+
+- **三端点去 501**：`POST /api/v1/maps/{mapId}/uwb-calibration`（202 受理）、
+  `GET`（200 + 状态，从未标定回 `IDLE` 而非 404）、`DELETE`（204，**兼作取消**：正在跑的那次一并丢弃）。
+  请求体整段可省，但**至少要给一个卷尺实测值**，否则服务层判 400 `MAP_UWB_META_INCOMPLETE`。
+- **判据顺序固定（服务层一处判完）**：`uwb_meta` 缺四角 → 404 `MAP_NOT_CALIBRATED`；
+  帧数非正 → 400 `VALIDATION_FAILED`；两个实测值都缺 → 400 `MAP_UWB_META_INCOMPLETE`；
+  实测值非正整数厘米 → 400；**UWB 链路未开（只认 `OPEN`，不认 `OPENING`）→ 409 `DEVICE_LINK_NOT_OPEN`**；
+  同一底图已有进行中的标定 → 409 `MAP_CALIBRATION_IN_PROGRESS`。
+  顺序有意如此：「至少要一个实测值」先于「链路是否已开」，因为前者是**请求本身的合法性**，
+  不该被设备的当前状态掩盖。
+- **`calibrated_at` 的唯一写点**：手工 `putUwbMeta` 与标定回写都汇到 `MapLedgerService.saveUwbMeta`，
+  故 `uwb_meta`（内容）与 `calibrated_at`（时刻）永远由**同一次写入**产生；改名、换图型不刷新它。
+  该列**刻意不进** `BaseMapRepository.COLUMNS`、也不落到 `BaseMap` 上（读取路径用不到它），
+  因此「有没有落库」只能直查表。
+- **采样入口挂在唯一写手线程**：`SituationStateService.applyUwb` 里 `calibration.onFrame(...)`
+  **刻意早于**编成判定（`units.get` 早退），因为标定发生在**开演之前**——布场阶段还没有编成，
+  若放在编成判定之后，标定将永远采不到帧。
+- **`scds-solver` 零改动**：`UwbSolver` 与其几何约定一字未动，标定不参与解算。
+
+**留档：契约字段名与语义错位**。`UwbCalibrationRequest.bs1ToBs3Cm` 按字面是「bs1→bs3」，
+而 bs1→bs3 是**对角线**；契约把它描述为「现场卷尺实测**宽度**」。按用户裁定**保留字段名不动**
+（改字段名要动冻结契约与两个客户端），语义以描述为准 = `realWidthCm`（现场宽度基准 bs1↔bs4）。
+如将来要正名，须作为一次契约变更统一处理，不在实现侧偷偷改名。
 
 

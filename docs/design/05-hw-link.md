@@ -54,7 +54,9 @@
 - 不实现 `HardwareEventSink`（STATE 范围）。
 - 不实现 `watchLinks` 的 WS 推送与 `LinkStatusPushPort`（依赖 D07 的链路快照口径）。
 - 不做 `getVestLink`（每马甲在线态与计数属 STATE；见 §5 的 H6 说明）。
-- 不做 UWB 标定采样（`startUwbCalibration` 等三端点仍为 501，属 MAP-BASE/后续）。
+- 不做 UWB 标定采样（`startUwbCalibration` 等三端点在本工作包期间仍为 501）。
+  **后续补充**：CAL-1 已在本包的链路之上接出 UWB 采样端口（`UwbTcpServerLink` 的 41B 帧经回调
+  进状态机），CAL-2 再把标定三端点接到进程内标定状态机；本条的「不做」只约束本工作包当时的范围。
 - 不改协议字节、端口号、轮询周期或校验算法。
 
 ## 4. 方案
