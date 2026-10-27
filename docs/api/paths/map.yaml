@@ -393,7 +393,7 @@ mapUwbMeta:
     description: |
       **基站与测距数组的对应关系是硬约束**：`bs(i+1)` ↔ 41B 帧的 `ranges[i]`（i=0..7），
       字节偏移 `7 + 4*i`（小端 int32）。错位会导致解算结果整体偏移，服务端保存前会做一致性校验。
-      bs1~bs4 必填（矩形四角），bs1↔bs2 提供长度基准、bs1↔bs3 提供宽度基准。
+      bs1~bs4 必填（矩形四角），bs1↔bs2 提供长度基准、bs1↔bs4 提供宽度基准（`PROTOCOL.md` §6.5）。
     parameters:
       - name: mapId
         in: path

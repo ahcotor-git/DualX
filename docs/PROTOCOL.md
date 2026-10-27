@@ -453,27 +453,39 @@ if ((sum & 0xFF) != (data[39] & 0xFF)) { /* 丢弃 */ }
 | `ranges[6]` | `[31..34]` | `bs7` | 可选（扩展） |
 | `ranges[7]` | `[35..38]` | `bs8` | 可选（扩展） |
 
-**几何约束（关键，易错）**：`bs1~bs4` 必须是**矩形四角**，且顺序有物理含义：
+**几何约束（关键，易错）**：`bs1~bs4` 必须是**矩形四角**，编号顺序就是绕矩形一圈，且顺序有物理含义：
 - `bs1 ↔ bs2` 的像素距离 → **长度基准** `lenPx`
-- `bs1 ↔ bs3` 的像素距离 → **宽度基准** `widPx`
+- `bs1 ↔ bs4` 的像素距离 → **宽度基准** `widPx`
+- 两条基准向量必须**近似正交**（`bs4` 与 `bs1` 相邻，即「左下 → 右下 → 右上 → 左上」绕一圈）。
+  若把 `bs4` 放在 `bs1` 的**对角**（如左上 → 右下），`UwbSolver.Geometry` 的反解会算出非正的
+  尺度平方，直接判 `HELD_META_INVALID`，该图**永远解不出室内坐标**。
+
+> **更正记录（2026-10-27）**：本节原写「`bs1 ↔ bs3` 的像素距离 → 宽度基准」，与冻结的
+> `UwbSolver.Geometry`（读 `anchors[0]/[1]/[3]`）及旧系统 `UwbV15RegressionTest` 的可解样例
+> （`bs1` 左下 / `bs2` 右下 / `bs3` 右上 / `bs4` 左上）均不符，已按实现更正为 `bs1 ↔ bs4`。
+> 协议字节、端口号、校验算法均未改动——本次只更正文档对既有实现的描述。
 
 > 来源：[UwbLocationHandler.java L29](file:///d:/Code/sbdzxt02/scds-new/src/main/java/com/hitqz/scds/biz/battle/handler/UwbLocationHandler.java#L29)（`leInt(data, 7+4*i)`）
-> + [UwbSolver.java L66-L80](file:///d:/Code/sbdzxt02/scds-new/src/main/java/com/hitqz/scds/biz/uwb/solver/UwbSolver.java#L66-L80)（`bs" + (i+1)`）
+> + [UwbSolver.java L80](file:///d:/Code/sbdzxt02/scds-new/src/main/java/com/hitqz/scds/biz/uwb/solver/UwbSolver.java#L80)（`anchors[0]/[1]/[3]`）
 
 ### 6.6 `uwb_meta` JSON 结构（**已定稿**）
 
 ```jsonc
 {
-  "bs1": { "xPx": 120, "yPx": 240 },   // 必填，整数像素坐标
-  "bs2": { "xPx": 1980, "yPx": 245 },  // 必填
-  "bs3": { "xPx": 118, "yPx": 1560 },  // 必填
-  "bs4": { "xPx": 1975, "yPx": 1565 }, // 必填
-  "bs5": { "xPx": 1050, "yPx": 240 },  // 可选，可为 null 或不写
+  "bs1": { "xPx": 120,  "yPx": 1565 }, // 必填，整数像素坐标；矩形左下
+  "bs2": { "xPx": 1980, "yPx": 1565 }, // 必填；右下（bs1↔bs2 = 长度基准 lenPx）
+  "bs3": { "xPx": 1980, "yPx": 240 },  // 必填；右上
+  "bs4": { "xPx": 120,  "yPx": 240 },  // 必填；左上（bs1↔bs4 = 宽度基准 widPx）
+  "bs5": { "xPx": 1050, "yPx": 1565 }, // 可选，可为 null 或不写
   "bs6": null, "bs7": null, "bs8": null,
   "realLengthCm": 3000,                // 必填，> 0
   "realWidthCm": 1800                  // 必填，> 0
 }
 ```
+
+> **示例已更正（2026-10-27）**：原示例按「左上/右上/左下/右下」编号，使 `bs1↔bs4` 退化为对角线，
+> 照它录入的底图会被 `Geometry` 判 `HELD_META_INVALID`。现改为与解算器一致的四角顺序，
+> 取值仍为同一张 2000×1600 像素、30m×18m 的场地。
 
 **缩放与换算规则**（[UwbSolver.Geometry](file:///d:/Code/sbdzxt02/scds-new/src/main/java/com/hitqz/scds/biz/uwb/solver/UwbSolver.java#L58-L104) + [toImagePct](file:///d:/Code/sbdzxt02/scds-new/src/main/java/com/hitqz/scds/biz/uwb/solver/UwbSolver.java#L287-L300)）：
 

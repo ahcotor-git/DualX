@@ -52,12 +52,13 @@ class MapLedgerServiceIT {
      * 契约 UwbMeta 的冻结结构，逐字保存、逐字读回（uwb_meta 是 TEXT，库不做任何改写）。
      *
      * <p>取值即 {@code PROTOCOL.md} §6.6 的定稿示例：**整数像素坐标**（原点左上），
+     * 四角按「左下 → 右下 → 右上 → 左上」编号（与 {@code UwbSolver.Geometry} 的基准口径一致），
      * 落在夹具的 4000×3000 底图之内。</p>
      */
     private static final String UWB_META = """
-            {"bs1":{"xPx":120,"yPx":240},"bs2":{"xPx":1980,"yPx":245},\
-            "bs3":{"xPx":118,"yPx":1560},"bs4":{"xPx":1975,"yPx":1565},\
-            "bs5":{"xPx":1050,"yPx":240},"bs6":null,"bs7":null,"bs8":null,\
+            {"bs1":{"xPx":120,"yPx":1565},"bs2":{"xPx":1980,"yPx":1565},\
+            "bs3":{"xPx":1980,"yPx":240},"bs4":{"xPx":120,"yPx":240},\
+            "bs5":{"xPx":1050,"yPx":1565},"bs6":null,"bs7":null,"bs8":null,\
             "realLengthCm":3000,"realWidthCm":1800}""";
 
     @Autowired private MapLedgerService ledger;

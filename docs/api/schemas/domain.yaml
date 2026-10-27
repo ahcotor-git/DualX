@@ -656,7 +656,7 @@ UwbMeta:
     `bs1`~`bs8` 与两个长宽基准都在**顶层**，没有 `anchors` 包装层——API、库、解算三处
     同形，零转换、零漂移。
     **基站编号与 41B 帧测距数组固定一一对应**：`bs(i+1)` ↔ `ranges[i]`，不可错位。
-    bs1~bs4 为矩形四角，必须给全：`bs1↔bs2` 提供长度基准、`bs1↔bs3` 提供宽度基准；
+    bs1~bs4 为矩形四角，必须给全：`bs1↔bs2` 提供长度基准、`bs1↔bs4` 提供宽度基准；
     bs5~bs8 可选（可为 `null`）。缺任一项时 `calibrated=false`，服务端拒绝启用 UWB 定位。
     坐标为**底图像素**（见 `UwbAnchorPoint`）；两个长宽为现场实测的**正整数厘米**。
   required: [bs1, bs2, bs3, bs4, realLengthCm, realWidthCm]
@@ -692,7 +692,7 @@ UwbMeta:
     realWidthCm:
       type: number
       format: double
-      description: bs1↔bs3 现场实测宽度（正整数厘米，> 0）
+      description: bs1↔bs4 现场实测宽度（正整数厘米，> 0）
 
 UwbCalibrationRequest:
   type: object

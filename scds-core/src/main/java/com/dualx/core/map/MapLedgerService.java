@@ -364,9 +364,9 @@ public class MapLedgerService {
      * 四角是否退化成一条线、两个长宽基准是否为正整数厘米。</p>
      *
      * <p><b>刻意不做「实测长宽 vs 像素比例」的自洽校验</b>：{@code PROTOCOL.md} §6.6 那份**定稿示例**
-     * 本身就不满足该比例（按像素包围盒换算出的两个方向尺度相差约 15%），拿它当判据会把文档给出的
-     * 合法样例拒掉。严格反解仍归 {@code scds-solver} 的 {@code Geometry}——只有真正解算时才需要那份
-     * 精度，保存侧替它预判只会多出第二套必然与解算器漂移的几何实现。</p>
+     * 本身就不满足该比例（按像素包围盒换算出的两个方向尺度相差约 19%——各向异性标定是允许的），
+     * 拿它当判据会把文档给出的合法样例拒掉。严格反解仍归 {@code scds-solver} 的 {@code Geometry}——
+     * 只有真正解算时才需要那份精度，保存侧替它预判只会多出第二套必然与解算器漂移的几何实现。</p>
      *
      * @param imageWidth  底图像素宽；未上传图片时为 {@code null}，此时不做横向越界校验
      * @param imageHeight 底图像素高；未上传图片时为 {@code null}，此时不做纵向越界校验
@@ -396,8 +396,9 @@ public class MapLedgerService {
             }
             checkInside(point, imageWidth, imageHeight, name);
         }
-        // bs1↔bs2 是长度基准、bs1↔bs3 是宽度基准（PROTOCOL §6.6）：两向量的叉积就是这两条基准
-        // 张成的平行四边形面积，四点共线时为 0。
+        // 四角退化共线时，`bs1↔bs2`（长度基准）与 `bs1↔bs4`（宽度基准，PROTOCOL §6.5）无法张成一个平面。
+        // 这里取 bs1→bs2 与 bs1→bs3 的叉积：bs1/bs2/bs3 三点共线 ⟺ 该叉积为 0，与「哪条是宽度基准」无关，
+        // 对「四角退化成一条线」这个判据是等价的，且不需要假定 bs3/bs4 的具体方位。
         double cross = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (ys[1] - ys[0]);
         if (Math.abs(cross) < DEGENERATE_AREA_PX) {
             throw incomplete("四角退化共线，提供不了长度/宽度基准");
