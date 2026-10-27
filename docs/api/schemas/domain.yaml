@@ -346,6 +346,10 @@ CommandAck:
     vestNum:
       type: integer
       format: int32
+      description: |
+        目标马甲编号。`reloadAllVests`（全体充弹）的广播帧不指向任何具体马甲，
+        其回执固定为 `0`——真实马甲编号下界为 1，0 不会与真实编号混淆；
+        前端应据此把该条指令显示为「全体」，而不是编号 0 的马甲。
     command:
       type: string
       example: DIE
