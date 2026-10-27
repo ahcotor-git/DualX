@@ -9,6 +9,7 @@ import com.dualx.gateway.link.RealDeviceLinkAdmin;
 import com.dualx.gateway.sim.SimulatedLinkAdapter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -80,5 +81,52 @@ public class GatewayConfig {
                 properties.getSerial().getSendQueueCapacity());
         return new RealDeviceLinkAdmin(linkRegistry, hardwareEventSink,
                 properties.getSerial().getSendQueueCapacity());
+    }
+
+    /**
+     * 停机时释放全部链路（{@code INV-STOP} / T-STOP）：马甲串口、UWB TCP 监听、UWB 串口
+     * 都要在进程退出前交还。
+     *
+     * <p><b>为什么要在装配层补这一刀</b>：三种链路句柄各自的 {@code close()} 早已实现
+     * （设计 05 §4.2 要求句柄自持 Netty / 读线程并能在关闭时中断它们），但 {@link DeviceLinkAdmin}
+     * 这个端口上并没有「把三条一起关掉」的方法，于是「谁在停机时调用 close」一直没有归属。
+     * 实测：只调 {@code ConfigurableApplicationContext.close()}，12001 会被本进程占到 JVM 退出为止，
+     * 于是 {@code server.shutdown=graceful} 承诺的「串口链路在退出前释放」实际没有发生。</p>
+     *
+     * <p><b>为什么不能省</b>：Netty 事件循环与链路读线程都是守护线程，端口没放掉 JVM 照样能退出，
+     * 所以「停机没报错」不等于「资源已还」。UWB 监听口与 Windows 上的 COM 口尤其明显——
+     * {@code application.yml} 已写明强杀会让下一次启动抢不到串口。</p>
+     *
+     * <p>只依赖端口方法，因此真链路与仿真共用同一份释放逻辑；三条链路各自兜异常，
+     * 一条失败不影响其余两条被释放。</p>
+     */
+    @Bean
+    public LinkShutdown linkShutdown(DeviceLinkAdmin deviceLinkAdmin) {
+        return new LinkShutdown(deviceLinkAdmin);
+    }
+
+    /** 见 {@link #linkShutdown(DeviceLinkAdmin)}。 */
+    static final class LinkShutdown implements DisposableBean {
+
+        private final DeviceLinkAdmin admin;
+
+        LinkShutdown(DeviceLinkAdmin admin) {
+            this.admin = admin;
+        }
+
+        @Override
+        public void destroy() {
+            release("马甲串口", admin::closeSerial);
+            release("UWB TCP Server", admin::closeUwbTcpServer);
+            release("UWB 串口", admin::closeUwbSerial);
+        }
+
+        private static void release(String what, Runnable close) {
+            try {
+                close.run();
+            } catch (RuntimeException failure) {
+                log.warn("停机释放{}失败（继续释放其余链路）：{}", what, failure.toString());
+            }
+        }
     }
 }
