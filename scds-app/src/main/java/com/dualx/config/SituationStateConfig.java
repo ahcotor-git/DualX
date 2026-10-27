@@ -1,5 +1,7 @@
 package com.dualx.config;
 
+import com.dualx.core.map.MapLedgerService;
+import com.dualx.core.map.UwbCalibrationService;
 import com.dualx.core.port.SituationPushPort;
 import com.dualx.core.repository.BaseMapRepository;
 import com.dualx.core.repository.ExerciseUnitRepository;
@@ -122,6 +124,19 @@ public class SituationStateConfig {
     }
 
     /**
+     * UWB 中心基准校准（CAL-2）的进程内状态机。它与 {@link IndoorPositionResolver} 同为**单例**：
+     * HTTP 三端点启动的那次标定，必须与写手线程逐帧喂进来的采样落在同一份会话表上，否则
+     * {@code startUwbCalibration} 之后永远等不到里程碑。存活期与进程一致——设计 01 §4.1
+     * 「标定上下文只在内存里」，重启即丢。
+     */
+    @Bean
+    public UwbCalibrationService uwbCalibrationService(MapLedgerService mapLedger,
+                                                       ScdsUwbProperties uwbProperties,
+                                                       Clock clock) {
+        return new UwbCalibrationService(mapLedger, uwbProperties, clock);
+    }
+
+    /**
      * 唯一的态势状态所有者，同时是唯一的 {@link com.dualx.core.port.HardwareEventSink} bean。
      *
      * <p>{@code initMethod="start"} 起唯一写手线程（守护线程）；{@code destroyMethod="close"} 在停机
@@ -141,9 +156,10 @@ public class SituationStateConfig {
                                                        TrackBatchWriter trackBatchWriter,
                                                        SituationRevisionLog revisionLog,
                                                        IndoorPositionResolver indoorPositionResolver,
+                                                       UwbCalibrationService uwbCalibrationService,
                                                        ObjectProvider<SituationPushPort> push) {
         return new SituationStateService(queue, hitEvents, clock, trackSampler, trackBatchWriter, revisionLog,
-                indoorPositionResolver, push.getIfAvailable(NoopSituationPushPort::new));
+                indoorPositionResolver, uwbCalibrationService, push.getIfAvailable(NoopSituationPushPort::new));
     }
 
     /** 态势读侧门面：M4 的四个 Poll 端点与 WS 补齐都从这里取，不各自拼一遍。 */

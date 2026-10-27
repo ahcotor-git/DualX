@@ -9,6 +9,7 @@ import com.dualx.core.domain.LinkState;
 import com.dualx.core.domain.MotionState;
 import com.dualx.core.domain.PositionSource;
 import com.dualx.core.domain.RosterEntry;
+import com.dualx.core.map.UwbCalibrationService;
 import com.dualx.core.port.HardwareEventSink;
 import com.dualx.core.port.SituationPushPort;
 import com.dualx.core.push.CombatRole;
@@ -98,6 +99,11 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private final SituationPushPort push;
     /** 室内解算（41B UWB 帧 → 整图百分比坐标）；几何随本场底图装载，见 {@link #loadIndoorMap(BaseMap)}。 */
     private final IndoorPositionResolver indoor;
+    /**
+     * UWB 中心基准校准（CAL-2）的采样入口；{@code null} 表示该上下文未装配标定——core 单测与
+     * 「只要态势不要标定」的切片走这条，与{@link NoopSituationPushPort} 同一取向，生产装配一律注入。
+     */
+    private final UwbCalibrationService calibration;
 
     /** 全部参演单元；结构性变更只在装载/停演时发生，值变更只在写手线程。 */
     private final Map<Integer, Unit> units = new ConcurrentHashMap<>();
@@ -138,14 +144,26 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock,
                                 TrackSampler trackSampler, TrackBatchWriter trackWriter,
                                 SituationRevisionLog revisionLog, IndoorPositionResolver indoor) {
-        this(queue, hitEvents, clock, trackSampler, trackWriter, revisionLog, indoor,
+        this(queue, hitEvents, clock, trackSampler, trackWriter, revisionLog, indoor, null,
                 new NoopSituationPushPort());
     }
 
+    /** 带下行端口、不装配 UWB 标定的构造：M4 之前的切片用。 */
     public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock,
                                 TrackSampler trackSampler, TrackBatchWriter trackWriter,
                                 SituationRevisionLog revisionLog, IndoorPositionResolver indoor,
                                 SituationPushPort push) {
+        this(queue, hitEvents, clock, trackSampler, trackWriter, revisionLog, indoor, null, push);
+    }
+
+    /**
+     * 生产装配的构造（{@code SituationStateConfig}）。{@code calibration} 可为 {@code null}，
+     * 见 {@link #calibration} 的说明。
+     */
+    public SituationStateService(StateEventQueue queue, HitEventRepository hitEvents, Clock clock,
+                                TrackSampler trackSampler, TrackBatchWriter trackWriter,
+                                SituationRevisionLog revisionLog, IndoorPositionResolver indoor,
+                                UwbCalibrationService calibration, SituationPushPort push) {
         this.queue = Objects.requireNonNull(queue, "queue");
         this.hitEvents = Objects.requireNonNull(hitEvents, "hitEvents");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -153,6 +171,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         this.trackWriter = Objects.requireNonNull(trackWriter, "trackWriter");
         this.revisionLog = Objects.requireNonNull(revisionLog, "revisionLog");
         this.indoor = Objects.requireNonNull(indoor, "indoor");
+        this.calibration = calibration;
         this.push = Objects.requireNonNull(push, "push");
     }
 
@@ -317,6 +336,11 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
      * <p>{@code signalQuality} 记本帧实际用上的基站数（契约：0~8，&lt; 2 时坐标不可信）。</p>
      */
     private void applyUwb(UwbFrame frame) {
+        // 标定采样必须早于下面的编成判定：中心基准校准发生在开演之前，那时被测马甲还不属于任何
+        // 编成，走 units.get 的早退会让标定一帧都采不到。标定只吃原始测距，不依赖已装载的底图几何。
+        if (calibration != null) {
+            calibration.onFrame(frame.vestNum(), frame.rangesMm());
+        }
         Unit u = units.get(frame.vestNum());
         if (u == null) {
             framesFromUnknownVest.incrementAndGet();
