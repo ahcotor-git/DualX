@@ -2326,3 +2326,60 @@ flutter create --org com.dualx --project-name scds_client --platforms=android,wi
 
 本段为**代码验收（客户端基座层）**，不是生产发布批准，也不代表客户端已联调。
 
+## 34. M6 CLIENT-BASE 段 1b：通信基座契约测试（Dart 侧，本地 HttpServer 打桩）
+
+段 1 落实现、段 1b 落**测试**——把段 1 三文件的对外行为钉死，后续段 2~5 改动基座即会红。
+测试**不打桩框架内部**，而是起一个本机 `HttpServer`，断言**真实 HTTP 行为**（请求头、正文编码、
+状态码与非 2xx → `ApiException` 的映射）。
+
+### 34.1 交付物（1 文件）
+
+| 文件 | 内容 |
+|---|---|
+| `clients/scds_client/test/shared/api/api_client_test.dart` | 14 用例：路径拼接 / 请求构造 / 非 2xx 统一抛 `ApiException` / `ApiProblem.tryParse` 不臆造缺省值 |
+
+`setUp` 起 `HttpServer.bind(InternetAddress.loopbackIPv4, 0)`（**随机端口**，`baseUri` 用 `server.port`），
+各用例覆写 `handler` 决定响应；`tearDown` 关 `ApiClient` 与 `server`。
+
+### 34.2 用例与判据
+
+| 组 | 用例 | 判据 |
+|---|---|---|
+| 路径拼接 | `api()` 带 `/api/v1` 前缀并编码查询参数 | `uri.path == '$kApiPrefix/auth/login'`、`queryParameters['mode'] == 'local'` |
+| 路径拼接 | `resolve()` 补齐前导斜杠 | `api/v1/auth/me` → `/api/v1/auth/me` |
+| 路径拼接 | 契约常量与后端硬约束一致 | `kHttpPort == 11001`、`kApiPrefix == /api/v1`、`kWsPrefix == /ws/v1`、`kProblemMediaType == application/problem+json` |
+| 请求构造 | GET 200 JSON 解析 + `Accept` 覆盖 `problem+json` | `json['username'] == 'commander'`、`accept` 含 `kProblemMediaType`、无 token 时无 `Authorization` |
+| 请求构造 | POST `jsonBody` 的 Content-Type / UTF-8 | `contentType.mimeType == application/json`、`charset == utf-8`、正文可被 `utf8.decode` + `jsonDecode` 还原 |
+| 请求构造 | `bearerToken` 非空才注入，空串不注入 | `Authorization == Bearer access-token-1`；空串时 `isNull` |
+| 请求构造 | 二进制正文原样返回 | `application/octet-stream` 的 `[0x89,0x50,0x4E,0x47,0x00,0xFF]` 逐字节相等 |
+| 非 2xx | Problem 正文带出 code/status/traceId | `statusCode == 409`、`code == EXERCISE_ALREADY_RUNNING`、`message` 含 `traceId` |
+| 非 2xx | `VALIDATION_FAILED` 带出字段级 errors | `isValidationFailure`、`errors.single.field == 'planId'`、`message == '不能为空'` |
+| 非 2xx | 非 Problem 正文回落 | 代理 HTML 502 → `problem == null`、`code == 'HTTP_502'` |
+| 非 2xx | 2xx 不抛（含 204 空正文） | `statusCode == 204`、`body` 空、`json == null` |
+| tryParse | 合法 Problem 正常解析 | `code`/`status` 正确、`errors` 为空 |
+| tryParse | 缺必填（`traceId`）返回 null | 返回 `null` |
+| tryParse | 非 JSON / 非对象 / 空正文一律 null | `not json` / `[1,2,3]` / `[]` 均 `null` |
+
+### 34.3 实现坑（已修，留档）
+
+- **打桩响应必须显式声明 charset**：`HttpResponse` 在无 `charset` 时按 **latin1** 编码，写含中文的
+  Problem 正文（如「不能为空」）会抛 `Contains invalid characters`，服务端不回响应，客户端表现为
+  **15s 超时**（而非报错）。修法：`ContentType(type, subtype, charset: 'utf-8')` + `add(utf8.encode(...))`。
+  （注：`ContentType.change` 在 `dart:_http` 中**不存在**，不能拿来改 charset。）
+- 捕获断言用 `expectApiFailure(future)` 助手（捕获 `ApiException`，未抛时 `fail` 报真实状态码），
+  避免 `.then(onError: (e) => e as ApiException)` 在收到非 `ApiException` 时强转失败掩盖真实错误。
+
+### 34.4 门禁与边界
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 静态分析 | `flutter analyze` | `No issues found!` |
+| 基座契约测试 | `flutter test test/shared/api/api_client_test.dart` | `All tests passed!`（**14** 例） |
+
+- **计数不变**：Dart 侧资产、**不进 Maven reactor**，Maven 全量仍 **1151** 项；
+- **未做真实联调**（仍无后端对接、无登录，属段 2~段 5）；
+- **未改动**：后端模块、协议冻结字节、端口号、轮询周期、在线窗口、校验算法、四角编号口径、
+  `scds-solver`、迁移与错误码。
+
+本段为**代码验收（客户端基座测试层）**，不是生产发布批准，也不代表客户端已联调。
+
