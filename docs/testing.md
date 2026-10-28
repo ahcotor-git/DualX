@@ -2715,3 +2715,73 @@ Windows 页面测试**不得**用 Chrome 替代 Windows 桌面构建验收（承
 Windows 页面测试**不得**用 Chrome 替代 Windows 桌面构建验收（承 `implementation-plan.md` §7）。
 
 本段为**客户端骨架与 widget 层验收**，不是生产发布批准；**不代表已过 Windows 原生构建、真机联调或现场网络**。
+
+## 41. M6 CLIENT-RESILIENCE 段 A/B：态势本地缓存（双通道同源归并）+ 双通道调度器（WS + 兜底 Poll）
+
+本段把态势契约的两条**硬约束**落成代码：**WS 不得替代 HTTP Poll**（WS 在线仍须保持 ≤10s 的兜底轮询）、
+**超窗必须改全量**（HTTP 409 `SITUATION_REVISION_TOO_OLD` 与 WS close `4000` + reason `SITUATION_REVISION_TOO_OLD`）。
+按裁定分 **段 A**（本地缓存与归并）与 **段 B**（WS 连接端口 + 双通道调度器）两笔落地，docs 在本节一次回写。
+范围**不含**认证单飞（401 → refresh → 重试，留 RES-C），也**不含**把调度器接到 UI（留 RES-D）。
+
+### 41.1 交付物（2 笔 = 6 文件，4 新 2 改）
+
+| 段 | 提交 | 文件 | 内容 |
+|---|---|---|---|
+| A | `7a5004f` | `lib/shared/state/situation_cache.dart`(新) | `SituationCache`：把两条通道回来的**同一个** `SituationEnvelope` 按 `epoch` + `revision` 归并成一份视图。**换代**（`epoch` 不一致）清本地状态并置 `needsFullResync`；**全量帧**整体替换 `units`；**增量帧**仅在已对齐时 upsert `changes` / 删 `removedVestNums`，`revision <= 本地` 一律丢弃；命中按 `seq` 去重升序、上限 `kMaxCachedHits = 500`；`teamSummary` 只留**最近一次非空**；`markFullResync()` / `reset()`；`sinceRevision` 未对齐时回 `null`。本类**不做网络、不认识令牌** |
+| A | `7a5004f` | `test/shared/state/situation_cache_test.dart`(新) | **15 例**（见 41.2） |
+| B | `a0c8ff2` | `lib/shared/api/api_contract.dart`(改) | 仅增 `const String kSituationSubprotocol = 'scds.situation.v1';`（+3 行，逐字对齐契约 `x-websocket.subprotocol`） |
+| B | `a0c8ff2` | `lib/shared/state/situation_socket.dart`(新) | `SituationSocket` 窄端口（`messages` / `send` / `closeCode` / `closeReason` / `close`）+ `SituationSocketConnector` + `kSituationRevisionTooOldCloseCode = 4000`；`connectSituationSocket()` 生产实现（`http→ws` / `https→wss`，path `'/ws/v1/situation'`，子协议 + `Authorization: Bearer`）；`IoWebSocketSituationSocket` 适配器 |
+| B | `a0c8ff2` | `lib/shared/state/situation_feed.dart`(新) | `SituationFeed extends ChangeNotifier`：**双节奏轮询**（WS 未连 `pollInterval` 2s / WS 已连 `wsPollFloor` 10s，两定时器互斥切换）、`keepAliveInterval` 15s 上行 `PING`、`reconnectDelay` 3s 退避重连、HTTP **单飞**（`_inFlight`）、`_onFrame` 控制帧跳过 / 坏帧计丢弃、`requestResync()` 两态、`dispose` 退出竞态 |
+| B | `a0c8ff2` | `test/shared/state/situation_feed_test.dart`(新) | **15 例**（见 41.2），全部跑在 `testWidgets` 假时钟上 |
+
+### 41.2 用例与判据（30 例 = 段 A 15 + 段 B 15）
+
+**段 A：本地缓存与归并（`situation_cache_test.dart`，15 例）**
+
+| 组 | 用例 | 判据 |
+|---|---|---|
+| 初始态与续传参数（2） | 新建缓存未对齐；全量帧后对齐 | 新实例 `needsFullResync=true`、`sinceRevision=null`；全量后 `sinceRevision` 转为本地 `revision` |
+| 全量帧（2） | 整体替换 `units` 并更新 `running`/`exerciseId`/`serverTime`；`units` 按 `vestNum` 升序 | 全量帧**整体替换**而非叠加；旧单元被移除 |
+| 增量帧（4） | upsert `changes` 并按 `removedVestNums` 删除；陈旧增量（`revision <= 本地`）丢弃、状态不变；**重复帧（双通道同源同 revision）只采纳一次**；未对齐时（首个帧即增量）丢弃并保持 `needsFullResync` | 增量**只在已对齐时可用**；陈旧/重复/未对齐一律丢，**不让旧帧覆盖新状态** |
+| revision 过旧（409）后改拉全量（1） | `markFullResync` 使 `sinceRevision` 复位为 `null`，全量帧后恢复 | 过旧后**下一拍自动改全量** |
+| 换代（`epoch` 变化）（2） | `epoch` 不一致即清空本地状态并置 `needsFullResync`；换代后紧跟全量帧即可恢复 | 换代＝本地 revision **作废**，不得在旧代状态上叠加 |
+| 命中与队伍汇总（3） | 命中按 `seq` 去重、升序、只收更新的序号；命中超过上限时裁掉最旧的；`teamSummary` 只保留最近一次非空 | 缓存上限 `500`；**增量帧 `teamSummary` 恒为空**，不得因此把汇总清空 |
+| `reset`（缓存不跨会话泄漏）（1） | 清空一切并回到未对齐初始态 | 换实例 / 退出登录时缓存**不跨会话泄漏** |
+
+**段 B：双通道调度器（`situation_feed_test.dart`，15 例）**
+
+| 组 | 用例 | 判据 |
+|---|---|---|
+| HTTP 通道（WS 未连，按 `pollInterval`）（4） | `start` 立刻全量拉一拍，随后带本地 `revision` 续传；拉取失败：置 `lastError`、保留陈旧缓存；409 `SITUATION_REVISION_TOO_OLD`：作废 `revision`、**不算错误态**、下一拍改全量；单飞：在途未回时到期的那一拍不叠加请求 | 首拍不带 `sinceRevision` 取全量，其后带本地 `revision` 续传；失败＝「陈旧数据 + 明示失败」 |
+| WS 上线后的双通道（6） | WS 连上即切到 10s 兜底档，不再按 2s 拉；WS 帧与 HTTP 响应**同源归并**：同 `revision` 只采纳一次；保活：每 15s 上行一帧 `PING`；控制帧不算数据、坏帧计入丢弃、未知枚举不入缓存；`requestResync`：已连时上行 `RESYNC` 并带本地 `revision`；`requestResync`：未连时作废 `revision` 并立刻全量拉取 | **WS 不替代 Poll**（仅把 2s 提到 10s 兜底）；两条通道**共用一份缓存**，去重由缓存按 `revision` 完成 |
+| 断线重连（4） | 普通断线：退回 2s 轮询档，并按 `reconnectDelay` 退避重连；**超窗 close 4000：先作废 `revision`（兜底 Poll 改全量）并立即重连**；WS 连接失败：置 `lastError` 并按 `reconnectDelay` 重连；`stop` 撤表断连，再次 `start` 可恢复 | 普通断线退避、超窗**立即**重连且改全量；`stop` 后无残留定时器 |
+| 退出竞态（1） | `dispose` 后连接才落地：直接关闭、不接管、不重连、不入缓存 | 连接晚于 `dispose` 落地时必须关闭且**不产生上行 / 下行副作用** |
+
+### 41.3 口径要点
+
+- **WS 是加速器，不是替代品**：`wsPollFloor = 10s` 是契约硬上限，`pollInterval = 2s` 只是 WS 未连时的建议档；
+  两条定时器**互斥切换**（进 WS 模式停 HTTP 档、退出 WS 模式恢复 HTTP 档），HTTP **单飞**两档共用一把闸。
+- **超窗判据用关闭码而非文案**：`_onSocketDown` 以 `closeCode == 4000` 判超窗；HTTP 侧以 `ApiErrorCode.situationRevisionTooOld` 判超窗，
+  两者都走 `cache.markFullResync()`，且**都不算错误态**（`lastError` 不置）。
+- **顺序缺陷修正（本段自查发现）**：`_onSocketDown` 的超窗分支必须**先 `cache.markFullResync()` 再 `_exitWsMode()`**——
+  否则退出 WS 模式时触发的那一拍兜底 Poll 会带着**已过期的 `sinceRevision`** 出去，必然再吃一次 409。
+- **`dart:io` 的 `WebSocket` 是 `Stream<dynamic>`**：`IoWebSocketSituationSocket` 必须先 `.cast<String>()` 再转发，
+  否则 `void Function(String)` 无法赋给 `void Function(dynamic)?`（`flutter analyze` 会报 `argument_type_not_assignable`）。
+- **假时钟纪律（写测试必看）**：本段 15 例全跑在 `testWidgets` 假时钟上，按契约真实档位（2s / 10s / 15s / 3s）精确推进——
+  `tester.pump()`（无参）只刷微任务、**不推进假时钟**；`tester.pump(Duration.zero)` 才真的走一次时钟 elapse（用于验证 `Duration.zero` 退避立即重连）；
+  且 `testWidgets` 会在**用例体返回前**校验「无待定定时器」，故 `feed.dispose()` 必须写在用例体内，**不能交给 `addTearDown`**。
+- **令牌续期不在本段**：`SituationFeed` 只调度与归并，401 → refresh → 重试属认证层单飞职责（留 RES-C）。
+- **本段不做**：把调度器接到 `device_app` / `console_app` 的 UI（留 RES-D）、指令、地图/标定、想定、复盘导出。
+
+### 41.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**163 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+  段 A 15 + 段 B 15）；`flutter analyze` → `No issues found! (ran in 2.7s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（0/0/0）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、轮询周期契约、在线窗口、
+  校验算法、四角编号口径、`docs/api/**` 契约、迁移、`scds-solver`；**未新增依赖**
+  （仍只 `flutter` + `cupertino_icons`，测试只用 `dart:io` + `flutter_test`）。
+
+**未验项**：段 B 只做 `flutter analyze` + `flutter test`（widget / 假时钟层），**未对着真实后端实例建立过真实 WS 连接**；
+WS 子协议协商、`Authorization: Bearer` 握手、服务端 30s 无上行断开、真实 close `4000` 与 `PING`/`PONG` 往返
+**均未在真实实例上验证**。本段为**客户端骨架与 widget 层验收**，不是生产发布批准。

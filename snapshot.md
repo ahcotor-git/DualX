@@ -1,7 +1,17 @@
 # scds-next 交接快照
 
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M6 CLIENT-WINDOWS 段 6——指挥端账号与会话（续期 refresh + 身份重载 me + 无体 logout）（testing 第 40 节）**——
+> 当前任务：**M6 CLIENT-RESILIENCE 段 A/B——态势本地缓存（双通道同源归并）+ 双通道调度器（WS + 兜底 Poll）（testing 第 41 节）**——
+> 按用户当次裁定：方向取「**CLIENT-RESILIENCE（推荐）**」、节奏「**沿用（推荐）**」（＝代码 1 笔 + docs 1 笔 + 提交后尝试推送）。
+> 范围＝**本地缓存归并（段 A）+ WS 连接端口与双通道调度（段 B）**，
+> **不含**认证单飞（留 RES-C）、UI 接线（留 RES-D）、指令、地图/标定、想定、复盘。
+> **段 A** 落 `7a5004f`（2 文件）：`lib/shared/state/situation_cache.dart`（新）+ `test/shared/state/situation_cache_test.dart`（新，15 例）。
+> **段 B** 落 `a0c8ff2`（4 文件）：`lib/shared/state/situation_socket.dart`（新）+ `lib/shared/state/situation_feed.dart`（新）+
+> `lib/shared/api/api_contract.dart`（改，+`kSituationSubprotocol`）+ `test/shared/state/situation_feed_test.dart`（新，15 例）。
+> 门禁 `flutter test` → **163 例全绿**、`flutter analyze` → `No issues found! (ran in 2.7s)`。
+> **未验项**：**未对着真实后端实例建立过真实 WS 连接**（子协议协商 / `Bearer` 握手 / 30s 无上行断开 / 真实 close `4000` /
+> `PING`·`PONG` 往返均未验证）。
+> 本任务紧接 **M6 CLIENT-WINDOWS 段 6——指挥端账号与会话（续期 refresh + 身份重载 me + 无体 logout）（testing 第 40 节）**——
 > 按用户当次裁定：范围取「**CLIENT-WINDOWS 续段：账号会话（refresh/me/logout）**」，并在无人值守下就两处语义裁定
 > 「**logout 无论成败都清本地会话**」与「**refresh 手动按钮触发、不引定时器**」。范围＝**续期 + 身份重载 + 退出**，
 > **不含** WS / revision 缓存聚合 / 指令 / 地图标定 / 想定 / 复盘。
@@ -141,32 +151,39 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 **M6 CLIENT-WINDOWS 段 5（Windows 指挥端骨架：`main.dart` 平台分派 + `ScdsConsoleApp` 外壳 + 连接配置页健康诊断
 （`probe` + `health_api.dart`）+ 账号登录页 + 队伍汇总总览页（HTTP Poll）；共享层抽泛型 `PollingFeed<T>`，两笔 23 例）**、
 **M6 CLIENT-WINDOWS 段 6（指挥端账号与会话：续期 refresh + 身份重载 me + 无体 logout；`account_page.dart` 三端口 +
-`console_app.dart` 的 `_account` 持有当前会话，一笔 15 例，累计 133 例）**。
+`console_app.dart` 的 `_account` 持有当前会话，一笔 15 例，累计 133 例）**、
+**M6 CLIENT-RESILIENCE 段 A/B（态势本地缓存 `SituationCache`——把 HTTP Poll 与 WS 回来的**同一个** `SituationEnvelope`
+按 `epoch` + `revision` 归并（换代清空、全量替换、增量去旧、命中去重、缓存不跨会话），15 例；
+WS 窄端口 `SituationSocket`（子协议 `scds.situation.v1`、close `4000`）与双通道调度器 `SituationFeed`
+（WS 未连 2s / 已连 10s 兜底、15s `PING` 保活、3s 退避重连、HTTP 单飞、退出竞态），15 例；两笔 6 文件，累计 163 例）**。
 
-下一原子任务的候选：**T-PROD 部署**；**CLIENT-RESILIENCE（WS 连接与轮询调度器、同源归并、重连、刷新单飞、退出竞态、缓存隔离）**；
-**CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）**；
+下一原子任务的候选：**CLIENT-RESILIENCE 剩余子段**（**RES-C** 认证单飞：401 → refresh → 重试；
+**RES-D** 同源归并接线到 UI：`device_app` / `console_app` 接 `SituationFeed`，并验缓存隔离）；
+**T-PROD 部署**；**CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）**；
 以及**平台安全存储（Android Keystore / Windows DPAPI）+ 连接配置落盘（需另授权引依赖）**；
 另有**安装 Visual Studio C++ 工作负载（需另授权）以补齐 Windows 原生构建验收**。
 另有一条**观察项**——硬件 ACK 解析（「已发送」≠「已确认」仍无人写入
 `ACKED`，且协议无回执帧）。启动前须重新核查仓库与环境，
 不照搬本快照的瞬时结论。提交/推送仍须当次授权；**段 0 / 段 1 / 段 1b / 段 2 / 段 2b / 段 3 各笔均已入远端**
 （`origin/main` = 段 3 docs 笔 `cdb2897`），但**段 4 四笔代码（`1f61d27`/`ee33764`/`1bbb284`/`3600056`）
-与段 4 docs 笔、段 5 两笔代码（`17a0e10`/`aa5457b`）与段 5 docs 笔、**段 6 代码笔与其 docs 笔仍在本机**，尚未推送（见 §2）。
+与段 4 docs 笔、段 5 两笔代码（`17a0e10`/`aa5457b`）与段 5 docs 笔、段 6 代码笔与其 docs 笔、
+以及 **CLIENT-RESILIENCE 段 A 笔（`7a5004f`）与段 B 笔（`a0c8ff2`）仍在本机**，尚未推送（见 §2）。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本轮段 6 的代码笔已本地提交（`account_page.dart` 新建 + `team_summary_page.dart` 账号入口 + `console_login_page.dart` 注释订正 + `console_app.dart` 装配与 `_account` 持有当前会话 + `console_widget_test.dart` 新增 15 例），随本 docs 笔一并在本机；本地 `main` **领先 `origin/main` 9 笔**（段 4 四笔 + 段 4 docs 笔 + 段 5 两笔 + 段 5 docs 笔 + 段 6 代码笔）；docs 笔提交后工作树**干净**；HEAD 随后续回写前移，故不钉死具体 hash |
-| 实际远端main | 停在**段 3 的 docs 笔 `cdb2897`**（其前为段 3 三段代码 `6b58f93`/`c5c1e70`/`1fc329a`、段 2b 三笔 `fb197ba`/`d770556`/`54e830b`、段 2 两笔 `c1079c8`/`a26fc28`、段 1b 两笔 `6074e18`/`ac89a6a`、段 1 两笔 `8303add`/`dbc5dd9`、段 0 三笔 `78bbb99`/`f4c9f15`/`b16c348`、`1950b4e` 快照订正）；更早为 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
-| 已推送 | 至 `cdb2897` 为止：**段 0 三笔 + 段 1 两笔 + 段 1b 两笔 + 段 2 两笔 + 段 2b 三笔 + 段 3 三笔 + 段 3 docs 笔**（`b16c348..cdb2897`）与更早的 R4 遗留收口三笔、L6 口径收口三笔、链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3 **均在远端** |
-| 未推送（仅本机） | **9 笔**（本地 `main` 相对 `origin/main` 领先）：段 4 的 `1f61d27`（4a 入口装配 + 连接配置页）、`ee33764`（4b 设备登录页）、`1bbb284`（4c 自身态势页 + 1s 轮询）、`3600056`（4d debug 回环明文许可）、`778de25`（段 4 docs 笔），段 5 的 `17a0e10`（共享层：`probe` + `health_api` + 泛型 `PollingFeed`）、`aa5457b`（指挥端装配：平台分派 + 登录页 + 汇总页 + 健康诊断区）、段 5 docs 笔，与段 6 的代码笔。本轮 `git push` 再次失败（`Recv failure: Connection was reset`，`push_exit=128`），**不得视为已入远端** |
-| 本轮成果（段 6） | **M6 CLIENT-WINDOWS 段 6：指挥端账号与会话（续期 refresh + 身份重载 me + 无体 logout）**——按裁定「CLIENT-WINDOWS 续段：账号会话（refresh/me/logout）（推荐）」，并在无人值守下就两处语义裁定：「**logout 无论成败都清本地会话**」「**refresh 手动按钮触发、不引定时器**」。**一笔**（5 文件：1 新 4 改）：`lib/features/console/account_page.dart`（新：`kConsoleAccount*` 控件键族 + 四端口 `AccountRefresh`/`AccountReload`/`AccountLogout`/`SessionClearing`；`_refresh()` 无 `refreshToken` 则**不发请求**只提示重新登录，`_refreshing` 单飞去重；`_logout()` **无论成败都 `await clearSession()`**，失败留本页 + 「返回登录」才导航）＋ `lib/features/console/team_summary_page.dart`（改：AppBar `actions` 加「账号」入口 `kTeamSummaryAccountEntryKey`，未注入 `onOpenAccount` 时不渲染）＋ `lib/features/console/console_login_page.dart`（改：类注释指向 `AccountPage`，**代码零改动**）＋ `lib/app/console_app.dart`（改：新增 `_account` **持有当前会话**——汇总页 `fetch` 闭包**按次读取** `_account!.accessToken`，续期后新令牌**真生效**；`_openAccount` 装配 refresh/reload/logout/clearSession/onLoggedOut）＋ `test/console_widget_test.dart`（改：`accountSession` 扩参 + `apiFailure`/`pumpAccount`/`tapAccountButton` 助手 + **15 例** = 汇总页入口 2 + 账号与会话页 13）。门禁 `flutter test` → **133 例全绿**、`flutter analyze` → `No issues found! (ran in 2.8s)`；**未验项**：本机未装 Visual Studio，Windows 原生构建与真机联调**不可执行**，续期/退出的真实令牌流转未在真实实例上验证；本段代码笔**尚未推送** |
+| 源码本地HEAD | 本轮 **CLIENT-RESILIENCE 段 A/B** 已本地提交（段 A `7a5004f`：`lib/shared/state/situation_cache.dart` 新建 + 15 例；段 B `a0c8ff2`：`lib/shared/state/situation_socket.dart`/`lib/shared/state/situation_feed.dart` 新建 + `lib/shared/api/api_contract.dart` 增 `kSituationSubprotocol` + 15 例），随本 docs 笔一并在本机；本地 `main` **领先 `origin/main` 3 笔**（`7a5004f` + `a0c8ff2` + 本 docs 笔）；docs 笔提交后工作树**干净**；HEAD 随后续回写前移，故不钉死具体 hash |
+| 实际远端main | 停在**段 6 的 docs 笔 `cd62dda`**（其前为段 6 代码笔 `3c41e5c`、段 5 docs 笔 `b97f9b2`、段 5 两笔 `aa5457b`/`17a0e10`、段 4 docs 笔 `778de25` 与段 4 四笔 `1f61d27`/`ee33764`/`1bbb284`/`3600056`、段 3 docs 笔 `cdb2897` 与段 3 三笔 `6b58f93`/`c5c1e70`/`1fc329a`、段 2b 三笔 `fb197ba`/`d770556`/`54e830b`、段 2 两笔 `c1079c8`/`a26fc28`、段 1b 两笔 `6074e18`/`ac89a6a`、段 1 两笔 `8303add`/`dbc5dd9`、段 0 三笔 `78bbb99`/`f4c9f15`/`b16c348`、`1950b4e` 快照订正）；更早为 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
+| 已推送 | 至 `cd62dda` 为止：**段 0 三笔 + 段 1 两笔 + 段 1b 两笔 + 段 2 两笔 + 段 2b 三笔 + 段 3 三笔 + 段 3 docs 笔 + 段 4 四笔与 docs 笔 `778de25` + 段 5 两笔与 docs 笔 `b97f9b2` + 段 6 代码笔 `3c41e5c` 与 docs 笔 `cd62dda`**（`b16c348..cd62dda`）与更早的 R4 遗留收口三笔、L6 口径收口三笔、链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3 **均在远端** |
+| 未推送（仅本机） | **3 笔**（本地 `main` 相对 `origin/main` 领先）：CLIENT-RESILIENCE **段 A** `7a5004f`（`situation_cache.dart` + 15 例）、**段 B** `a0c8ff2`（`situation_socket.dart`/`situation_feed.dart`/`api_contract.dart` + 15 例）与本 docs 笔。段 A 提交后曾尝试 `git push`，因网络不可达失败（`push_exit=128`），**不得视为已入远端** |
+| 本轮成果（RES 段 A+B） | **M6 CLIENT-RESILIENCE 段 A/B：态势本地缓存（双通道同源归并）+ 双通道调度器（WS + 兜底 Poll）**——按裁定方向「**CLIENT-RESILIENCE（推荐）**」、节奏「**沿用（推荐）**」。**段 A** `7a5004f`（2 文件 / 466 insertions）：`lib/shared/state/situation_cache.dart`（新：`SituationCache` 把 HTTP Poll 与 WS 回来的**同一个** `SituationEnvelope` 按 `epoch` + `revision` 归并成一份视图——换代清空 + `needsFullResync`、全量整体替换 `units`、增量仅在已对齐时 upsert `changes` / 删 `removedVestNums`、`revision <= 本地` 与未对齐帧一律丢弃、命中按 `seq` 去重升序上限 `kMaxCachedHits = 500`、`teamSummary` 只留最近一次非空、`reset()` 缓存不跨会话）＋ `test/shared/state/situation_cache_test.dart`（新：**15 例**）。**段 B** `a0c8ff2`（4 文件 / 1085 insertions）：`lib/shared/state/situation_socket.dart`（新：`SituationSocket` 窄端口 + `SituationSocketConnector` + `kSituationRevisionTooOldCloseCode = 4000` + `connectSituationSocket()` + `IoWebSocketSituationSocket`（`.cast<String>()`））＋ `lib/shared/state/situation_feed.dart`（新：`SituationFeed extends ChangeNotifier`——WS 未连 2s / 已连 10s 兜底双档互斥、15s `PING` 保活、3s 退避重连、HTTP 单飞、控制帧跳过 / 坏帧计丢弃、`requestResync()` 两态、`dispose` 退出竞态）＋ `lib/shared/api/api_contract.dart`（改 +3 行：`kSituationSubprotocol = 'scds.situation.v1'`）＋ `test/shared/state/situation_feed_test.dart`（新：**15 例**，全部跑在 `testWidgets` 假时钟上）。**口径要点**：**WS 不替代 Poll**；超窗（close `4000` / HTTP 409）同走 `markFullResync()` 且不算错误态；`_onSocketDown` 超窗分支**先作废 revision 再退出 WS 模式**（本段自查修正的顺序缺陷）。门禁 `flutter test` → **163 例全绿**、`flutter analyze` → `No issues found! (ran in 2.7s)`；**未验项**：**未对着真实后端实例建立过真实 WS 连接**；本两笔（`7a5004f` + `a0c8ff2`）+ 本 docs 笔**尚未推送** |
+| 上一轮成果（段 6） | **M6 CLIENT-WINDOWS 段 6：指挥端账号与会话（续期 refresh + 身份重载 me + 无体 logout）**——按裁定「CLIENT-WINDOWS 续段：账号会话（refresh/me/logout）（推荐）」，并在无人值守下就两处语义裁定：「**logout 无论成败都清本地会话**」「**refresh 手动按钮触发、不引定时器**」。**一笔**（5 文件：1 新 4 改）：`lib/features/console/account_page.dart`（新：`kConsoleAccount*` 控件键族 + 四端口 `AccountRefresh`/`AccountReload`/`AccountLogout`/`SessionClearing`；`_refresh()` 无 `refreshToken` 则**不发请求**只提示重新登录，`_refreshing` 单飞去重；`_logout()` **无论成败都 `await clearSession()`**，失败留本页 + 「返回登录」才导航）＋ `lib/features/console/team_summary_page.dart`（改：AppBar `actions` 加「账号」入口 `kTeamSummaryAccountEntryKey`，未注入 `onOpenAccount` 时不渲染）＋ `lib/features/console/console_login_page.dart`（改：类注释指向 `AccountPage`，**代码零改动**）＋ `lib/app/console_app.dart`（改：新增 `_account` **持有当前会话**——汇总页 `fetch` 闭包**按次读取** `_account!.accessToken`，续期后新令牌**真生效**；`_openAccount` 装配 refresh/reload/logout/clearSession/onLoggedOut）＋ `test/console_widget_test.dart`（改：`accountSession` 扩参 + `apiFailure`/`pumpAccount`/`tapAccountButton` 助手 + **15 例** = 汇总页入口 2 + 账号与会话页 13）。门禁 `flutter test` → **133 例全绿**、`flutter analyze` → `No issues found! (ran in 2.8s)`；**未验项**：本机未装 Visual Studio，Windows 原生构建与真机联调**不可执行**，续期/退出的真实令牌流转未在真实实例上验证；本段代码笔与 docs 笔**已在远端**（`3c41e5c` + `cd62dda`） |
 | 上一轮成果（段 5） | **M6 CLIENT-WINDOWS 段 5：Windows 指挥端骨架（平台入口分派 + 连接配置健康诊断 + 账号登录 + 队伍汇总总览）**——按裁定「段 5 Windows 指挥端骨架（推荐）」，并经授权**放宽「每原子任务 ≤3 文件」**。**共享层笔** `17a0e10`（4 文件）：`lib/shared/api/api_client.dart`（抽出 `_send` + 新增 `probe(path)` 走 `resolve()`——**不带** `/api/v1` 前缀）＋ `lib/shared/api/health_api.dart`（新：`InstanceHealthApi.probe()` **永不抛异常**，收敛成 `UNKNOWN`/`HTTP_<code>`/`UNREACHABLE`）＋ `lib/shared/polling/poller.dart`（新：泛型 `PollingFeed<T>`，`Timer.periodic` + `_inFlight` 单飞 + 失败保陈旧数据）＋ `lib/features/situation/situation_page.dart`（改用 `PollingFeed<UnitState>`，**控件键与文案不变**）。**指挥端装配笔** `aa5457b`（9 文件）：`lib/main.dart`（**平台分派** `Platform.isWindows ? ScdsConsoleApp : ScdsClientApp`）＋ `lib/app/client_factory.dart`/`device_app.dart`/`console_app.dart`（新）＋ `lib/features/connection/connection_page.dart`（改：可选 `probe` + 健康诊断区，`probe == null` 时整块不渲染，**单兵端不受影响**）＋ `lib/features/console/console_login_page.dart`（新）＋ `lib/features/console/team_summary_page.dart`（新：**直读** `getTeamSummary`，可选计数缺失显示 `—`，默认 2000ms）＋ `test/widget_test.dart`（改 1 行 import）＋ `test/console_widget_test.dart`（新：**23 例** = 外壳 4 + 健康诊断 5 + 登录 7 + 汇总 7）。门禁 `flutter test` → **118 例全绿**、`flutter analyze` → `No issues found! (ran in 3.9s)`；**未验项**：本机未装 Visual Studio，Windows 原生构建与真机联调**不可执行**；
-本段两笔（`17a0e10` + `aa5457b`）+ 本 docs 笔**尚未推送** |
+本段两笔（`17a0e10` + `aa5457b`）+ docs 笔**已在远端**（`b97f9b2`） |
 | 上一轮成果（段 4） | **M6 CLIENT-BASE 段 4：Android 入口装配（4a 入口 + 连接配置页 / 4b 设备登录页 / 4c 自身态势页 + 1s 轮询 / 4d Android debug 明文许可）**——按裁定「段 4 Android 入口装配」「拆 4a/4b/4c（+4d）」「零依赖手写」「模拟器 + adb reverse 11001」。4a：`lib/main.dart`（外壳装配 + `ApiClient` 生命周期）+ `lib/features/connection/connection_page.dart`（构造即校验，非法**不写库不跳转**）＋9 例；4b：`lib/features/device/device_login_page.dart`（`deviceLogin` → `DeviceSession` → `writeDevice`）＋8 例；4c：`lib/features/situation/situation_page.dart`（`SituationPoller` 1000 ms、至多一个在途、失败不清空 `latest`）＋6 例；4d：`android/app/src/debug/AndroidManifest.xml` + `android/app/src/debug/res/xml/network_security_config.xml`（**只放行 `127.0.0.1`/`localhost` 明文**，release 不含本覆盖层）。门禁 `flutter test` → **95 例全绿**、`flutter analyze` → `No issues found!`；**已用 simulator 网关 + 62400 段专属种子做模拟器端到端冒烟**（轮询 5 → 20 次、字段逐项一致），冒烟后精确回收；**段 4 不含 WS 与 revision 缓存聚合**；
-本段四笔（`1f61d27` + `ee33764` + `1bbb284` + `3600056`）+ docs 笔 `778de25`**尚未推送** |
+本段四笔（`1f61d27` + `ee33764` + `1bbb284` + `3600056`）+ docs 笔 `778de25`**已在远端** |
 | 上一轮成果（段 3） | **M6 CLIENT-BASE 段 3：连接配置（3a）+ 态势契约模型（3b）+ 态势只读四端点（3c）**——按裁定「拆 3a/3b/3c 三段」且「每段 1 笔代码」。3a：`lib/shared/config/connection_config.dart`（`ConnectionConfig` 构造即校验、默认值逐字对齐 `kDefaultHost`/`kHttpPort`、`baseUri`/`display`）+ `connection_config_store.dart`（端口 + `InMemoryConnectionConfigStore`，**不落盘**）＋10 例；3b：`lib/shared/api/situation_models.dart`（6 模型 + 8 契约枚举，**Poll/WS 同构共用**，**未知枚举 → `FormatException`**）＋15 例；3c：`lib/shared/api/situation_api.dart`（四只读端点，查询串只拼非 null 参数，409 `SITUATION_REVISION_TOO_OLD` 交调用方改全量）＋9 例。门禁 `flutter test` → **73 例全绿**、`flutter analyze` → `No issues found!`；
 本段四笔（`1fc329a` + `c5c1e70` + `6b58f93` + docs 笔 `cdb2897`）**已在远端** |
 | 上一轮成果（段 2b） | **M6 CLIENT-BASE 段 2b：auth 客户端基座测试 + 前缀缺陷修复**——补测段 2 时**抓到真实缺陷**：`ApiClient` 的 `get/post/put/delete` 经 `send` → `resolve()` 只补前导斜杠、**不含 `kApiPrefix`**，`AuthApi` 五端点实际请求无 `/api/v1` 前缀路径（现场 404）；修法取「**`send` 统一走 `api()`**」（1 行）。落 **4 文件**（1 修复 + 3 测试，两笔提交守「≤3 文件」）：`lib/shared/api/api_client.dart`、
@@ -441,16 +458,26 @@ httpStatus?}` / `InstanceHealthApi.probe()`，**永不抛异常**，把 2xx / �
 onLoggedOut，续期后 `writeAccount` 回写存储）、`test/console_widget_test.dart`（改：`accountSession` 扩参 +
 `apiFailure`/`pumpAccount`/`tapAccountButton` 助手 + **15 例** = 汇总页入口 2 + 账号与会话页 13）。
 门禁 `flutter test` → **133 例全绿**、`flutter analyze` → `No issues found! (ran in 2.8s)`；详见 testing 第 40 节。
+新增已完成（**M6 CLIENT-RESILIENCE 段 A/B：态势本地缓存 + 双通道调度器**，见 testing 第 41 节）：
+段 A `lib/shared/state/situation_cache.dart`（新：把 HTTP Poll 与 WS 回来的**同一个** `SituationEnvelope` 按
+`epoch` + `revision` 归并——换代清空 + `needsFullResync`、全量整体替换、增量仅在已对齐时 upsert / 删、
+`revision <= 本地` 与未对齐帧丢弃、命中按 `seq` 去重上限 `kMaxCachedHits = 500`、`teamSummary` 只留最近一次非空、
+`reset()` 缓存不跨会话）；段 B `lib/shared/state/situation_socket.dart`（新：WS 窄端口 + `connectSituationSocket()` +
+`IoWebSocketSituationSocket`，close `4000` 判超窗）与 `lib/shared/state/situation_feed.dart`（新：`SituationFeed`
+双档轮询 2s / 10s 兜底互斥、15s `PING` 保活、3s 退避重连、HTTP 单飞、退出竞态），并给 `api_contract.dart`
+补 `kSituationSubprotocol = 'scds.situation.v1'`。门禁 `flutter test` → **163 例全绿**、`flutter analyze` → `No issues found! (ran in 2.7s)`。
 file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter 工程**段 0（脚手架）+ 段 1（契约/通信基座）+ 段 1b（基座测试）+ 段 2（auth 域客户端）+
 段 2b（auth 客户端基座测试与前置缺陷修复）+ 段 3（连接配置 + 态势模型 + 态势只读四端点）+
 段 4（Android 入口装配：连接配置页 + 设备登录页 + 自身态势页 + 1s 轮询 + debug 明文许可）+
 段 5（Windows 指挥端骨架：平台分派 + 连接配置健康诊断 + 账号登录 + 队伍汇总总览）+
-段 6（指挥端账号与会话：续期 refresh + 身份重载 me + 无体 logout）已就位**；
+段 6（指挥端账号与会话：续期 refresh + 身份重载 me + 无体 logout）+
+CLIENT-RESILIENCE 段 A/B（态势本地缓存双通道同源归并 + WS 端口与双通道调度器）已就位**；
 **Android 单兵端已有可运行入口**（配置 → 设备登录 → 自身态势，已用 simulator 网关 + 专属种子
 做过模拟器端到端冒烟，**只证仿真通过**），**Windows 指挥端已有可运行入口的骨架**（连接配置 → 账号登录 →
 队伍汇总总览 → 账号与会话，**仅过 `flutter analyze` + `flutter test`，未做 Windows 原生构建与真实后端联调**），
-WS 连接与 revision 缓存聚合**尚未接线**，也**未做生产联调**。
+WS 连接与 revision 缓存聚合**已在共享层实现（段 A/B）**，但**尚未接线到 UI**、**未对真实实例建过 WS 连接**，
+也**未做生产联调**。
 
 实际版本为Java21、Spring Boot **3.5.7**、MySQL本机8.4.11；
 以pom和当前代码为准，不沿用历史记忆里的Boot3.3.5。
@@ -525,6 +552,13 @@ M6 CLIENT-WINDOWS 段 6（指挥端账号与会话）证据：**Maven 侧仍无�
 **未验项**：本机**未安装 Visual Studio**，`flutter build windows` / Windows 原生运行 / **真实后端联调**在本段
 **不可执行**，续期与退出的**真实令牌流转**未在真实实例上验证；
 详见 testing 第 40 节。
+M6 CLIENT-RESILIENCE 段 A/B（态势本地缓存 + 双通道调度器）证据：**Maven 侧仍无增减**（Dart 侧资产，
+**不在 reactor 内**），全量仍 **1151 项**（0/0/0）；客户端侧门禁 `flutter test` → `All tests passed!`（**163 例** =
+段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 + 段 A 15 + 段 B 15）与 `flutter analyze` →
+`No issues found! (ran in 2.7s)`；段 A 一笔 2 文件、段 B 一笔 4 文件，测试仍只用 `dart:io` + `flutter_test`（**未新增依赖**）；
+段 B 用例跑在 `testWidgets` **假时钟**上（2s / 10s / 15s / 3s 档位精确推进）；**未验项**：**未对着真实后端实例建立过真实
+WS 连接**，子协议协商 / `Bearer` 握手 / 30s 无上行断开 / 真实 close `4000` 与 `PING`·`PONG` 往返**均未验证**；
+详见 testing 第 41 节。
 M3 LIFE 开演链路就绪 409 硬前置新增证据：core `ExerciseLifecycleServiceIT` **+1**（610 → 611，
 新增 `startExercise_withVestLinkClosed_isDeviceLinkNotOpen` 并加 `@BeforeEach openVestLink()` 补前置）；
 app `ExerciseLifecycleHttpIT` **+1**（331 → 333 中的一笔，新增 `startWithVestLinkClosedIsRejectedAs409`）、
@@ -902,6 +936,22 @@ WS 落地时不再写第二套解析）；解析新增一条口径：**未知枚
 均落在 UI 侧判据，不去重试）；**未验项**：本机未装 Visual Studio，续期/退出的真实令牌流转未在真实实例上验证；
 本段全量计数仍 **1151** 项（Maven 侧 0/0/0），客户端侧 133 例全绿。
 
+2026-10-28新增已确认（M6 CLIENT-RESILIENCE 段 A/B 态势本地缓存与双通道调度器，见 testing 第 41 节）：
+**WS 是加速器不是替代品**——契约硬约束「WS 在线仍须保持 ≤10s 兜底轮询」落成 `wsPollFloor = 10s`；
+WS 未连时用 `pollInterval = 2s` 建议档，两套定时器**互斥切换**、HTTP **单飞**（`_inFlight`）两档共用一把闸；
+**超窗判据用关闭码而非文案**——WS 侧 `closeCode == 4000`、HTTP 侧 `ApiErrorCode.situationRevisionTooOld`，
+两者同走 `cache.markFullResync()` 且**都不算错误态**（`lastError` 不置）；
+**`_onSocketDown` 超窗分支必须先作废 revision 再退出 WS 模式**——否则退出时触发的那一拍兜底 Poll
+会带着**已过期的 `sinceRevision`** 出去、必然再吃一次 409（本段自查发现并修正的顺序缺陷）；
+**同源归并谁先到都不让旧帧覆盖新状态**——两条通道共用一份 `SituationCache`，去重由缓存按 `revision` 完成，
+**增量帧的 `teamSummary` 恒为空**（客户端须自缓存全量）；`reset()` 保证**缓存不跨会话泄漏**；
+**控制帧（含 `action`）不算数据**；**假时钟纪律**：`tester.pump()`（无参）只刷微任务**不推进假时钟**、
+`tester.pump(Duration.zero)` 才走一次 elapse、且 `feed.dispose()` 必须写在用例体内；
+**未引依赖、未改后端、未新增错误码、未改契约、未新增迁移**；
+**未验项**：**未对着真实后端实例建立过真实 WS 连接**（子协议协商 / `Bearer` 握手 / 30s 无上行断开 /
+真实 close `4000` 与 `PING`·`PONG` 往返均未验证）；
+本段全量计数仍 **1151** 项（Maven 侧 0/0/0），客户端侧 **163 例**全绿。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -1003,11 +1053,18 @@ M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1151 项测试、M6 CLIENT-WINDOWS 段 6（指挥端账号与会话
+本快照已同步 1151 项测试、M6 CLIENT-RESILIENCE 段 A/B（态势本地缓存
+`lib/shared/state/situation_cache.dart`（把两条通道的**同一个** `SituationEnvelope` 按 `epoch` + `revision` 归并，
+换代清空 / 全量替换 / 增量去旧 / 命中去重 / 缓存不跨会话）15 例、
+WS 窄端口 `lib/shared/state/situation_socket.dart`（子协议 `scds.situation.v1`、close `4000`）与
+双通道调度器 `lib/shared/state/situation_feed.dart`（2s / 10s 兜底双档、15s `PING`、3s 退避重连、HTTP 单飞、退出竞态）15 例，
+并给 `lib/shared/api/api_contract.dart` 补 `kSituationSubprotocol`；两笔 6 文件 30 例
+`7a5004f`/`a0c8ff2`；客户端 **163 例全绿**；**尚未推送**）、
+M6 CLIENT-WINDOWS 段 6（指挥端账号与会话
 `lib/features/console/account_page.dart`（新：四端口 + 单飞续期 + 退出无论成败清会话）/
 `lib/app/console_app.dart`（`_account` **持有当前会话**，汇总页 `fetch` 按次读新令牌）/
 `lib/features/console/team_summary_page.dart`（AppBar 账号入口）/ `lib/features/console/console_login_page.dart`（注释订正）/
-`test/console_widget_test.dart` 15 例，一笔 5 文件 15 例；客户端 **133 例全绿**；**尚未推送**）、
+`test/console_widget_test.dart` 15 例，一笔 5 文件 15 例；客户端 **133 例全绿**；**已推送** `3c41e5c` + `cd62dda`）、
 段 5（Windows 指挥端骨架 `lib/main.dart` **平台分派** + `lib/app/console_app.dart` 指挥端外壳 +
 `lib/app/client_factory.dart` 双端共用工厂 + `lib/features/connection/connection_page.dart` 健康诊断区 +
 `lib/shared/api/health_api.dart`（`InstanceHealthApi.probe()` 永不抛异常）+ `lib/shared/polling/poller.dart`

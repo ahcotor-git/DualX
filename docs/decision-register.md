@@ -1503,7 +1503,49 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。证据见 [testin
 **不可执行**；续期/退出的**真实令牌流转**（服务端 200/401、已撤销令牌重放连锁撤销）未在真实实例上验证。
 证据见 [testing](testing.md) **第 40 节**。
 
-**再下一段（候选）**：CLIENT-RESILIENCE（WS 连接与轮询调度器、同源归并、重连、刷新单飞、退出竞态、缓存隔离）；
+**再下一段（CLIENT-RESILIENCE 段 A）落地**：用户当次裁定方向「**CLIENT-RESILIENCE（推荐）**」、节奏「**沿用（推荐）**」
+（＝代码 1 笔 + docs 1 笔 + 提交后尝试推送）。范围＝**态势本地缓存与双通道同源归并**，**不含**网络与 WS（留段 B）。
+落 **一笔** `7a5004f`（2 文件，466 insertions）：
+- `lib/shared/state/situation_cache.dart`（新）：`SituationCache` 按 `epoch` + `revision` 归并**两条通道回来的同一个**
+  `SituationEnvelope`；**换代**（`epoch` 不一致）清本地状态 + `needsFullResync`；**全量帧**整体替换 `units`；
+  **增量帧**仅在已对齐时 upsert `changes` / 删 `removedVestNums`、`revision <= 本地` 与未对齐帧**一律丢弃**；
+  命中按 `seq` 去重升序、上限 `kMaxCachedHits = 500`；`teamSummary` 只留**最近一次非空**；`markFullResync()` /
+  `reset()`（**缓存不跨会话泄漏**）；本类**不做网络、不认识令牌**；
+- `test/shared/state/situation_cache_test.dart`（新）：**15 例**（初始态与续传参数 2 / 全量帧 2 / 增量帧 4 /
+  409 后改全量 1 / 换代 2 / 命中与队伍汇总 3 / `reset` 1）。
+
+门禁：`flutter test` → `All tests passed!`（**148 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 + 段 A 15）、
+`flutter analyze` → `No issues found!`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。
+证据见 [testing](testing.md) **第 41 节**。
+
+**再下一段（CLIENT-RESILIENCE 段 B）落地**：范围＝**WS 连接端口 + 双通道调度器（WS + 兜底 Poll）**，
+**不含**认证单飞（401 → refresh → 重试，留 RES-C）与 UI 接线（留 RES-D）。落 **一笔** `a0c8ff2`（4 文件，1085 insertions）：
+- `lib/shared/state/situation_socket.dart`（新）：`SituationSocket` 窄端口（`messages` / `send` / `closeCode` /
+  `closeReason` / `close`）+ `SituationSocketConnector` + `kSituationRevisionTooOldCloseCode = 4000`；
+  `connectSituationSocket()`（`http→ws` / `https→wss`，path `'/ws/v1/situation'`，子协议 + `Authorization: Bearer`）；
+  `IoWebSocketSituationSocket` 适配器（`WebSocket` 是 `Stream<dynamic>`，先 `.cast<String>()` 再转发）；
+- `lib/shared/state/situation_feed.dart`（新）：`SituationFeed extends ChangeNotifier`——**双节奏轮询**
+  （WS 未连 `pollInterval` 2s / WS 已连 `wsPollFloor` 10s 兜底，两定时器**互斥切换**）、`keepAliveInterval` 15s
+  上行 `PING`、`reconnectDelay` 3s 退避重连、HTTP **单飞**（`_inFlight`）、`_onFrame` 控制帧跳过 / 坏帧计丢弃、
+  `requestResync()` 两态、`dispose` **退出竞态**（连接晚于 `dispose` 落地即关、不接管、不重连）；
+- `lib/shared/api/api_contract.dart`（改，+3 行）：新增 `kSituationSubprotocol = 'scds.situation.v1'`；
+- `test/shared/state/situation_feed_test.dart`（新）：**15 例**，全部跑在 `testWidgets` **假时钟**上。
+
+**口径要点**：**WS 是加速器不是替代品**（契约硬约束：WS 在线仍须保持 ≤10s 兜底轮询，仅把 2s 提到 10s）；
+超窗**判据用关闭码**（WS close `4000`）与 HTTP 侧 `ApiErrorCode.situationRevisionTooOld`，
+两者同走 `cache.markFullResync()` 且**都不算错误态**；`_onSocketDown` 超窗分支必须**先作废 revision 再退出 WS 模式**——
+否则退出时触发的那一拍兜底 Poll 会带着**已过期的 `sinceRevision`** 出去，必然再吃一次 409
+（本段自查发现并修正的顺序缺陷）；`_onFrame` 对含 `action` 的控制帧**跳过不算数据**；
+**假时钟纪律**：`tester.pump()`（无参）只刷微任务**不推进假时钟**、`tester.pump(Duration.zero)` 才走一次 elapse、
+且 `feed.dispose()` 必须写在用例体内（`testWidgets` 在用例体返回前校验「无待定定时器」）。
+
+门禁：`flutter test` → `All tests passed!`（**163 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 + 段 A 15 + 段 B 15）、
+`flutter analyze` → `No issues found! (ran in 2.7s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。
+**未验项**：**未对着真实后端实例建立过真实 WS 连接**——子协议协商、`Bearer` 握手、服务端 30s 无上行断开、
+真实 close `4000` 与 `PING`/`PONG` 往返**均未验证**。证据见 [testing](testing.md) **第 41 节**。
+
+**再下一段（候选）**：CLIENT-RESILIENCE 剩余子段（**RES-C** 认证单飞：401 → refresh → 重试；
+**RES-D** 同源归并接线到 UI：`device_app` / `console_app` 接 `SituationFeed`，并验缓存隔离）；
 CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）；T-PROD 部署；平台安全存储（Android Keystore /
 Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐
 **Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（段 5/6 经授权放宽，后续恢复默认）。
