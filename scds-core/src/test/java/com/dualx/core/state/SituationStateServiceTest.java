@@ -662,6 +662,100 @@ class SituationStateServiceTest {
         assertThat(state.snapshot()).extracting(UnitState::vestNum).containsExactly(1, 2);
     }
 
+    // ------------------------------------------------------------------ 每马甲链路计数（getVestLink）
+
+    @Test
+    void vestLinkCountsEveryUplinkFrameTypeAndTracksLastFrameType() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        state.dispatch(new StateEvent.Serial(gps(1, 116.4, 39.9), SOURCE));
+        state.dispatch(new StateEvent.Serial(hit(1, 42, HitPart.HEAD.code()), SOURCE));
+        state.dispatch(new StateEvent.Serial(mortar(1), SOURCE));
+        state.dispatch(new StateEvent.Serial(simNo(1), SOURCE));
+
+        assertThat(state.vestLink(1)).get().satisfies(link -> {
+            assertThat(link.vestNum()).isEqualTo(1);
+            assertThat(link.framesTotal()).as("五类上行帧各计一次").isEqualTo(5);
+            assertThat(link.lastFrameType()).as("最近一帧是 ff0a").isEqualTo("ff0a");
+            assertThat(link.droppedTotal()).isZero();
+            assertThat(link.online()).isTrue();
+            assertThat(link.lastHeartbeatAt()).isEqualTo(T0);
+        });
+        assertThat(state.vestLink(2)).get()
+                .as("计数是每马甲的，不串到别的单元")
+                .extracting(SituationStateService.VestLink::framesTotal).isEqualTo(0L);
+    }
+
+    @Test
+    void indoorLocationFrameIsCountedAsDroppedNotReceived() {
+        state.dispatch(new StateEvent.Serial(indoorLocation(1), SOURCE));
+
+        assertThat(state.vestLink(1)).get().satisfies(link -> {
+            assertThat(link.framesTotal()).as("ff06 恒丢，不进 framesTotal").isZero();
+            assertThat(link.lastFrameType())
+                    .as("lastFrameType 的值域独占 ff06 之外的五类").isNull();
+            assertThat(link.droppedTotal()).isEqualTo(1);
+            assertThat(link.online()).as("从无心跳 → 离线").isFalse();
+        });
+    }
+
+    @Test
+    void framesArrivingWhileDeadCountAsDroppedNotReceived() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 0, 30, 30), SOURCE));
+        assertThat(state.unit(1)).get().extracting(UnitState::status).isEqualTo(VestStatus.DIE);
+
+        clock.advance(Duration.ofSeconds(10));
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 88, 30, 30), SOURCE));
+        state.dispatch(new StateEvent.Serial(gps(1, 100.0, 20.0), SOURCE));
+
+        assertThat(state.vestLink(1)).get().satisfies(link -> {
+            assertThat(link.framesTotal()).as("阵亡冻结期内的帧只计入丢弃").isEqualTo(2);
+            assertThat(link.lastFrameType()).as("阵亡后不再刷新最近帧类型").isEqualTo("ff03");
+            assertThat(link.droppedTotal()).isEqualTo(2);
+            assertThat(link.lastHeartbeatAt()).as("阵亡后心跳不再刷新窗口基").isEqualTo(T0);
+            assertThat(link.online()).as("距最后心跳已超窗").isFalse();
+        });
+    }
+
+    @Test
+    void vestLinkOnlineTracksTheHeartbeatWindow() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        assertThat(state.vestLink(1)).get()
+                .extracting(SituationStateService.VestLink::online).isEqualTo(true);
+
+        clock.advance(Duration.ofMillis(5000));
+        assertThat(state.vestLink(1)).get()
+                .as("正好 5000ms 仍在窗口内（判据是 > 5000）")
+                .extracting(SituationStateService.VestLink::online).isEqualTo(true);
+
+        clock.advance(Duration.ofMillis(1));
+        assertThat(state.vestLink(1)).get()
+                .as("超窗即离线，不受离线扫描节拍影响")
+                .extracting(SituationStateService.VestLink::online).isEqualTo(false);
+    }
+
+    @Test
+    void vestLinkIsEmptyForVestsOutsideTheRoster() {
+        assertThat(state.vestLink(7)).isEmpty();
+    }
+
+    @Test
+    void beginExerciseResetsPerVestCounters() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        assertThat(state.vestLink(1)).get()
+                .extracting(SituationStateService.VestLink::framesTotal).isEqualTo(1L);
+
+        state.beginExercise(OTHER_EXERCISE_ID, T0, List.of(roster(1, "红军-01", Team.RED)));
+
+        assertThat(state.vestLink(1)).get().satisfies(link -> {
+            assertThat(link.framesTotal()).as("每马甲计数随开演重置").isZero();
+            assertThat(link.droppedTotal()).isZero();
+            assertThat(link.lastFrameType()).isNull();
+            assertThat(link.lastHeartbeatAt()).isNull();
+            assertThat(link.online()).isFalse();
+        });
+    }
+
     // ------------------------------------------------------------------ 测试夹具
 
     private static final java.util.UUID EXERCISE_ID =
@@ -728,5 +822,17 @@ class SituationStateServiceTest {
     private static SerialFrame.Gps gps(int vestNum, double lng, double lat) {
         return new SerialFrame.Gps(vestNum, (long) (lng * 1_000_000), (long) (lat * 1_000_000),
                 lng, lat, new byte[] {(byte) vestNum});
+    }
+
+    private static SerialFrame.IndoorLocation indoorLocation(int vestNum) {
+        return new SerialFrame.IndoorLocation(vestNum, 0L, 0L, new byte[] {(byte) vestNum});
+    }
+
+    private static SerialFrame.Mortar mortar(int vestNum) {
+        return new SerialFrame.Mortar(vestNum, 45, 800, new byte[] {(byte) vestNum});
+    }
+
+    private static SerialFrame.SimNo simNo(int vestNum) {
+        return new SerialFrame.SimNo(vestNum, "SIM-0001", new byte[] {(byte) vestNum});
     }
 }

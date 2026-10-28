@@ -79,6 +79,17 @@ public final class SituationQuery {
         return state.unit(vestNum);
     }
 
+    /**
+     * 单个马甲的链路状态（契约 {@code getVestLink}）；不在本场编成内时为空。
+     *
+     * <p>与 {@link #unit(int)} 的空值口径不同：{@code getVestLink} 的 404 判据是**设备台账**是否存在
+     * （{@code VestLedgerService}），编成与否不影响「能不能查这个马甲」——不在编成时应回
+     * {@code online=false} 与零计数，而非 404。故本方法返回空 Optional 由调用方决定怎么降级。</p>
+     */
+    public Optional<SituationStateService.VestLink> vestLink(int vestNum) {
+        return state.vestLink(vestNum);
+    }
+
     // ------------------------------------------------------------------ 增量
 
     /**

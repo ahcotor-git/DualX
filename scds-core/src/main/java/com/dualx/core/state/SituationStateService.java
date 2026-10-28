@@ -23,6 +23,7 @@ import com.dualx.protocol.Team;
 import com.dualx.protocol.VestStatus;
 import com.dualx.protocol.WeaponKind;
 import com.dualx.protocol.serial.SerialFrame;
+import com.dualx.protocol.serial.SerialFrameType;
 import com.dualx.protocol.uwb.UwbFrame;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -274,10 +275,61 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
             case SerialFrame.Heartbeat hb -> heartbeat(hb, clock.instant());
             case SerialFrame.Hit hit -> recordHit(hit, clock.instant());
             case SerialFrame.Gps gps -> applyGps(gps);
-            case SerialFrame.IndoorLocation location -> log.debug(
-                    "ff06 室内定位点未采用（室内坐标走 UWB 41B 解算帧），vestNum={}", location.vestNum());
-            case SerialFrame.Mortar mortar -> log.debug("ff07 迫击炮帧不在 S3 范围，vestNum={}", mortar.vestNum());
-            case SerialFrame.SimNo sim -> log.debug("ff0a SIM 帧不在 S3 范围，vestNum={}", sim.vestNum());
+            case SerialFrame.IndoorLocation location -> {
+                // ff06 恒丢（协议 §1.4④：室内坐标一律由 41B UWB 帧解算），只进丢弃计数，
+                // 不进 framesTotal——契约给 lastFrameType 的值域正是「五类白名单」，两侧口径由此对齐。
+                noteDropped(location.vestNum());
+                log.debug("ff06 室内定位点未采用（室内坐标走 UWB 41B 解算帧），vestNum={}", location.vestNum());
+            }
+            // ff07 / ff0a 本段仍只记 DEBUG（不在 S3 处理范围），但「帧到了」照记：本端点回答的是
+            // 「这个马甲还在上报吗」，不是「这一帧有没有被采纳」。
+            case SerialFrame.Mortar mortar -> {
+                noteUplink(mortar.vestNum(), SerialFrameType.MORTAR);
+                log.debug("ff07 迫击炮帧不在 S3 范围，vestNum={}", mortar.vestNum());
+            }
+            case SerialFrame.SimNo sim -> {
+                noteUplink(sim.vestNum(), SerialFrameType.SIM_NO);
+                log.debug("ff0a SIM 帧不在 S3 范围，vestNum={}", sim.vestNum());
+            }
+        }
+    }
+
+    /**
+     * 记一帧到达的上行帧（契约 {@code getVestLink} 的 {@code framesTotal} / {@code lastFrameType}
+     * 来源）。
+     *
+     * <p><b>「收到」与「丢弃」互斥</b>：阵亡冻结期内到达的帧算丢弃——{@code INV-FREEZE} 要求阵亡单元
+     * 不再接受新的状态输入，帧虽到达也不该让控制台看到「它在正常上报」。故
+     * {@code framesTotal + droppedTotal} 就是该马甲在本场被本服务看到的全部上行帧。</p>
+     *
+     * @return 该帧是否算作「收到」；{@code false} 表示该马甲已阵亡、帧已计入丢弃
+     */
+    private boolean noteUplink(Unit u, SerialFrameType type) {
+        if (u.status == VestStatus.DIE) {
+            u.droppedTotal++;
+            return false;
+        }
+        u.framesTotal++;
+        u.lastFrameType = type;
+        return true;
+    }
+
+    /** 按马甲编号记一帧到达的上行帧；不在本场编成内的马甲不归属任何单元，忽略。 */
+    private void noteUplink(int vestNum, SerialFrameType type) {
+        Unit u = units.get(vestNum);
+        if (u != null) {
+            noteUplink(u, type);
+        }
+    }
+
+    /**
+     * 记一帧「被丢弃」的帧：{@code ff06} 恒丢（协议 §1.4④），或阵亡冻结期内到达的帧。
+     * 不在本场编成内的马甲不归属任何单元，忽略。
+     */
+    private void noteDropped(int vestNum) {
+        Unit u = units.get(vestNum);
+        if (u != null) {
+            u.droppedTotal++;
         }
     }
 
@@ -289,6 +341,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
             framesFromUnknownVest.incrementAndGet();
             return;
         }
+        // 「帧到了」先于阵亡判定记账：阵亡冻结期内的心跳进 droppedTotal（见 noteUplink）。
+        noteUplink(u, SerialFrameType.HEARTBEAT);
         if (u.status == VestStatus.DIE) {
             // 阵亡是终态：心跳不再改状态、不再覆盖坐标，只等 COMMAND 判活解除冻结。
             return;
@@ -330,6 +384,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
             framesFromUnknownVest.incrementAndGet();
             return;
         }
+        // 「帧到了」先于阵亡判定记账：阵亡冻结期内的 GPS 进 droppedTotal（见 noteUplink）。
+        noteUplink(u, SerialFrameType.GPS);
         if (u.status == VestStatus.DIE) {
             // 阵亡冻结：后续上报的坐标一律丢弃（openapi.yaml 硬约束）。
             return;
@@ -428,6 +484,10 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
             return;
         }
         Unit victim = units.get(hit.hitVestNum());
+        // ff05 的属主是**被击中者**（hitVestNum），不是开枪者：帧由被击中的马甲上报。
+        if (victim != null) {
+            noteUplink(victim, SerialFrameType.HIT);
+        }
         GeoPoint position = victim == null ? null : victim.position;
         HitEvent event = new HitEvent(
                 0L,
@@ -766,6 +826,45 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         return Optional.ofNullable(linkStates.get(kind));
     }
 
+    /**
+     * 每马甲的链路状态（契约 {@code getVestLink} 的**权威来源**，设计 06 §S7）。
+     *
+     * <p><b>与链路级计数互不冒充</b>（设计 05 §5）：这里数的是「本场该马甲收到了多少帧、最近一帧
+     * 是什么、丢了多少」，链路级 {@code LinkStatus.framesTotal} 数的是「这条串口/UWB 链路收了多少
+     * 合法/坏帧」。两者不是同一口径，不得互相顶替。</p>
+     *
+     * <p><b>{@code online} 判定</b>：距最后一次心跳 ≤ {@link #ONLINE_WINDOW}（契约原文明文定义）。
+     * 这里<b>不</b>用 {@code status == LIVE} 兜底：离线扫描（{@link #scanOffline}）是周期触发的，
+     * 状态位可能比窗口落后一拍；按窗口现算不受扫描节拍影响，与契约逐字一致。</p>
+     *
+     * @return 该马甲在本场编成内时的链路状态；不在编成内（未开演 / 非本场）时为空 Optional
+     */
+    public Optional<VestLink> vestLink(int vestNum) {
+        Unit u = units.get(vestNum);
+        if (u == null) {
+            return Optional.empty();
+        }
+        boolean online = u.lastHeartbeatAt != null
+                && !clock.instant().isAfter(u.lastHeartbeatAt.plus(ONLINE_WINDOW));
+        return Optional.of(new VestLink(
+                u.vestNum,
+                online,
+                u.lastHeartbeatAt,
+                u.lastFrameType == null ? null : u.lastFrameType.tag(),
+                u.framesTotal,
+                u.droppedTotal));
+    }
+
+    /**
+     * 单马甲链路状态的读侧载体（契约 {@code getVestLink}）。
+     *
+     * <p>{@code lastFrameType} 是契约值域里的**小写 HEX 帧头**（{@code ff03/ff04/ff05/ff07/ff0a}），
+     * {@code null} 表示本场该马甲还没收到过任何上行帧。</p>
+     */
+    public record VestLink(int vestNum, boolean online, Instant lastHeartbeatAt,
+                           String lastFrameType, long framesTotal, long droppedTotal) {
+    }
+
     public long framesWithoutExercise() {
         return framesWithoutExercise.get();
     }
@@ -804,6 +903,18 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         Instant lastHeartbeatAt;
         Instant deadAt;
         long revision;
+
+        /**
+         * 每马甲链路计数（契约 {@code getVestLink} 的来源，设计 06 §S7）：本场内在**非阵亡**状态下
+         * 到达的上行帧数（{@code ff03/ff04/ff05/ff07/ff0a} 五类）。与
+         * {@link SituationStateService#framesFromUnknownVest} 等**全局**计数不同，这三个字段是
+         * **每马甲**的，不得与链路级 {@code LinkStatus.framesTotal} 互相冒充（设计 05 §5）。
+         */
+        long framesTotal;
+        /** 最近一次「收到」的上行帧类型；值与契约 {@code lastFrameType} 同域（五类白名单，无 ff06）。 */
+        SerialFrameType lastFrameType;
+        /** 本场内该马甲被丢弃的帧数（{@code ff06} 恒丢 + 阵亡冻结期内到达的帧）。 */
+        long droppedTotal;
 
         volatile UnitState view;
 
