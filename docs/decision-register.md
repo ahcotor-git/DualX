@@ -116,6 +116,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | M6 CLIENT-BASE 段 3（连接配置 + 自身态势只读） | 用户当次裁定四项：切分取「**拆 3a/3b/3c 三段**」、配置存储取「**内存实现先行，不引依赖**」、态势范围取「**四端点只读全做**」、提笔取「**每段 1 笔代码 + 末段统一 docs**」。**已落地 3 笔代码**：`1fc329a`（3a，`ConnectionConfig` + `ConnectionConfigStore`/`InMemoryConnectionConfigStore` + 10 例）、`c5c1e70`（3b，`situation_models.dart` 一套 Poll/WS 同构契约类型 + 8 枚举 + 15 例）、`6b58f93`（3c，`SituationApi` 四只读端点 + 9 例）。`flutter test` **73 例**全绿、`flutter analyze` 无问题；Dart 产物不进 Maven reactor，全量仍 **1151 项**。细节见文末该节与 [testing](testing.md) 第 37 节 |
 | M6 CLIENT-BASE 段 4（Android 入口装配 + 模拟器冒烟） | 用户当次裁定两项：网关取「**启动，simulator 网关**」（本机前台跑开发实例，附 `--scds.gateway.mode=simulator`——不占真串口、不监听 12001；**仿真通过不得写成现场通过**）、种子取「**完整种子，争取全绿 200**」（向开发库写专属编号段 **62400** 的 `t_vest`（含 BCrypt 绑定密钥）/`t_plan`/`t_plan_roster`，用**本地签发**的 ADMIN 令牌调 HTTP 开链路、开演）。**已落地 4 笔**：`1f61d27`（4a 入口装配 + 连接配置页）、`ee33764`（4b 设备登录页 + 接线）、`1bbb284`（4c 自身态势页 + 1s 轮询）、`3600056`（4d Android debug 回环明文许可）。冒烟在 `emulator-5554`（AVD `zaa_pixel6`）+ `adb reverse tcp:11001` 上全绿：设备登录成功，自身态势 `已刷新 5 次 → 20 次（每 1000 ms）` 持续增长，字段与种子编成逐项一致；冒烟后按 62400 段**精确回收**并停实例、关模拟器。`flutter test` **95 例**全绿、`flutter analyze` 无问题；Dart 产物不进 reactor，全量仍 **1151 项**。细节见文末该节与 [testing](testing.md) 第 38 节 |
 | M6 CLIENT-WINDOWS 段 5（Windows 指挥端骨架） | 用户当次裁定「**段 5 Windows 指挥端骨架（推荐）**」，并在无人值守下授权「按推荐方式继续」且**放宽「每原子任务 ≤3 文件」上限**（改超 3 文件不再单独授权；其余顶层纪律不变）。范围＝**入口分派 + 连接配置（含健康诊断）+ 账号登录 + 队伍汇总总览（HTTP Poll）**，**不含 WS / revision 缓存聚合 / refresh·me·logout / 指令 / 复盘**。**已落地 2 笔**：`17a0e10`（共享层：`ApiClient.probe` + `health_api.dart` + 泛型 `shared/polling/poller.dart` + `situation_page.dart` 改用 `PollingFeed`）、`aa5457b`（指挥端装配：`main.dart` 平台分派 + `app/client_factory.dart`/`device_app.dart`/`console_app.dart` + `console_login_page.dart` + `team_summary_page.dart` + `connection_page.dart` 健康诊断区 + `console_widget_test.dart`）。`flutter test` **118 例**全绿、`flutter analyze` 无问题；Dart 产物不进 Maven reactor，全量仍 **1151 项**。**未验项**：本机未装 Visual Studio，Windows 原生构建与真机联调**不可执行**。细节见文末该节与 [testing](testing.md) 第 39 节 |
+| M6 CLIENT-WINDOWS 段 6（指挥端账号与会话） | 用户当次裁定本段范围「**CLIENT-WINDOWS 续段：账号会话（refresh/me/logout）（推荐）**」，并在无人值守下就两处语义裁定：「**logout 无论成败都清本地会话（推荐）**」、「**refresh 手动按钮触发，不引定时器（推荐）**」。范围＝**续期 refresh + 身份重载 me + 无体 logout**，**不含** WS / revision 缓存聚合 / 指令 / 地图标定 / 想定 / 复盘。**已落地 1 笔（本笔，hash 随后续回写前移不钉死）**：新 `lib/features/console/account_page.dart` + `team_summary_page.dart` 账号入口 + `console_login_page.dart` 注释订正 + `console_app.dart` 装配与 `_account` 持有当前会话 + `console_widget_test.dart` 新增 15 例。`flutter test` **133 例**全绿、`flutter analyze` 无问题；Dart 产物不进 Maven reactor，全量仍 **1151 项**。**未验项**：本机未装 Visual Studio，Windows 原生构建与真机联调**不可执行**；续期/退出真实令牌流转未在真实实例上验证。细节见文末该节与 [testing](testing.md) 第 40 节 |
 | 提交/推送 M2 LEDGER 成果 | 用户本轮明确授权“提交 LEDGER 并尝试推送”。**已落地 5 个本地提交**（`86e9b71` 契约、`a95bcf3` 服务、`9c3ab09` 接线+权限、`74162ca` 测试、`e8258a0` 文档），叠加既有 4 个后 `main` 领先 `origin/main` **9 个提交**；推送**两次均因网络失败**（`Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。不推导后续自动提交授权 |
 | 提交/推送 M2 MAP-BASE A1/A2 与 B1-B3 | 用户当次选择“提交并尝试推送”与“B2 + B3 连做”。**已落地 5 个本地提交**（`c8c1d5d` 契约 A1/A2、`867bd4c` 裁定登记、`8e1adbd` B1 存储端口与实现、`55739f1` B2 签名 URL、`7846030` B3 单测与配置）。`867bd4c` 那次推送已成功入远端；B1-B3 三次推送**均因网络失败**（`Connection was reset` / 无法连接 github.com:443），`main` 领先 `origin/main` **3 个提交**，**远端未更新** |
 | 提交/推送 M2 MAP-BASE 分段 C 与“演习中删图”裁定 | 用户当次选择“提交并重试推送”与“一并拦截，复用 MAP_IN_USE”。**已落地 3 个本地提交**（`3787254` C1 错误码与契约登记、`e8006b6` C2 台账服务与想定/演习引用判据、`8b9de5c` C2 用例），叠加既有 4 个后 `main` 领先 `origin/main` **7 个提交**；本轮推送**两次均因网络失败**（`Recv failure: Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。`C` 段已跑通全量 `mvn -B verify`（716 项，protocol 19 / core 316 / api 100 / app 281） |
@@ -1474,10 +1475,38 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。证据见 [testin
 **不可执行**；Windows 页面测试**不得**用 Chrome 替代 Windows 桌面构建验收（承 `implementation-plan.md` §7）。
 证据见 [testing](testing.md) **第 39 节**。
 
-**再下一段（候选）**：T-PROD 部署；CLIENT-RESILIENCE（WS 连接与轮询调度器、同源归并、重连、刷新单飞、退出竞态、缓存隔离）；
-CLIENT-WINDOWS 续段（refresh/me/logout、指令、地图/标定、想定、复盘导出）；平台安全存储（Android Keystore /
+**再下一段（段 6）落地**：用户当次裁定范围「**CLIENT-WINDOWS 续段：账号会话（refresh/me/logout）（推荐）**」，
+并在无人值守下就两处语义裁定——**退出**取「**无论成败都清本地会话（推荐）**」、**续期**取
+「**手动按钮触发，不引定时器（推荐）**」。范围＝**续期 refresh + 身份重载 me + 无体 logout**，
+**不含** WS、revision 缓存聚合、指令、地图/标定、想定、复盘导出。按裁定落 **一笔**（新页 + 装配 + 测试一次成型）：
+- `lib/features/console/account_page.dart`（新）：三端口 `AccountRefresh` / `AccountReload` / `AccountLogout`
+  ＋ `SessionClearing`；身份/到期/权限只读呈现；**手动续期**（单飞去重，进行中丢点击并禁用按钮）；
+  续期失败按码分文案（`AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_INVALID` 都指向重新登录，**不自动重试**）；
+  `me` 只做展示刷新；退出**无论服务端是否确认都 `clearAll()`**，未确认时留本页明示、由「返回登录」再导航；
+  控件键 `consoleAccount.*`；
+- `lib/features/console/team_summary_page.dart`（改）：可选 `onOpenAccount`，注入时 AppBar 出「账号」入口
+  （键 `kTeamSummaryAccountEntryKey`），**未注入不渲染**；
+- `lib/features/console/console_login_page.dart`（改）：仅订正类注释（refresh/logout 改由 `AccountPage` 承担，代码零改动）；
+- `lib/app/console_app.dart`（改）：装配三端口；新增 `_account` 持有**当前装配的账号会话**，
+  队伍汇总 `fetch` 闭包**按次读取**它——**续期换到的新 `accessToken` 才真正生效**；续期端口写回 `SessionStore` 并替换 `_account`；
+  退出回调弹两层回登录页；
+- `test/console_widget_test.dart`（改）：**15 例** = 账号与会话页 13 + 队伍汇总入口 2（`accountSession` 扩参、新增
+  `apiFailure` / `pumpAccount` / `tapAccountButton`）。
+
+**口径要点**：续期是**手动按钮**、单飞去重，**不引定时器**；登录会话**可能没有 `refreshToken`**（契约可选）→ 判空后
+**不发无效请求**；**已撤销令牌重放会撤销该账号全部 refreshToken**（契约口径）→ 客户端**不得自作主张重试**；
+**`accessToken` 无状态不可撤销** → 退出路径**无论成败都清本地会话**；滚动刷新**可能不回 `user`** → 缺失时保留原身份快照。
+
+门禁：`flutter test` → `All tests passed!`（**133 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15）、
+`flutter analyze` → `No issues found! (ran in 2.8s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。
+**未验项**：本机**未安装 Visual Studio**，`flutter build windows` / Windows 原生运行 / **真实后端联调**在本段
+**不可执行**；续期/退出的**真实令牌流转**（服务端 200/401、已撤销令牌重放连锁撤销）未在真实实例上验证。
+证据见 [testing](testing.md) **第 40 节**。
+
+**再下一段（候选）**：CLIENT-RESILIENCE（WS 连接与轮询调度器、同源归并、重连、刷新单飞、退出竞态、缓存隔离）；
+CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）；T-PROD 部署；平台安全存储（Android Keystore /
 Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐
-**Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（本段经授权放宽，后续恢复默认）。
+**Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（段 5/6 经授权放宽，后续恢复默认）。
 
 
 

@@ -2661,4 +2661,57 @@ Windows 页面测试**不得**用 Chrome 替代 Windows 桌面构建验收（承
 
 本段为**客户端骨架与 widget 层验收**，不是生产发布批准；**不代表已过 Windows 原生构建、真机联调或现场网络**。
 
+## 40. M6 CLIENT-WINDOWS 段 6：指挥端账号与会话（续期 refresh + 身份重载 me + 无体 logout）
 
+段 6 落 **一笔**（端到端一次成型：新页 + 装配 + 测试），docs 在本节一次回写。范围＝**「账号续期、身份重载、退出登录」**，
+**不含** WebSocket、不含 revision 缓存聚合、不含指令/地图/想定/复盘。
+本段**未做** Windows 原生构建与真实后端联调（本机**未安装 Visual Studio**，按下文 40.4 记为未验项）。
+
+### 40.1 交付物（1 笔 = 5 文件，1 新 4 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/account_page.dart`(新) | 账号与会话页：身份/到期/权限只读呈现 + **手动续期**（单飞去重，进行中丢点击并禁用按钮）+ **身份重载**（`GET /auth/me`）+ **退出**（无体 `POST /auth/logout`）。三端口 `AccountRefresh` / `AccountReload` / `AccountLogout` + `SessionClearing`；控件键 `consoleAccount.*`（identity / expiry / permissions / refreshButton / refreshProgress / reloadButton / logoutButton / logoutProgress / error / notice / signedOut / returnButton） |
+| `lib/features/console/team_summary_page.dart`(改) | 新增**可选** `onOpenAccount`；AppBar `actions` 在注入回调时渲染「账号」入口（键 `kTeamSummaryAccountEntryKey`），**未注入则不渲染** |
+| `lib/features/console/console_login_page.dart`(改) | 只订正类注释：refresh/logout 不再属「后续段」，改由 `AccountPage` 承担（代码零改动） |
+| `lib/app/console_app.dart`(改) | 装配账号页三端口；新增字段 `_account` 持有**当前装配的账号会话**；队伍汇总的 `fetch` 闭包改为按次读 `_account!.accessToken`（**续期换到的新令牌才真正生效**）；续期端口把新会话写回 `SessionStore` 并替换 `_account`；退出回调弹两层回登录页 |
+| `test/console_widget_test.dart`(改) | 指挥端新增 15 例（见 40.2）；`accountSession` 助手扩参（`refreshToken` / `accessToken` / `expiresAt` / `permissions`）；新增 `apiFailure` / `pumpAccount` / `tapAccountButton` 助手 |
+
+### 40.2 用例与判据（15 例 = 账号与会话页 13 + 队伍汇总入口 2）
+
+| 组 | 用例 | 判据 |
+|---|---|---|
+| 账号与会话页（13） | 展示身份/到期/权限；**已过期只读提示**且**不自动续期**；续期成功 → 会话整体替换 + 新到期提示；续期进行中再次点击 → **不重复调用**且按钮禁用；**无 `refreshToken`** → 行内提示且**不发请求**；`AUTH_TOKEN_EXPIRED` → 「刷新令牌已过期，请重新登录」；`AUTH_TOKEN_INVALID` → 「无效或已被撤销」；续期网络异常 → 可读错误不红屏；身份重载成功 → 展示 `me` 返回的账号与权限；身份重载失败 → 行内可读错误；退出成功 → 清本地会话 + 回登录；**退出服务端未确认 → 仍清本地会话**、留本页、点「返回登录」才导航；退出网络异常 → 同样清本地会话并留本页 | 续期是**手动按钮**（不引定时器）；单飞去重；到期判定**只读**（本地按 `expiresAt`，零网络动作）；退出路径**无论成败都 `clearAll()`**；令牌不进 UI、不打印 |
+| 队伍汇总入口（2） | 注入 `onOpenAccount` 时「账号」入口存在且点击触发回调；**未注入时不渲染** | 入口由装配决定，页面不自造导航 |
+
+### 40.3 口径要点
+
+- **续期是手动按钮，不引定时器**（无人值守裁定）：现场可控优先；进行中再点**直接忽略**（单飞），
+  按钮同时禁用——与 `PollingFeed` 的「至多一个在途请求」同纪律，但**不共用一个周期定时器**。
+- **登录会话可能没有 `refreshToken`**：`TokenPair.refreshToken` 在契约里可选，故页面先判空，
+  **不发无效请求**，直接提示重新登录。
+- **续期失败一律指向重新登录**：`AUTH_TOKEN_EXPIRED` 与 `AUTH_TOKEN_INVALID`（未知/篡改/**已撤销**）
+  都**不自动重试**；特别是已撤销令牌重放会撤销该账号全部 refreshToken（契约口径），客户端不得自作主张重试。
+- **退出无论成败都清本地会话**（无人值守裁定）：`accessToken` **无状态不可撤销**，留着只会让现场误判还在登录态；
+  服务端未确认时**留在本页明示**（「服务端未确认，已本地退出（<code>）」），由用户点「返回登录」再走导航。
+- **续期后新令牌必须真生效**：`console_app.dart` 用 `_account` 字段持有当前会话，汇总页的 `fetch` 闭包
+  **按次读取**该字段——否则续期只换了存储、页面还在用旧 `accessToken`。
+- **滚动刷新可能不回 `user`**：`TokenPair.user` 可选，续期端口在缺失时**保留原身份快照**（身份不变，变的是令牌）。
+- **`me` 只做展示刷新**：不改会话存储（令牌与到期均未变），属只读语义。
+- **本段不做**：WS 连接、revision 缓存聚合、指令、地图/标定、想定、复盘导出（均在后续段）。
+
+### 40.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**133 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15）；
+  `flutter analyze` → `No issues found! (ran in 2.8s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（0/0/0）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、轮询周期、在线窗口、
+  校验算法、四角编号口径、`docs/api/**` 契约、迁移、`scds-solver`；**未新增依赖**
+  （仍只 `flutter` + `cupertino_icons`；`dart:io` 与手写补零格式化，**不引 `intl`**）。
+
+**未验项（本机环境限制）**：本机**未安装 Visual Studio**，故 `flutter build windows`、Windows 原生运行与
+**真实后端联调**在本段**不可执行**；本节门禁只覆盖 `flutter analyze` + `flutter test`（widget 层）。
+续期/退出的**真实令牌流转**（服务端 200/401、已撤销令牌重放连锁撤销）**未在真实实例上验证**。
+Windows 页面测试**不得**用 Chrome 替代 Windows 桌面构建验收（承 `implementation-plan.md` §7）。
+
+本段为**客户端骨架与 widget 层验收**，不是生产发布批准；**不代表已过 Windows 原生构建、真机联调或现场网络**。
