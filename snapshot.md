@@ -56,18 +56,18 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 （本机缺 Visual Studio，**不能原生构建**，安装需另授权）。
 另有一条单列后续：**T-PROD 部署**；以及一条**观察项**——硬件 ACK 解析（「已发送」≠「已确认」仍无人写入
 `ACKED`，且协议无回执帧）。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮段 1 的代码笔（`dbc5dd9`）**已本地提交**，
-docs 回写笔待提交（见 §2）。
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮段 0 与段 1 的各笔**均已提交并推送**
+（段 1：代码 `dbc5dd9` + docs `8303add`；见 §2）。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本轮 M6 CLIENT-BASE 段 0 两笔**已入远端**（脚手架 `b16c348` + docs `f4c9f15`，另有快照订正 `78bbb99`）；段 1 代码笔 `dbc5dd9` **已本地提交、待与本 docs 笔一并推送**；HEAD 随后续回写前移，故不钉死具体 hash |
-| 实际远端main | 已入远端的是 `78bbb99 docs: 快照订正——M6 CLIENT-BASE 段 0 两笔已推送入远端`（其前为段 0 脚手架 `b16c348`、docs `f4c9f15`、`1950b4e` 快照订正）；更早为本轮 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
-| 已推送 | `b16c348..78bbb99` 已入远端：**M6 CLIENT-BASE 段 0 三笔**（`b16c348` 脚手架 `clients/scds_client` 45 文件 + `f4c9f15` docs 回写 3 文件 + `78bbb99` 快照订正）；更早 `4b76f2b..068d706` 为 R4 遗留收口三笔、`ac9353a..4b76f2b` 为 L6 口径收口三笔；再往前（链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3）亦均在远端 |
-| 未推送（仅本机） | 本轮段 1 的**两笔**——代码笔 `dbc5dd9`（`clients/scds_client/lib/shared/api/` 三文件：`api_contract.dart` / `api_problem.dart` / `api_client.dart`）＋ 本 docs 回写笔（`docs/decision-register.md` 段 1 登记行与文末节、`docs/testing.md` 第 33 节、`snapshot.md`）；推送后此格即为**无** |
+| 源码本地HEAD | 本轮 M6 CLIENT-BASE 段 0 与段 1 的各笔**均已入远端**（段 0：`b16c348` 脚手架 + `f4c9f15` docs + `78bbb99` 订正；段 1：`dbc5dd9` 代码 + `8303add` docs），工作树**干净**、与 `origin/main` 同步；HEAD 随后续回写前移，故不钉死具体 hash |
+| 实际远端main | 已入远端的是 `8303add docs: 登记 M6 CLIENT-BASE 段 1 契约/通信基座`（其前为段 1 代码笔 `dbc5dd9`，段 0 三笔 `b16c348`/`f4c9f15`/`78bbb99`，`1950b4e` 快照订正）；更早为本轮 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
+| 已推送 | `78bbb99..8303add` 已入远端：**M6 CLIENT-BASE 段 1 两笔**（`dbc5dd9` 代码 `lib/shared/api/` 三文件 + `8303add` docs 回写 3 文件）；更早 `b16c348..78bbb99` 为段 0 三笔、`4b76f2b..068d706` 为 R4 遗留收口三笔、`ac9353a..4b76f2b` 为 L6 口径收口三笔；再往前（链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3）亦均在远端 |
+| 未推送（仅本机） | **无**。本轮段 1 的代码笔（`dbc5dd9`）与 docs 笔（`8303add`：`docs/decision-register.md` 段 1 登记行与文末节 + `docs/testing.md` 第 33 节 + `snapshot.md`）**均已提交并推送**（`78bbb99..8303add main -> main`） |
 | 本轮继续成果 | **M6 CLIENT-BASE 段 1：共享契约 / 通信基座**——`clients/scds_client/lib/shared/api/` 三文件：
 `api_contract.dart`（端口/前缀/media type 与 `ApiErrorCode` 常量族）、`api_problem.dart`（RFC 7807 模型 +
 `ApiException`）、`api_client.dart`（**`dart:io HttpClient`** 封装，非 2xx 抛 `ApiException`）。
