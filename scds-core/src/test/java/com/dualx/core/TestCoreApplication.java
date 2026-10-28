@@ -1,5 +1,6 @@
 package com.dualx.core;
 
+import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.TokenSigner;
 import com.dualx.core.state.SituationSessionBinder;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
@@ -89,5 +90,19 @@ class TestCoreApplication {
     @Bean
     SituationSessionBinder situationSessionBinder() {
         return mock(SituationSessionBinder.class);
+    }
+
+    /**
+     * 硬件下行端口的装配点在 {@code scds-app} 的 {@code GatewayConfig}（它要按
+     * {@code scds.gateway.mode} 在真链路与仿真之间二选一），本测试上下文里没有。
+     *
+     * <p>{@code ExerciseLifecycleService} 对它有**强依赖**——生产侧缺装配就该起不来，故不放宽成
+     * 可选注入；这里只补一个桩。桩的 {@code snapshot()} 返回空列表，即「链路未开」：开演/停演的下行
+     * 分支因此走「跳过 + WARN」，不写库、不影响既有用例的日志断言。真下发与其字节断言由 app 层
+     * 用仿真适配器覆盖。
+     */
+    @Bean
+    DeviceLinkAdmin deviceLinkAdmin() {
+        return mock(DeviceLinkAdmin.class);
     }
 }

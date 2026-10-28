@@ -7,10 +7,14 @@ import com.dualx.core.domain.ExerciseEndReason;
 import com.dualx.core.domain.ExerciseLogEntry;
 import com.dualx.core.domain.ExerciseLogType;
 import com.dualx.core.domain.ExerciseUnit;
+import com.dualx.core.domain.LinkKind;
+import com.dualx.core.domain.LinkState;
 import com.dualx.core.domain.Plan;
+import com.dualx.core.domain.PollMode;
 import com.dualx.core.domain.RosterEntry;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.repository.ExerciseCommandRepository;
 import com.dualx.core.repository.ExerciseLogRepository;
 import com.dualx.core.repository.ExerciseRepository;
@@ -21,6 +25,10 @@ import com.dualx.core.repository.PlanRosterRepository;
 import com.dualx.core.state.SituationSessionBinder;
 import com.dualx.core.support.InstanceProperties;
 import com.dualx.core.support.UuidV7;
+import com.dualx.protocol.Hex;
+import com.dualx.protocol.serial.DownlinkCommands;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,12 +59,27 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * （{@link ApiErrorCode#INSTANCE_NOT_READY}，503）——启动瞬间端口已在收请求而自愈未必跑完
  * （设计 01 §4.4）。门禁只拦**开演**：停演、读侧不拦，运维正好要靠它们看见并处理残留场次。
  *
- * <p><b>尚未接线</b>：契约 {@code startExercise} 的步骤 ②③（逐台下发 14B 轮询配置帧、
- * 7B 演习开始帧）与 {@code stopExercise} 的 7B 结束帧都属网关下行，{@link #startExercise} 与
- * {@link #stopExercise} 只做库与内存态，不碰硬件；单实例保护（L6）也未落地。
+ * <p><b>硬件下行已接线</b>：{@link #startExercise} 在库与内存态写定之后，逐台下发 14B 轮询配置帧、
+ * 再下发 7B 演习开始帧；{@link #stopExercise} 在冻结收尾之后下发 7B 演习结束帧。物理副作用无法由
+ * JDBC 撤回，故按用户裁定「只留痕、不回滚」：链路未开时不下发（只 WARN），真发送失败写一条
+ * {@code SYSTEM} 存证行后继续——绝不因硬件影响已开演/已停演的场次与响应码。
+ *
+ * <p><b>仍未落地</b>：开演前的「链路就绪」硬前置（设计 05 §4.7 与 D06 的 409
+ * {@code DEVICE_LINK_NOT_OPEN}）与同库单实例保护（L6）——两者都会牵动既有集成测试，单列后续任务。
  */
 @Service
 public class ExerciseLifecycleService {
+
+    private static final Logger log = LoggerFactory.getLogger(ExerciseLifecycleService.class);
+
+    /**
+     * 「全体」下行（7B 开始/结束帧）用的占位马甲编号。
+     *
+     * <p>与 {@code CommandService} 同口径：帧内目标字段固定 {@code FF FF}，编号不参与编码；传 0 只为给
+     * {@code sendVestCommand} 一个占位，真实马甲编号下界为 1，不会与任何真实编号混淆。写日志时按
+     * 「系统级日志」记 {@code NULL}。
+     */
+    private static final int BROADCAST_VEST_NUM = 0;
 
     private final ExerciseRepository exercises;
     private final ExerciseUnitRepository units;
@@ -66,6 +89,7 @@ public class ExerciseLifecycleService {
     private final PlanRepository plans;
     private final PlanRosterRepository planRoster;
     private final SituationSessionBinder sessions;
+    private final DeviceLinkAdmin links;
     private final InstanceProperties instanceProperties;
 
     /** 一次性就绪位，见类 javadoc「恢复完成门禁」；初值 {@code false} 即「尚未自愈」。 */
@@ -75,7 +99,7 @@ public class ExerciseLifecycleService {
                                     HitEventRepository hits, ExerciseCommandRepository commands,
                                     ExerciseLogRepository logs, PlanRepository plans,
                                     PlanRosterRepository planRoster, SituationSessionBinder sessions,
-                                    InstanceProperties instanceProperties) {
+                                    DeviceLinkAdmin links, InstanceProperties instanceProperties) {
         this.exercises = exercises;
         this.units = units;
         this.hits = hits;
@@ -84,6 +108,7 @@ public class ExerciseLifecycleService {
         this.plans = plans;
         this.planRoster = planRoster;
         this.sessions = sessions;
+        this.links = links;
         this.instanceProperties = instanceProperties;
     }
 
@@ -144,8 +169,11 @@ public class ExerciseLifecycleService {
      *
      * <p>顺序：想定 → 编成 → 插入。前两者是**这次请求的内容**问题，报出来现场直接就能改；
      * 而「已有在跑场次」是系统状态，只能在插入那一刻才确定。装载
-     * （{@link SituationSessionBinder#onExerciseStarted}）放最后一步：它改的是内存态，
-     * 之后只剩提交，回滚窗口最小。
+     * （{@link SituationSessionBinder#onExerciseStarted}）放在库写入之后：它改的是内存态。
+     *
+     * <p><b>硬件下行排在最末（契约步骤 ③④）</b>：库与内存态写定之后才逐台下发 14B、再下发 7B。
+     * 这一步只留痕、不回滚——见类 javadoc「硬件下行已接线」。因此本方法的异常面仍是纯业务面，
+     * 不会因为现场没有开串口链路而把开演变成失败。
      *
      * @param planId              开演所引用的想定
      * @param requestedBattleMode 请求体里的模式；为 {@code null} 表示沿用想定的模式（契约默认）
@@ -179,7 +207,76 @@ public class ExerciseLifecycleService {
                 .map(entry -> snapshot(exercise.id(), entry))
                 .toList());
         sessions.onExerciseStarted(exercise);
+        sendStartDownlink(exercise, roster, at);
         return exercise;
+    }
+
+    /**
+     * 开演的硬件下行（契约 {@code startExercise} 步骤 ③④）：逐台下发 14B 轮询配置帧，再下发 7B 开始帧。
+     *
+     * <p><b>链路未开就整段不下发，只 WARN</b>：链路未开时 {@code SerialVestLink.send} 会把帧放进无人
+     * 消费的发送队列并回报成功——那是假成功（与 {@code CommandService} 同一判据）。此时既不写日志
+     * 也不报错：它是**前置条件**问题，按 D06 应以 409 在开演前拦下（本段未做，见类 javadoc），
+     * 而不是在开演后往日志表里灌噪声。
+     */
+    private void sendStartDownlink(Exercise exercise, List<RosterEntry> roster, Instant at) {
+        if (!vestLinkOpen()) {
+            log.warn("开演下行跳过：马甲串口链路未开，14B 轮询配置帧与 7B 开始帧均未下发"
+                    + "（演习已正常开演）：exercise={}", exercise.id());
+            return;
+        }
+        for (RosterEntry entry : roster) {
+            sendOrRecord(exercise.id(), entry.vestNum(), "POLL_CONFIG",
+                    DownlinkCommands.pollConfig(entry.vestNum(), modeCode(entry.mode()),
+                            entry.hp(), entry.ammo1(), entry.ammo2(), entry.team()),
+                    "开演下发轮询配置帧：马甲" + entry.vestNum(), at);
+        }
+        sendOrRecord(exercise.id(), BROADCAST_VEST_NUM, "START_BATTLE",
+                DownlinkCommands.startBattle(battleModeCode(exercise.battleMode())),
+                "开演下发演习开始帧", at);
+    }
+
+    /**
+     * 下发一条开演/停演的帧；发送失败只 WARN + 写一条 {@code SYSTEM} 存证行，绝不抛出。
+     *
+     * <p><b>为什么吞掉一切 {@link RuntimeException}</b>：调用发生在库与内存态写定之后，此刻抛出只会
+     * 回滚一场事实上已经开演（或已经停演）的场次，留下一堆已发到硬件的字节与一张对不上的库——正是
+     * D11 要禁止的「半启动态」。失败必须留痕，但留痕不能改变事务结局（用户裁定）。
+     */
+    private void sendOrRecord(UUID exerciseId, int vestNum, String command, byte[] frame,
+                              String detail, Instant at) {
+        String hex = Hex.encode(frame);
+        try {
+            links.sendVestCommand(vestNum, frame);
+        } catch (RuntimeException failure) {
+            log.warn("{} 下发失败（演习状态不受影响）：exercise={} vest={} command={} hex={}",
+                    detail, exerciseId, vestNum, command, hex, failure);
+            logs.append(new ExerciseLogEntry(0L, exerciseId, at, ExerciseLogType.SYSTEM,
+                    vestNum == BROADCAST_VEST_NUM ? null : vestNum, null,
+                    detail + "失败：" + failure.getMessage(), hex));
+        }
+    }
+
+    /** {@link PollMode} → 14B 帧的 mode 字节。显式映射，不依赖枚举声明序（与 {@code CommandService} 同口径）。 */
+    private static int modeCode(PollMode mode) {
+        return mode == PollMode.MANUAL ? DownlinkCommands.MODE_MANUAL : DownlinkCommands.MODE_AUTO;
+    }
+
+    /** {@link BattleMode} → 7B 开始帧的 battleMode 字节。显式映射，不依赖枚举声明序。 */
+    private static int battleModeCode(BattleMode mode) {
+        return mode == BattleMode.BATTLE ? DownlinkCommands.BATTLE_MODE_BATTLE : DownlinkCommands.BATTLE_MODE_TRAIN;
+    }
+
+    /**
+     * 马甲串口链路是否已开（与 {@code CommandService.vestLinkOpen} 同口径）。
+     *
+     * <p>链路非 {@link LinkState#OPEN} 即视为不可下发。core 集成测试上下文里该端口是 Mockito 桩，
+     * {@code snapshot()} 返回空列表，故「未开」分支正是默认路径。
+     */
+    private boolean vestLinkOpen() {
+        return links.snapshot().stream()
+                .filter(status -> status.kind() == LinkKind.SERIAL_VEST)
+                .anyMatch(status -> status.state() == LinkState.OPEN);
     }
 
     /** 落演习行并占用本场运行权；唯一索引冲突即「已有在跑场次」，翻成契约的 409。 */
@@ -215,8 +312,9 @@ public class ExerciseLifecycleService {
      * <p>两步都在同一个事务里：终局写了而收尾没做，会留下一场「已冻结但仍在进行中」的演习，
      * 下次启动自愈又按崩溃口径覆盖一遍。
      *
-     * <p><b>尚未接线</b>：契约里的 7B 演习结束帧属网关下行；本方法只管库与内存态。
-     * 复盘的落库与 {@code replayId} 归 M5，故调用方目前拿不到非空 replayId。
+     * <p><b>7B 结束帧排在冻结之后（契约步骤 ③）</b>：先把终局与 {@code ended_at} 写定，再下发结束帧。
+     * 顺序反过来的话，硬件已停而库里还是一场「进行中」，下一次开演会把它当残留处理。发送同样只
+     * 留痕、不回滚——见类 javadoc「硬件下行已接线」。
      *
      * @return 停演结果；{@code endedAt} 取本次请求时刻
      * @throws BusinessException {@code EXERCISE_NOT_RUNNING}(409) 当前没有演习进行中
@@ -233,7 +331,24 @@ public class ExerciseLifecycleService {
         freezeAndClose(exerciseId, ExerciseEndReason.NORMAL, STOPPED_COMMAND_FAIL_REASON, at)
                 .orElseThrow(ExerciseLifecycleService::notRunning);
 
+        sendFinishDownlink(exerciseId, at);
+
         return new StopOutcome(exerciseId, at, ExerciseEndReason.NORMAL);
+    }
+
+    /**
+     * 停演的硬件下行（契约 {@code stopExercise} 步骤 ③）：向全体下发 7B 演习结束帧。
+     *
+     * <p>与开演同一口径：链路未开时整段不下发（只 WARN），发送失败只 WARN + 写 {@code SYSTEM}
+     * 存证行。停演本身已落库完成，硬件是否收到不改变这次停演的事实。
+     */
+    private void sendFinishDownlink(UUID exerciseId, Instant at) {
+        if (!vestLinkOpen()) {
+            log.warn("停演下行跳过：马甲串口链路未开，7B 结束帧未下发（演习已正常停演）：exercise={}", exerciseId);
+            return;
+        }
+        sendOrRecord(exerciseId, BROADCAST_VEST_NUM, "FINISH_BATTLE",
+                DownlinkCommands.finishBattle(), "停演下发演习结束帧", at);
     }
 
     /** 正常停演时作废残留指令的原因（与自愈的 {@code INSTANCE_RESTART} 相区别）。 */

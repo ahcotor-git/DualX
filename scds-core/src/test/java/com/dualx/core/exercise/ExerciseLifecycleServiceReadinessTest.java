@@ -3,6 +3,7 @@ package com.dualx.core.exercise;
 import com.dualx.core.domain.BattleMode;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.repository.ExerciseCommandRepository;
 import com.dualx.core.repository.ExerciseLogRepository;
 import com.dualx.core.repository.ExerciseRepository;
@@ -38,12 +39,13 @@ class ExerciseLifecycleServiceReadinessTest {
     private final PlanRepository plans = mock(PlanRepository.class);
     private final PlanRosterRepository planRoster = mock(PlanRosterRepository.class);
     private final SituationSessionBinder sessions = mock(SituationSessionBinder.class);
+    private final DeviceLinkAdmin links = mock(DeviceLinkAdmin.class);
 
     /** 全新实例：就绪位初值 false，等价于「启动自愈还没跑完」。 */
     private ExerciseLifecycleService notYetRecovered() {
         return new ExerciseLifecycleService(exercises, units, mock(HitEventRepository.class),
                 mock(ExerciseCommandRepository.class), mock(ExerciseLogRepository.class), plans,
-                planRoster, sessions, new InstanceProperties(null));
+                planRoster, sessions, links, new InstanceProperties(null));
     }
 
     @Test
@@ -56,6 +58,6 @@ class ExerciseLifecycleServiceReadinessTest {
 
         // 门禁在查库之前：自愈没跑完时上一场的残留行还在，此刻报「想定不存在」只会误导现场，
         // 说好的 503（稍后重试）才是这一瞬间唯一正确的答复。
-        verifyNoInteractions(plans, planRoster, exercises, units, sessions);
+        verifyNoInteractions(plans, planRoster, exercises, units, sessions, links);
     }
 }
