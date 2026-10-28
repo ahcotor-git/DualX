@@ -38,7 +38,7 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 下一原子任务的候选：**Flutter 客户端工程**（Android 单兵端 / Windows 指挥端均未开工）；
 **单实例保护 L6**、**T-PROD 部署**；以及本段**刻意未纳入**的两条观察项——`downloadUrl` 签名窗口过期的
 HTTP 用例（R4 遗留）、硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`）。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段链路就绪硬前置改动**尚未提交**（见 §2），
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段链路就绪硬前置三笔**已提交并推送**（见 §2），
 网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
@@ -46,11 +46,11 @@ HTTP 用例（R4 遗留）、硬件 ACK 解析（「已发送」≠「已确认�
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | `8dda7be`（docs: 记录网关下行四笔已成功推送的 Git 状态）；工作树**有未提交改动**（本轮链路就绪硬前置） |
-| 实际远端main | `8dda7be`（与本地 HEAD 一致）：网关下行批次 `0d8ef02..8dda7be` 已推送 |
-| 已推送 | `0d8ef02..8dda7be` 已入远端：网关下行五笔 `2594b04`（core 接线）/`e715138`（api `replayId` + 契约）/`84d6809`（core + app 新测）/`f13e90f`（docs）/`8dda7be`（docs Git 状态）；更早批次（CAL-2 现场验收收口三笔 `3b6b482`/`1c8e5bd`/`0d8ef02`、R1/R2/R3 各三笔与 R4 全部改动含 HTTP 端到端补测 `62d03c7`/`5e641b2`、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs，以及 CAL-1/MR-1~MR-3）亦已在远端 |
-| 未推送（仅本机） | **本轮链路就绪硬前置全部改动**：代码 `ExerciseLifecycleService.java` + 两个 core IT（`ExerciseLifecycleServiceIT`/`ExerciseLifecycleServiceDownlinkTest`）+ 六个 app IT（`ExerciseLifecycleHttpIT`/`DeviceSelfHttpIT`/`PushCrashRecoveryIT`/`ExerciseDownlinkHttpIT`/`CommandHttpIT`/`ReplayExportHttpIT`）；文档 `exercise.yaml`/`decision-register.md`/`testing.md`/`snapshot.md`。**尚未提交、尚未推送** |
-| 本轮继续成果 | **M3 LIFE 开演链路就绪 409 硬前置（A~E 五段）**——`startExercise` 写库前校验 `SERIAL_VEST` 已 `OPEN`，未开即 409 `DEVICE_LINK_NOT_OPEN`；复用既有错误码、未新增迁移；停演**不设**此门禁。core +1、app +2；全量 `mvn -o test` **1151 项**全绿。**待当次授权后按语义拆笔提交并推送** |
+| 源码本地HEAD | `f5bb261`（docs: 收口开演链路就绪 409 的契约、裁定、测试与快照）；工作树干净 |
+| 实际远端main | `f5bb261`（与本地 HEAD 一致）：链路就绪硬前置三笔 `8dda7be..f5bb261` 已推送 |
+| 已推送 | `8dda7be..f5bb261` 已入远端：链路就绪硬前置三笔 `479fc30`（core 判据 + core 用例）/`68eb2d9`（app 端到端 + 既有 IT 改造）/`f5bb261`（docs）；更早批次（网关下行五笔 `2594b04`/`e715138`/`84d6809`/`f13e90f`/`8dda7be`、CAL-2 现场验收收口三笔 `3b6b482`/`1c8e5bd`/`0d8ef02`、R1/R2/R3 各三笔与 R4 全部改动含 HTTP 端到端补测 `62d03c7`/`5e641b2`、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs，以及 CAL-1/MR-1~MR-3）亦已在远端 |
+| 未推送（仅本机） | 无——工作树干净，`main` 与 `origin/main` 无差异 |
+| 本轮继续成果 | **M3 LIFE 开演链路就绪 409 硬前置（A~E 五段）**——`startExercise` 写库前校验 `SERIAL_VEST` 已 `OPEN`，未开即 409 `DEVICE_LINK_NOT_OPEN`；复用既有错误码、未新增迁移；停演**不设**此门禁。core +1、app +2；全量 `mvn -o test` **1151 项**全绿。已按 **3 笔语义提交**并**成功推送**（`8dda7be..f5bb261`） |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -487,8 +487,8 @@ M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c�
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
 本快照已同步 1151 项测试、M3 LIFE 开演链路就绪 409 硬前置（`DEVICE_LINK_NOT_OPEN`，含既有 IT 的
-「先开串口链路」改造，**本机未提交**）、M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，D11 落地口径，
-**已推送** `0d8ef02..f13e90f`）、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
+「先开串口链路」改造，**已推送** `8dda7be..f5bb261`）、M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，D11 落地口径，
+**已推送** `0d8ef02..8dda7be`）、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
 含 HTTP 端到端补测）与 M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性，**均已推送**）
 与下一任务候选（Flutter 客户端 / 单实例保护 L6 / T-PROD 部署），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。
