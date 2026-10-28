@@ -9,6 +9,8 @@
 > M4 DEVICE-SELF单兵自身视角与1020项最新全量结果见第13节（第2节RT-SID行已被第13节取代）。
 > M4 T-STOP停机与立即重启及1021项最新全量结果见第14节（第3节T-STOP行已被第14节取代）。
 > M3 CAL-1 UWB 室内解算链路（解算器 + 装配接线 + app 端到端）与1055项最新全量结果见第17节。
+> M5 REPLAY R1 复盘读侧（`listReplays` / `getReplay`）与1104项全量结果见第23节；
+> R2 轨迹分片（`getReplayTimeline`）与1112项全量结果见第24节。
 
 ## 1. 本次自动化结果
 
@@ -1478,6 +1480,87 @@ app（`RoleWritePermissionIT`，326，计数不变）：`PermissionApplication` 
 **未新增迁移**、**未新增依赖**。
 
 **只读**：`ReplayService.list` 标 `@Transactional(readOnly = true)`，`get` 亦只读；R1 不写任何表。
+
+**R4 的前置提醒**：`REPLAY_EXPORT_FAILED` 的 409 状态**刻意仍未登记**（走 default → 500，响亮地失败）；
+R4 落地导出时必须一并登记，并同步修改把它当「未登记状态」绊线的两处测试——
+`MvcProblemIT`（L319-322、L398）与 `ApiExceptionHandlerBusinessTest`（L168、L271-276）。
+
+本段为**代码验收**，不是生产发布批准。
+
+## 24. M5 REPLAY R2 轨迹分片（`GET /api/v1/replays/{replayId}/timeline`）
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 579 | 0/0/0 | 新增 `ReplayServiceIT` 8 条（571 → 579） |
+| api | 139 | 0/0/0 | 计数不变：`ApiSkeletonSmokeIT` 仅换 501 示例端点 |
+| app | 326 | 0/0/0 | 未改动 |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1112** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径同第 20/21/22/23 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值，
+> 按 `target/surefire-reports/TEST-*.xml` 累加会漏掉 `@Nested` 内部类。
+
+### 24.1 落地范围与口径
+
+**补的是哪一处缺口**：R1 接线读侧两条后，`ReplayController` 剩 5 条 501；R2 接线第三条——
+轨迹分片（`getReplayTimeline`），统计（R3）与导出/下载（R4）三条仍 501。
+
+**游标必须是 `id`，不是 `t_ms`**：`t_track_sample.id` 是自增代理键且**插入序即采样序**，
+用它分片不重不漏；`t_ms` 只保证时间语义，同一毫秒内的多点无法唯一定位起点，**不作游标**。
+故分片查询 `tracks.findChunk(replayId, afterId, vestNums, stride, limit)` 的游标参数是 `id` 下界。
+
+**抽稀窗口在全量上算**：`TrackSampleRepository` 的窗口函数在**全量**上编号抽稀
+（不带以游标为界的 `id > afterId`），否则每片从 1 重新编号，抽稀相位逐片漂移，
+会同时出现重复与漏点；游标仍作用于**抽稀结果集**的 id。
+
+**`nextCursor` 只在「本片正好拉满」时给值**：`samples.size() < limit ? null : Long.toString(末条.id)`。
+拉满**不保证**一定还有下一片（可能刚好整除），客户端会多拉一次空片——用一次空请求
+换「不必多查一次 COUNT」。这与「客户端拿到非 null 就继续拉」的循环口径配套。
+
+**坏游标响亮失败**：`afterId(cursor)` 对非数字或负值抛 `VALIDATION_FAILED`（400），
+**不静默退回 0**——静默退回会让客户端每次都拿到第一片，形成「永远拉第一页」的死循环。
+`VALIDATION_FAILED` 早已登记为 400，R2 **未新增错误码**。
+
+**404 判据与 R1 同源**：`requireReplay(replayId)` 复用同一条判据——
+「`ended_at IS NULL`（进行中）」与「id 不存在」折叠成同一个 `REPLAY_NOT_FOUND`。
+
+**坐标与时间透出**：`toTrackSample` 把 `xPct`/`yPct`/`lng`/`lat` **按原样透出**，
+不用 `coordinateSystem` 做取舍；`t` 取 `tMs` 原值（本就是「相对开演的毫秒偏移」）。
+
+### 24.2 用例判据
+
+core（`ReplayServiceIT`，新增 8 条，全走真库真事务 `@SpringBootTest @Transactional`）：
+
+1. `timeline_pagesByCursorWithoutOverlapOrGap`——5 点、每片 2 个：循环翻页（2/2/1 三片），
+   末片没拉满即收尾；已见 id 集合无重复、无遗漏（不重不漏）。
+2. `timeline_lastPageWhenExactlyDivisible_endsWithAnEmptyChunk`——4 点、每片 2 个且整除：
+   第 1/2 片各 2 条且 `nextCursor` 非 null，第 3 片**空**且 `nextCursor=null`
+   （拉满不等于还有下一片）。
+3. `timeline_filtersByVestNumsAndThinsByStride`——8 点、只看 `1001`（4 点）再按步长 2 抽稀：
+   得 `tMs=200/400` 两条，`nextCursor=null`。
+4. `timeline_replayWithoutSamples_returnsEmptyChunk`——无采样点的复盘 → 空片 + `nextCursor=null`。
+5. `timeline_isScopedToItsOwnReplay`——两场各造 2/3 点，各自只读到自己的点数（按 `exerciseId` 隔离）。
+6. `timeline_runningExercise_isNotFound`——`ended_at IS NULL` 的场次 → `REPLAY_NOT_FOUND`。
+7. `timeline_unknownId_isNotFound`——不存在的 id → 同一个 `REPLAY_NOT_FOUND`。
+8. `timeline_malformedCursor_isValidationFailed`——`"abc"` 与 `"-1"` 均 → `VALIDATION_FAILED`。
+
+api（`ApiSkeletonSmokeIT`，139，计数不变）：`ReplayController` 的 `getReplayTimeline` 已接线，
+替身 `ReplayService` 一律抛占位异常，501 示例端点由 `GET /api/v1/replays/{replayId}/timeline`
+改为**仍是真占位**的 `GET /api/v1/replays/{replayId}/statistics`。
+
+### 24.3 边界与不变式
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不开启 out-of-order。本段**未新增错误码**（复用 `VALIDATION_FAILED` / `REPLAY_NOT_FOUND`）、
+**未新增迁移**、**未新增依赖**（`TrackSampleRepository` 早已就位）。
+
+**只读**：`ReplayService.timeline` 标 `@Transactional(readOnly = true)`，R2 不写任何表。
 
 **R4 的前置提醒**：`REPLAY_EXPORT_FAILED` 的 409 状态**刻意仍未登记**（走 default → 500，响亮地失败）；
 R4 落地导出时必须一并登记，并同步修改把它当「未登记状态」绊线的两处测试——
