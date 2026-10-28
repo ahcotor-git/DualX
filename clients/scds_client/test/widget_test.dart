@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:scds_client/app/device_app.dart';
 import 'package:scds_client/features/connection/connection_page.dart';
 import 'package:scds_client/features/device/device_login_page.dart';
 import 'package:scds_client/features/situation/situation_page.dart';
-import 'package:scds_client/main.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
 import 'package:scds_client/shared/api/api_problem.dart';
 import 'package:scds_client/shared/api/situation_models.dart';
