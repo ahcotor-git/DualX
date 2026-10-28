@@ -4,18 +4,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:scds_client/features/connection/connection_page.dart';
 import 'package:scds_client/features/device/device_login_page.dart';
+import 'package:scds_client/features/situation/situation_page.dart';
 import 'package:scds_client/main.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
 import 'package:scds_client/shared/api/api_problem.dart';
+import 'package:scds_client/shared/api/situation_models.dart';
 import 'package:scds_client/shared/auth/session_store.dart';
 import 'package:scds_client/shared/config/connection_config.dart';
 import 'package:scds_client/shared/config/connection_config_store.dart';
 
-/// M6 CLIENT-BASE 段 4a / 4b：应用外壳装配 + 连接配置页 + 设备登录页。
+/// M6 CLIENT-BASE 段 4a / 4b / 4c：应用外壳装配 + 连接配置页 + 设备登录页 + 自身态势页。
 ///
 /// 全部为纯 widget 测试：不启动后端、不发真实请求。
-/// 连接配置用 `InMemoryConnectionConfigStore`；登录页注入 `DeviceLogin` 桩，
-/// **不落盘、不打印令牌**。
+/// 连接配置用 `InMemoryConnectionConfigStore`；登录页注入 `DeviceLogin` 桩；
+/// 态势页注入 `fetch` 桩并用 `tester.pump(Duration)` 推进假时钟——
+/// **不落盘、不打印令牌、不依赖真实网络**。
 void main() {
   late InMemoryConnectionConfigStore store;
   late InMemorySessionStore sessionStore;
@@ -53,6 +56,43 @@ void main() {
         deviceToken: 'device-$vestNum',
         expiresAt: DateTime.utc(2026, 10, 29),
       );
+
+  UnitState unit({
+    int vestNum = 14,
+    VestStatus status = VestStatus.live,
+    int? hp = 100,
+    int? ammo1 = 30,
+    int? ammo2 = 8,
+    GeoPoint? position,
+    MotionState? motion = MotionState.stationary,
+    int revision = 7,
+  }) =>
+      UnitState(
+        vestNum: vestNum,
+        status: status,
+        revision: revision,
+        hp: hp,
+        ammo1: ammo1,
+        ammo2: ammo2,
+        position: position,
+        motion: motion,
+      );
+
+  Future<void> pumpSituation(
+    WidgetTester tester,
+    Future<UnitState> Function() fetch, {
+    Duration interval = const Duration(milliseconds: 200),
+  }) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SituationPage(session: session(14), fetch: fetch, interval: interval),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 卸载整棵树：态势页 `dispose` 会取消周期定时器，避免测试结束时残留 timer。
+  Future<void> unmount(WidgetTester tester) => tester.pumpWidget(const SizedBox());
 
   Future<void> pumpLogin(
     WidgetTester tester,
@@ -328,6 +368,158 @@ void main() {
             .onPressed,
         isNotNull,
       );
+    });
+  });
+
+  group('自身态势页', () {
+    testWidgets('首帧到达前提示等待；成功后展示自身字段与刷新次数', (WidgetTester tester) async {
+      final Completer<UnitState> pending = Completer<UnitState>();
+      await pumpSituation(tester, () => pending.future, interval: const Duration(seconds: 1));
+
+      expect(find.text('马甲 #14'), findsOneWidget);
+      expect(find.text('等待首帧…'), findsOneWidget);
+      expect(find.byKey(kSituationErrorKey), findsNothing);
+
+      pending.complete(unit(
+        hp: 88,
+        ammo1: 30,
+        ammo2: 8,
+        position: const GeoPoint(
+          coordinateSystem: CoordinateSystem.indoor,
+          xPct: 0.25,
+          yPct: 0.5,
+          floorNum: 1,
+          posNum: 3,
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.textContaining('已刷新 1 次'), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(kSituationStatusKey)).data, 'LIVE');
+      expect(tester.widget<Text>(find.byKey(kSituationHpKey)).data, '88');
+      expect(tester.widget<Text>(find.byKey(kSituationAmmoKey)).data, '30 / 8');
+      expect(tester.widget<Text>(find.byKey(kSituationMotionKey)).data, 'STATIONARY');
+      expect(
+        tester.widget<Text>(find.byKey(kSituationPositionKey)).data,
+        contains('室内 x=0.25% y=0.5% 层=1 点=3'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('按注入周期轮询：每过一个周期成功计数 +1', (WidgetTester tester) async {
+      int calls = 0;
+      await pumpSituation(
+        tester,
+        () async {
+          calls++;
+          return unit();
+        },
+        interval: const Duration(milliseconds: 200),
+      );
+
+      expect(calls, 1);
+
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expect(calls, 2);
+      expect(find.textContaining('已刷新 2 次'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('上一拍未回时跳过本拍，不叠加在途请求', (WidgetTester tester) async {
+      int calls = 0;
+      final Completer<UnitState> pending = Completer<UnitState>();
+      await pumpSituation(
+        tester,
+        () {
+          calls++;
+          return pending.future;
+        },
+        interval: const Duration(milliseconds: 200),
+      );
+
+      expect(calls, 1);
+
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(calls, 1);
+
+      pending.complete(unit());
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('已刷新 1 次'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('404 DEVICE_VEST_NOT_FOUND：提示不在本场编成，但保留上次成功数据', (WidgetTester tester) async {
+      int calls = 0;
+      await pumpSituation(
+        tester,
+        () async {
+          calls++;
+          if (calls == 1) {
+            return unit(hp: 77);
+          }
+          throw const ApiException(
+            statusCode: 404,
+            problem: ApiProblem(
+              type: null,
+              title: null,
+              status: 404,
+              code: ApiErrorCode.deviceVestNotFound,
+              detail: null,
+              instance: null,
+              traceId: 'trace-vest',
+            ),
+          );
+        },
+        interval: const Duration(milliseconds: 200),
+      );
+
+      expect(tester.widget<Text>(find.byKey(kSituationHpKey)).data, '77');
+
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+
+      expect(find.textContaining('本场编成中没有该马甲'), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(kSituationHpKey)).data, '77');
+
+      await unmount(tester);
+    });
+
+    testWidgets('网络异常：显示可读错误，不冒泡、不清空页面', (WidgetTester tester) async {
+      await pumpSituation(tester, () async => throw StateError('connection refused'));
+
+      expect(find.byKey(kSituationErrorKey), findsOneWidget);
+      expect(find.textContaining('拉取失败'), findsOneWidget);
+      expect(find.text('等待首帧…'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('坐标只呈现不换算：室外同时给出 BD-09 与 WGS-84', (WidgetTester tester) async {
+      await pumpSituation(
+        tester,
+        () async => unit(
+          position: const GeoPoint(
+            coordinateSystem: CoordinateSystem.outdoor,
+            lng: 116.397,
+            lat: 39.908,
+            wgs84Lng: 116.391,
+            wgs84Lat: 39.902,
+          ),
+        ),
+      );
+
+      final String shown = tester.widget<Text>(find.byKey(kSituationPositionKey)).data!;
+      expect(shown, contains('室外 BD-09 经=116.397 纬=39.908'));
+      expect(shown, contains('WGS-84 经=116.391 纬=39.902'));
+
+      await unmount(tester);
     });
   });
 }

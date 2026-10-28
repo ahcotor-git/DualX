@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import 'features/connection/connection_page.dart';
 import 'features/device/device_login_page.dart';
+import 'features/situation/situation_page.dart';
 import 'shared/api/api_client.dart';
 import 'shared/api/auth_api.dart';
 import 'shared/api/auth_models.dart';
+import 'shared/api/situation_api.dart';
 import 'shared/auth/session_store.dart';
 import 'shared/config/connection_config.dart';
 import 'shared/config/connection_config_store.dart';
@@ -21,10 +23,10 @@ void main() {
 /// 由连接配置造 HTTP 客户端。独立成函数，便于测试注入指向桩服务的实现。
 ApiClient httpApiClient(ConnectionConfig config) => ApiClient(baseUri: config.baseUri);
 
-/// 单兵端应用外壳（M6 CLIENT-BASE 段 4a/4b）。
+/// 单兵端应用外壳（M6 CLIENT-BASE 段 4a/4b/4c）。
 ///
 /// 装配点：连接配置存储、会话存储、HTTP 客户端工厂；导航归本类持有
-/// ——连接配置页 → 设备登录页 →（段 4c）自身态势页，页面之间只通过回调通信。
+/// ——连接配置页 → 设备登录页 → 自身态势页，页面之间只通过回调通信。
 class ScdsClientApp extends StatefulWidget {
   const ScdsClientApp({
     super.key,
@@ -83,10 +85,16 @@ class _ScdsClientAppState extends State<ScdsClientApp> {
                     return session;
                   },
                   onLoggedIn: (DeviceSession session) {
+                    final SituationApi situations = SituationApi(client);
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (BuildContext pageContext) =>
-                            _PendingHomePage(config: config, session: session),
+                        builder: (BuildContext pageContext) => SituationPage(
+                          session: session,
+                          fetch: () => situations.getVestState(
+                            vestNum: session.vestNum,
+                            token: session.deviceToken,
+                          ),
+                        ),
                       ),
                     );
                   },
@@ -94,35 +102,6 @@ class _ScdsClientAppState extends State<ScdsClientApp> {
               ),
             );
           },
-        ),
-      ),
-    );
-  }
-}
-
-/// 段 4b 的临时落点：确认已登录的马甲与实例。
-///
-/// 段 4c 用自身态势页替换本页，届时本类删除。
-class _PendingHomePage extends StatelessWidget {
-  const _PendingHomePage({required this.config, required this.session});
-
-  final ConnectionConfig config;
-  final DeviceSession session;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('已登录')),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Text('马甲 #${session.vestNum}', key: const Key('pendingHome.vestNum')),
-            const SizedBox(height: 8),
-            Text(config.display, key: const Key('pendingHome.display')),
-            const SizedBox(height: 8),
-            const Text('自身态势在段 4c 接入'),
-          ],
         ),
       ),
     );
