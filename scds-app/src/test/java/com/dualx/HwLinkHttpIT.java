@@ -19,6 +19,7 @@ import org.springframework.boot.web.servlet.context.ServletWebServerApplicationC
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -61,7 +62,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 完全同源。真实串口的 115200 时序与马甲固件对拍只能现场验收。</p>
  *
  * <p>不写成 {@code @Transactional}：请求走应用自己的线程与连接，测试事务帮不上忙。链路状态是进程内
- * 运行态、不落库，故本类不做任何数据库清理。</p>
+ * 运行态、不落库；唯一写库的地方是「每马甲链路状态」用例登记的那只马甲，它在
+ * {@link #shutdownSimulator()} 里按专属编号精确回收（与 {@code DeviceLedgerHttpIT} 同一口径）。</p>
  */
 class HwLinkHttpIT {
 
@@ -74,7 +76,15 @@ class HwLinkHttpIT {
     /** 仿真模式下串口链路的默认波特率：请求不带 baudRate 时网关兜底（协议 A 口径）。 */
     private static final int VEST_BAUD_RATE = ProtocolConstants.SERIAL_BAUD_RATE;
 
+    /**
+     * 专属编号段（与 62100+ / 62200+ / 62300+ / 62400+ 各 IT 错开）：本类唯一写台账的地方。
+     * {@code +1} 用作出租外编号——它在本类里从未登记，用作 404 判据。
+     */
+    private static final int FIRST_VEST_NUM = 62500;
+
     private static App simulator;
+    /** 本类登记的马甲编号；{@code null} 表示没登记过（用例前置失败时 {@code @AfterAll} 不该误删）。 */
+    private static Integer registeredVest;
 
     @BeforeAll
     static void bootSimulator() throws Exception {
@@ -85,6 +95,12 @@ class HwLinkHttpIT {
 
     @AfterAll
     static void shutdownSimulator() {
+        if (registeredVest != null && simulator != null) {
+            simulator.context.getBean(JdbcClient.class)
+                    .sql("DELETE FROM t_vest WHERE vest_num = :vestNum")
+                    .param("vestNum", registeredVest)
+                    .update();
+        }
         if (simulator != null) {
             simulator.close();
         }
@@ -118,9 +134,36 @@ class HwLinkHttpIT {
         assertThat(portList.isArray()).isTrue();
         assertThat(portList.size()).isZero();
 
-        // 每马甲在线态仍归 STATE 域：本工作包不接线、不用链路计数冒充（设计 05 §5）
-        simulator.assertProblem(simulator.get("/api/v1/devices/vests/1/link", simulator.admin),
-                501, "NOT_IMPLEMENTED", "/api/v1/devices/vests/1/link");
+        // 每马甲在线态已接线到 core 状态机（不再是 501，也不用链路计数冒充）：本类另有一例
+        // vestLinkAnswersFromTheStateMachineInsteadOfLinkCounters 覆盖它的真实响应。
+    }
+
+    @Test
+    @DisplayName("每马甲链路状态：真值来自 core 状态机；台账外 404，在台账未编入 → 200 离线零计数")
+    void vestLinkAnswersFromTheStateMachineInsteadOfLinkCounters() throws Exception {
+        // 404 判据是设备台账（与 getVest 同口径）：编号从未登记过
+        simulator.assertProblem(
+                simulator.get("/api/v1/devices/vests/" + (FIRST_VEST_NUM + 1) + "/link", simulator.admin),
+                404, "DEVICE_VEST_NOT_FOUND", "/api/v1/devices/vests/" + (FIRST_VEST_NUM + 1) + "/link");
+
+        ObjectNode body = simulator.mapper.createObjectNode()
+                .put("vestNum", FIRST_VEST_NUM).put("name", "链路自测").put("team", "RED");
+        HttpResponse<String> created = simulator.post("/api/v1/devices/vests", body, simulator.admin);
+        assertThat(created.statusCode()).isEqualTo(201);
+        registeredVest = FIRST_VEST_NUM;
+
+        // 台账有、但当前没有演习把它编入 → 不是 404，而是 200 + 离线 + 零计数：
+        // 「能不能查这个马甲」由台账决定，「它此刻在不在上报」由态势决定，两个问题不合并成一个状态码。
+        HttpResponse<String> link = simulator.get("/api/v1/devices/vests/" + FIRST_VEST_NUM + "/link",
+                simulator.admin);
+        assertThat(link.statusCode()).isEqualTo(200);
+        JsonNode status = simulator.mapper.readTree(link.body());
+        assertThat(status.path("vestNum").asInt()).isEqualTo(FIRST_VEST_NUM);
+        assertThat(status.path("online").asBoolean()).isFalse();
+        assertThat(status.path("lastHeartbeatAt").isNull()).isTrue();
+        assertThat(status.path("lastFrameType").isNull()).isTrue();
+        assertThat(status.path("framesTotal").asLong()).isZero();
+        assertThat(status.path("droppedTotal").asLong()).isZero();
     }
 
     @Test

@@ -10,7 +10,6 @@ import com.dualx.api.dto.device.VestDevice;
 import com.dualx.api.dto.device.VestDevicePage;
 import com.dualx.api.dto.device.VestDeviceUpsertRequest;
 import com.dualx.api.dto.device.VestLinkStatus;
-import com.dualx.api.error.NotImplementedException;
 import com.dualx.core.domain.LinkConfig;
 import com.dualx.core.domain.LinkKind;
 import com.dualx.core.domain.LinkState;
@@ -20,6 +19,7 @@ import com.dualx.core.ledger.AnchorLedgerService;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.SerialPortInfo;
+import com.dualx.core.state.SituationQuery;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
 import com.dualx.protocol.Team;
@@ -57,10 +57,11 @@ import java.util.List;
  * 本层只做「请求 → {@link LinkConfig}」的搬运与分流，<b>不复制任何一条链路规则</b>：
  * 在控制器里再判一次「能不能开」，会让 REST 与后续 WS 两条入口各持一份口径。</p>
  *
- * <p><b>仍是占位（501）</b>：{@code GET .../link}。它返回的是<b>每马甲</b>在线态
- * （{@code lastHeartbeatAt}/{@code lastFrameType}/{@code framesTotal}），权威来源是 core 的
- * 状态机（契约要求与态势域 {@code VestStatus} 一致），不是链路级状态；在 STATE 工作包就绪前
- * 保持 501，不用链路计数冒充每马甲计数（设计 05 §5）。</p>
+ * <p><b>{@code GET .../link} 已接线</b>：它返回的是<b>每马甲</b>在线态
+ * （{@code lastHeartbeatAt}/{@code lastFrameType}/{@code framesTotal}），权威来源是 core 的状态机
+ * （{@code SituationQuery}，设计 06 §S7），<b>不是</b>本控制器的其余链路端点所用的链路级计数——
+ * 两者口径不同，不得互相冒充（设计 05 §5）。404 判据是设备台账（与 {@code getVest} 同口径）；
+ * 台账有、但当前不在本场编成内（未开演 / 非本场）时回 {@code online=false} 与零计数，而非 404。</p>
  *
  * <p>链路状态推送走 WebSocket {@code /ws/v1/devices/links}（见 {@code com.dualx.api.ws}），
  * 与 {@code GET /api/v1/devices/links} 构成双通道，不在本控制器内重复实现。</p>
@@ -72,11 +73,15 @@ public class DeviceController {
     private final VestLedgerService vests;
     private final AnchorLedgerService anchors;
     private final DeviceLinkAdmin links;
+    /** 每马甲链路状态的读侧（{@code getVestLink}）：真值在 core 状态机，不在链路级快照里。 */
+    private final SituationQuery situations;
 
-    public DeviceController(VestLedgerService vests, AnchorLedgerService anchors, DeviceLinkAdmin links) {
+    public DeviceController(VestLedgerService vests, AnchorLedgerService anchors, DeviceLinkAdmin links,
+                            SituationQuery situations) {
         this.vests = vests;
         this.anchors = anchors;
         this.links = links;
+        this.situations = situations;
     }
 
     // ── 马甲台账 ────────────────────────────────────────────────────────────
@@ -136,9 +141,21 @@ public class DeviceController {
 
     // ── 单个马甲链路状态 ────────────────────────────────────────────────────
 
+    /**
+     * 单个马甲的链路状态。
+     *
+     * <p>404 判据是**设备台账**（与 {@link #getVest(int)} 同口径）：台账里没有这个马甲，
+     * 「链路」也就无从谈起。台账有、但当前不在本场编成内（未开演 / 非本场）时回
+     * {@code online=false} 与零计数，而不是 404——「能不能查这个马甲」由台账决定，
+     * 「它此刻在不在上报」由态势决定，两个问题不合并成同一个状态码。</p>
+     */
     @GetMapping("/api/v1/devices/vests/{vestNum}/link")
     public VestLinkStatus getVestLink(@PathVariable int vestNum) {
-        throw new NotImplementedException("getVestLink");
+        vests.get(vestNum);
+        return situations.vestLink(vestNum)
+                .map(link -> new VestLinkStatus(link.vestNum(), link.online(), link.lastHeartbeatAt(),
+                        link.lastFrameType(), link.framesTotal(), link.droppedTotal()))
+                .orElseGet(() -> new VestLinkStatus(vestNum, false, null, null, 0L, 0L));
     }
 
     // ── UWB 基站台账 ───────────────────────────────────────────────────────

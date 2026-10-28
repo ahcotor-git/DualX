@@ -217,7 +217,7 @@ class ApiSkeletonSmokeIT {
                         new ExerciseController(planService, lifecycle, situationQuery),
                         new CommandController(commandService),
                         new SituationController(situationEnvelopeFactory),
-                        new DeviceController(vestLedgerService, anchorLedgerService, deviceLinkAdmin),
+                        new DeviceController(vestLedgerService, anchorLedgerService, deviceLinkAdmin, situationQuery),
                         // standalone 不装配 Spring 上下文，ObjectMapper 只能自备：本测试里
                         // 底图相关的 JSON 进出都会被替身的占位异常截断，用默认配置即可。
                         new MapController(mapLedgerService, uwbCalibrationService, new ObjectMapper(), fileUrlSigner),
@@ -345,15 +345,16 @@ class ApiSkeletonSmokeIT {
     @DisplayName("未实现接口统一 501 + application/problem+json + code=NOT_IMPLEMENTED + traceId")
     void notImplementedIsReportedAsProblem() throws Exception {
         String traceId = "smoke-trace-0001";
-        // 用仍是真占位的马甲链路端点，而不是已接核心服务的 /auth/me 与 /auth/device/me。
-        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/devices/vests/1/link")
+        // 用仍是真占位的复盘端点（M5 REPLAY/EXPORT 尚未落地），而不是已接核心服务的
+        // /auth/me、/auth/device/me 与设备链路端点（getVestLink 已接线）。
+        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/replays")
                         .header(TraceIdFilter.HEADER, traceId))
                 .andExpect(status().isNotImplemented())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(header().string(TraceIdFilter.HEADER, traceId))
                 .andExpect(jsonPath("$.status").value(501))
                 .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"))
-                .andExpect(jsonPath("$.instance").value("/api/v1/devices/vests/1/link"))
+                .andExpect(jsonPath("$.instance").value("/api/v1/replays"))
                 .andExpect(jsonPath("$.traceId").value(traceId));
     }
 }
