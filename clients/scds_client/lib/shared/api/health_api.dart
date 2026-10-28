@@ -3,7 +3,7 @@ import 'api_problem.dart';
 
 /// 健康诊断端点：`GET /actuator/health`（**无令牌**，安全链白名单，见 `testing.md` RT-HEALTH）。
 ///
-/// 不是业务路由（不带 `/api/v1`），故走 [ApiClient.probe] 而非业务 `get`。
+/// 不是业务路由（不带 `/api/v1`），故走 [ApiTransport.probe] 而非业务 `get`。
 const String kHealthPath = '/actuator/health';
 
 /// 一次健康诊断的结果。
@@ -45,7 +45,7 @@ class HealthReport {
 class InstanceHealthApi {
   InstanceHealthApi(this._client);
 
-  final ApiClient _client;
+  final ApiTransport _client;
 
   /// 探活一次；任何失败都收敛成 [HealthReport]，由 UI 呈现。
   Future<HealthReport> probe() async {

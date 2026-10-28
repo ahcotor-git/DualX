@@ -22,11 +22,48 @@ class ApiResponse {
   Object? get json => body.isEmpty ? null : jsonDecode(text);
 }
 
-/// 边缘网关 HTTP 客户端。
+/// HTTP 传输端口：业务域客户端（auth / situation / health）只依赖这个窄接口。
+///
+/// 抽出端口是为了能在外面套**装饰器**而不惊动业务域客户端——当前唯一装饰器是
+/// `shared/auth/refreshing_api_transport.dart` 的认证单飞（401 → 刷新 → 重试一次）。
+/// [ApiClient] 是唯一的 `dart:io` 实现，也是唯一会真正建连接的地方。
+abstract interface class ApiTransport {
+  /// 网关基地址。
+  Uri get baseUri;
+
+  /// 拼接业务接口路径（自动带 [kApiPrefix]）。
+  Uri api(String path, [Map<String, String>? query]);
+
+  /// 拼接任意相对路径到 [baseUri]。
+  Uri resolve(String path, [Map<String, String>? query]);
+
+  Future<ApiResponse> get(String path, {Map<String, String>? query, String? bearerToken});
+
+  Future<ApiResponse> post(String path,
+      {Map<String, String>? query, Object? jsonBody, String? bearerToken});
+
+  Future<ApiResponse> put(String path,
+      {Map<String, String>? query, Object? jsonBody, String? bearerToken});
+
+  Future<ApiResponse> delete(String path,
+      {Map<String, String>? query, Object? jsonBody, String? bearerToken});
+
+  /// 底层发送（路径自动带 [kApiPrefix]）。
+  Future<ApiResponse> send(String method, String path,
+      {Map<String, String>? query, Object? jsonBody, String? bearerToken});
+
+  /// 应用级端点探活（**不带** [kApiPrefix]，如 `/actuator/health`）。
+  Future<ApiResponse> probe(String path);
+
+  /// 释放底层连接池。
+  void close();
+}
+
+/// 边缘网关 HTTP 客户端（[ApiTransport] 的 `dart:io` 实现）。
 ///
 /// 只依赖 `dart:io`（目标平台为 Android / Windows，不引第三方 HTTP 包）。
 /// 非 2xx 一律**不吞**：解析 Problem 后抛 [ApiException]，调用方据 `code` 分支。
-class ApiClient {
+class ApiClient implements ApiTransport {
   ApiClient({Uri? baseUri, this.timeout = const Duration(seconds: 15), HttpClient? httpClient})
       : baseUri = baseUri ?? Uri(scheme: 'http', host: kDefaultHost, port: kHttpPort),
         _http = httpClient ?? HttpClient() {
@@ -34,6 +71,7 @@ class ApiClient {
   }
 
   /// 网关基地址（默认 `http://127.0.0.1:11001`）。现场主机由连接配置覆盖。
+  @override
   final Uri baseUri;
 
   /// 连接与单次请求的整体超时。
@@ -42,9 +80,11 @@ class ApiClient {
   final HttpClient _http;
 
   /// 拼接业务接口路径，自动带 [kApiPrefix]。
+  @override
   Uri api(String path, [Map<String, String>? query]) => resolve('$kApiPrefix$path', query);
 
   /// 拼接任意相对路径到 [baseUri]。
+  @override
   Uri resolve(String path, [Map<String, String>? query]) {
     final String normalized = path.startsWith('/') ? path : '/$path';
     final Uri relative = Uri(
@@ -54,17 +94,21 @@ class ApiClient {
     return baseUri.resolveUri(relative);
   }
 
+  @override
   Future<ApiResponse> get(String path, {Map<String, String>? query, String? bearerToken}) =>
       send('GET', path, query: query, bearerToken: bearerToken);
 
+  @override
   Future<ApiResponse> post(String path,
           {Map<String, String>? query, Object? jsonBody, String? bearerToken}) =>
       send('POST', path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
 
+  @override
   Future<ApiResponse> put(String path,
           {Map<String, String>? query, Object? jsonBody, String? bearerToken}) =>
       send('PUT', path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
 
+  @override
   Future<ApiResponse> delete(String path,
           {Map<String, String>? query, Object? jsonBody, String? bearerToken}) =>
       send('DELETE', path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
@@ -73,6 +117,7 @@ class ApiClient {
   ///
   /// 路径统一经 [api] 拼接，即所有 `get`/`post`/`put`/`delete` 自动带 [kApiPrefix]
   /// （契约 51 条 REST 均在 `/api/v1` 下），业务域客户端只传**业务相对路径**。
+  @override
   Future<ApiResponse> send(
     String method,
     String path, {
@@ -86,6 +131,7 @@ class ApiClient {
   ///
   /// 业务接口一律经 [api] 带 `/api/v1`；`/actuator/**` 不属于业务路由，
   /// 契约里也没有它的业务前缀，故单独开口而不是放宽 [api] 的语义。
+  @override
   Future<ApiResponse> probe(String path) => _send('GET', resolve(path));
 
   Future<ApiResponse> _send(
@@ -118,6 +164,7 @@ class ApiClient {
   }
 
   /// 释放底层连接池。
+  @override
   void close() => _http.close(force: true);
 
   static Future<List<int>> _readAll(HttpClientResponse response) async {

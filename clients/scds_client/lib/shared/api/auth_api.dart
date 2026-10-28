@@ -3,13 +3,17 @@ import 'auth_models.dart';
 
 /// auth 域 HTTP 客户端（账号登录链路 + 单兵设备登录）。
 ///
-/// 只做「拼路径 + 解析契约模型」，错误统一由 [ApiClient] 抛出的 `ApiException` 表达
+/// 只做「拼路径 + 解析契约模型」，错误统一由 [ApiTransport] 抛出的 `ApiException` 表达
 /// （非 2xx 已解析 Problem）；本类**不吞错、不重试、不缓存令牌**——
 /// 令牌由调用方交给会话存储（见 `shared/auth/session_store.dart`）。
+///
+/// 依赖窄端口 [ApiTransport] 而非具体 `ApiClient`：认证单飞装饰器
+/// （`shared/auth/refreshing_api_transport.dart`）正是靠这一点**用内层传输**发刷新请求，
+/// 避免装饰器拦自己的刷新调用。
 class AuthApi {
   AuthApi(this._client);
 
-  final ApiClient _client;
+  final ApiTransport _client;
 
   /// 账号登录：`POST /api/v1/auth/login`。
   ///

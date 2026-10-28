@@ -3,7 +3,7 @@ import 'situation_models.dart';
 
 /// situation 域 HTTP 客户端（只读四端点：态势 / 单元 / 队伍汇总 / 命中流水）。
 ///
-/// 只做「拼路径 + 解析契约模型」，非 2xx 统一由 [ApiClient] 抛 `ApiException`；
+/// 只做「拼路径 + 解析契约模型」，非 2xx 统一由 [ApiTransport] 抛 `ApiException`；
 /// 本类**不含 WebSocket、不做定时轮询、不缓存 revision**——
 /// 双通道调度与本地缓存聚合属调用方（客户端状态机）职责。
 ///
@@ -12,7 +12,7 @@ import 'situation_models.dart';
 class SituationApi {
   SituationApi(this._client);
 
-  final ApiClient _client;
+  final ApiTransport _client;
 
   /// 拉取态势：`GET /api/v1/situation`。
   ///
