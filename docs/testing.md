@@ -1404,3 +1404,84 @@ app（`HwLinkHttpIT`，新增 1）`vestLinkAnswersFromTheStateMachineInsteadOfLi
 
 本段为**代码验收**，不是生产发布批准。
 
+## 23. M5 REPLAY R1 复盘读侧（`GET /api/v1/replays` + `GET /api/v1/replays/{replayId}`）
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 571 | 0/0/0 | 新增 `ReplayServiceIT` 7 条（564 → 571） |
+| api | 139 | 0/0/0 | 计数不变：`ApiSkeletonSmokeIT` 仅换替身与路径常量 |
+| app | 326 | 0/0/0 | 计数不变：`RoleWritePermissionIT` 仅补一个替身 Bean |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1104** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径同第 20/21/22 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值，
+> 按 `target/surefire-reports/TEST-*.xml` 累加会漏掉 `@Nested` 内部类。
+
+### 23.1 落地范围与口径
+
+**补的是哪一处缺口**：`ReplayController` 原是全仓唯一「七条方法全抛 501」的控制器。R1 先接线读侧两条——
+列表（`listReplays`）与单条（`getReplay`）；轨迹分片 / 统计 / 导出三条留在 R2/R3/R4。
+
+**不另建复盘表**：复盘与演习是**同一行**——`t_exercise` 里 `ended_at IS NULL` 即「当前演习」，
+写入 `ended_at` 后同一行即一条复盘记录（V4 迁移 + `ExerciseRepository` 类注释）。故 `replayId` 就是
+`exerciseId`，读侧不引入任何新仓储，`ReplayService` 只组装 `ExerciseRepository`。
+
+**`durationSeconds` 复盘口径**：契约 DTO 是 `Long durationSeconds`，其值取自
+`Duration.between(startedAt, endedAt).toSeconds()`（**定值**）。这与当前演习（`GET /api/v1/exercise/current`）
+用 `Instant.now()` 现算的口径**不是同一件事**，两者不得互相顶替：复盘是一个已封存的区间，其时长必须定值。
+
+**404 判据只有一个**：`REPLAY_NOT_FOUND`。`findById(...)` 命中但 `ended_at IS NULL`（仍在进行中）与
+「id 根本不存在」在复盘入口是同一件事——**都不是一条复盘记录**，故合并成同一个 404，不区分两种成因。
+`replayId` 语法不合法（非 UUID）同样折叠进 `REPLAY_NOT_FOUND`，取向与 `planId(String)` / `mapId(String)` 一致。
+
+**复用既有错误码**：`REPLAY_NOT_FOUND` 早已登记在 `ApiErrorCode` 与 `common.yaml` 的 `Problem.code` 描述里
+（无需新增码、无需改 openapi），R1 只做了「回 `ApiExceptionHandler.statusOf` 登记 404 状态」这一步。
+
+**列表口径**：`findEnded(keyword, from, to, PageRequest)` + `countEnded(...)`，即 `ended_at IS NOT NULL`
+的场次按 `ended_at DESC, id DESC` 排序；`keyword` 大小写不敏感模糊匹配 `plan_name`，且 `%`/`_`/`\`
+被转义成**字面量**（不当作 LIKE 通配符）。
+
+### 23.2 用例判据
+
+core（`ReplayServiceIT`，新增 7 条，全走真库真事务 `@SpringBootTest @Transactional`）：
+
+1. `list_returnsOnlyEnded_newestFirst`——同一 `plan_name` 前缀下造「1 条进行中 + 2 条已结束」，
+   列表只出已结束的 2 条，且按 `endedAt` 倒序（进行中的那条不得出现）。
+2. `list_appliesKeywordAndEndedWindow`——`keyword` 与 `[from, to]` 用 `ended_at` 收窄，窗口外的已结束场次被排除。
+3. `list_treatsPercentAsLiteralNotWildcard`——`keyword` 里的 `%` 只匹配名字里**真的含 `%`** 的那条，
+   不得命中被通配符命中的邻居。
+4. `list_pagesWithStableTotalAndNoOverlap`——`total` 跨页稳定，第 1/2 页条目无重叠、无遗漏。
+5. `get_endedExercise_returnsFrozenOutcome`——已结束场次返回**冻结**的 `endedAt` 与 `hitCount`/`deadCount`/
+   `rosterCount`，且 `durationSeconds == endedAt - startedAt`（定值口径）。
+6. `get_runningExercise_isNotFound`——`ended_at IS NULL` 的行 → `REPLAY_NOT_FOUND`。
+7. `get_unknownId_isNotFound`——不存在的 id → 同一个 `REPLAY_NOT_FOUND`。
+
+api（`ApiSkeletonSmokeIT`，139，计数不变）：`ReplayController` 构造增一参（`ReplayService`），替身一律抛
+占位异常，故 `listReplays`/`getReplay` 在本测试里仍表现为 501（只证明路由注册）；501 示例端点由
+`GET /api/v1/replays` 改为**仍是真占位**的 `GET /api/v1/replays/{replayId}/timeline`。
+另新增常量 `REPLAY_ID`（合法 UUIDv7）：接线后「拼不出来的 replayId」被折叠成 404，
+与「路由没注册」的 404 撞车，占位串会让已注册路由丧失鉴别力（同 `MAP_ID`/`PLAN_ID` 取向）。
+
+app（`RoleWritePermissionIT`，326，计数不变）：`PermissionApplication` 的 `@Import` 清单已含 `ReplayController`，
+故补一个 `ReplayService` 替身 Bean 以保持「排掉 DataSource 的授权切片」可启动。
+
+### 23.3 边界与不变式
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不开启 out-of-order。本段**未新增错误码**（复用既有 `REPLAY_NOT_FOUND`）、
+**未新增迁移**、**未新增依赖**。
+
+**只读**：`ReplayService.list` 标 `@Transactional(readOnly = true)`，`get` 亦只读；R1 不写任何表。
+
+**R4 的前置提醒**：`REPLAY_EXPORT_FAILED` 的 409 状态**刻意仍未登记**（走 default → 500，响亮地失败）；
+R4 落地导出时必须一并登记，并同步修改把它当「未登记状态」绊线的两处测试——
+`MvcProblemIT`（L319-322、L398）与 `ApiExceptionHandlerBusinessTest`（L168、L271-276）。
+
+本段为**代码验收**，不是生产发布批准。
+
