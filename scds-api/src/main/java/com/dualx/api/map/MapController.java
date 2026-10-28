@@ -348,7 +348,7 @@ public class MapController {
         BaseMap map = view.map();
         return new MapDetail(map.id().toString(), map.name(), map.mapType(), imageUrl(map),
                 map.imageWidth(), map.imageHeight(), (int) view.floorCount(), view.calibrated(),
-                map.createdAt(), map.updatedAt());
+                view.calibratedAt(), map.createdAt(), map.updatedAt());
     }
 
     /**

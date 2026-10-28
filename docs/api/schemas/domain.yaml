@@ -595,6 +595,15 @@ MapDetail:
     calibrated:
       type: boolean
       description: UWB 标定（uwb-meta）是否齐备：bs1~bs4 与长宽基准必须全部有值
+    calibratedAt:
+      type: [string, 'null']
+      format: date-time
+      description: |
+        最近一次写入 UWB 标定参数（`uwb-meta`）的时刻；从未标定、或标定发生在本字段引入之前时为 `null`。
+
+        与 `calibrated` 同源但**不等价**：`calibrated` 判「参数是否齐备」，本字段记「最近一次落库的时刻」；
+        改名、换图型都不会刷新它，因此本字段非空必然 `calibrated=true`，反之不成立。现场用它核对
+        「标定到底生效了没有、什么时候生效的」——这是重启后唯一还在的证据（标定会话状态本身只在内存里）。
     createdAt:
       type: string
       format: date-time
