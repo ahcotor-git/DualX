@@ -3127,3 +3127,80 @@ CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水
 **未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩 / 假连接器），**未对着真实后端实例**跑过真实指令下发
 （真实入队 / 离线 `accepted=false` / 队列满 / 真实 `downlinkHex` 字节核对未验证），`console_app` 的 `onCommand`/`reloadAll`
 接线**未在真实实例上走通**（app 级用例仍只覆盖到「入口回调」层）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 48. M6 CLIENT-WINDOWS 续段（写端点 · 共享层先行）：exercise 域写端点——想定 / 编成 / 模板与导入 / 开演停演
+
+承段 45「只读先行，写入另开段」与段 47「UI 接线另开段」，本段补齐 exercise 域的**写端点客户端**。经决策点确认：
+方向取「**exercise 写端点（推荐）**」，节奏取「**共享层先行（推荐）**」（只落 models + api + 契约测试，**UI 接线另开段**），
+范围取「**纳入（推荐）**」（把 multipart / 二进制端点一并纳入本段，不留尾巴）。摸底识别出一处**结构性缺口**——
+`ApiTransport` 只支持 JSON 请求体，**不支持 multipart / 原始字节**（响应侧已能收原始字节，下载无碍），
+经决策点选「**新增 `sendBytes`（推荐）**」。
+
+### 48.1 交付物（1 笔 = 7 文件，0 新 + 7 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/shared/api/api_client.dart`(改) | `ApiTransport` 窄端口新增 `sendBytes(method, path, {query, body, contentType, bearerToken})` 供**原始字节**请求体；`ApiClient` 实现之（`_send` 增 `bytesBody`/`bytesContentType` 分支，`headers.set(contentTypeHeader, ...)` 原样送）；文件末新增 `MultipartFile` / `MultipartBody` 两类型 + `multipartFormData({fields, files, random})` 助手 |
+| `lib/shared/auth/refreshing_api_transport.dart`(改) | 新增 `sendBytes` override——经 `_authorized` 转发（与其他方法同口径，401 到期自动续期重试一次） |
+| `lib/shared/api/exercise_models.dart`(改) | 新增写端点载荷：`PageMeta`/`Plan`/`PlanPage`/`PlanUpsertRequest`/`RosterEntry`/`Roster`/`StartExerciseRequest`/`StopExerciseResult` + `PlanTemplateFormat` 枚举；既有只读类型保留 |
+| `lib/shared/api/exercise_api.dart`(改) | `ExerciseApi` 由 2 端点扩到 **11 方法**：想定 CRUD（`listPlans`/`createPlan`/`getPlan`/`updatePlan`/`deletePlan`）+ 编成（`getRoster`/`replaceRoster`）+ 模板与导入（`downloadPlanTemplate`/`importPlan`）+ 生命周期（`startExercise`/`stopExercise`） |
+| `test/shared/api/exercise_api_test.dart`(改) | 新增 5 组共 **16 例**：`listPlans` 2 + `createPlan/getPlan/updatePlan/deletePlan` 4 + `编成（roster）` 3 + `想定模板与导入` 3 + `开演/停演` 4 |
+| `test/shared/api/api_client_test.dart`(改) | 新增 1 组 **3 例**：`sendBytes` 原始字节体原样送出 + 非 2xx 映射 + `multipartFormData` RFC 7578 拼装 |
+| `test/console_widget_test.dart`(改) | `ScriptedTransport` 桩补 `sendBytes` override（正文不入桩断言），**保持 3 个 `ApiTransport` 实现同步**、避免编译断裂 |
+
+### 48.2 用例与判据（新增 19 例：exercise_api_test 16 + api_client_test 3）
+
+| 用例 | 判据 |
+|---|---|
+| 想定列表带 `keyword`/`page`/`size` | `GET /api/v1/plans`；查询串恰 `{keyword, page, size}`；`items` + `meta` 解出；带 `Bearer` |
+| 想定列表不带参数 | 不拼查询串（走服务端默认分页） |
+| 新建想定 | `POST /api/v1/plans`；`Content-Type: application/json`；正文**全 4 键**（`{"name":"新建想定","mapId":null,"battleMode":null,"remark":null}`）；201 回 `Plan` |
+| 想定详情 404 | `ApiException`；`statusCode 404` + `code == PLAN_NOT_FOUND`；路径 `plans/missing` |
+| 修改想定（整体替换） | `PUT /api/v1/plans/{id}`；正文**显式含 `mapId: null`**（解绑底图语义）与 `battleMode` |
+| 删除想定 | `DELETE /api/v1/plans/{id}`；204 无正文；`Future<void>` |
+| 获取编成 | `GET /api/v1/plans/{id}/roster`；`entries` 解出（含 `Team`/`VestMode` 枚举） |
+| 整体替换编成 | `PUT .../roster`；正文 `entries` **只发非 null 键**（`{"vestNum":21,"team":"RED"}`，缺席 hp/ammo/mode） |
+| 清空编成 | 空列表即清空；正文 `entries` 为空数组（合法） |
+| 模板下载（XLSX） | `GET /api/v1/plans/template`；查询串恰 `{format: XLSX}`；**回原始二进制**且 `contentType` 为 XLSX MIME |
+| 模板下载（CSV） | `format=CSV` 之际查询串随之改变 |
+| multipart 导入 | `POST /api/v1/plans/import`；`Content-Type: multipart/form-data` 且含非空 `boundary`；正文含 `name="name"`/`name="file"`/`filename="template.xlsx"`；201 回 `Plan` |
+| 开演 | `POST /api/v1/exercise/current`；正文**只发非 null 键**（`{"planId":"plan-7"}`，无 `battleMode`）；201 回 `Exercise` |
+| 开演被 409 拦 | `DEVICE_LINK_NOT_OPEN` → `ApiException`；`battleMode` 显式发出时正文含 `{"planId":"plan-7","battleMode":"BATTLE"}` |
+| 停演 | `DELETE /api/v1/exercise/current`；回 `StopExerciseResult`（`exerciseId`/`replayId`/`endReason=NORMAL`） |
+| 停演被 409 拦 | `EXERCISE_NOT_RUNNING` → `ApiException`（停演**不设**链路门禁） |
+| `sendBytes` 原始字节体 | 字节与自定义 `Content-Type`（含 `boundary`）**原样送出**；`Bearer` 注入 |
+| `sendBytes` 非 2xx | 同样抛 `ApiException`（413 带出 `code`） |
+| `multipartFormData` 拼装 | `contentType` 前缀 `multipart/form-data; boundary=----scdsBoundary`；正文 `--boundary\r\n` 起、`--boundary--\r\n` 收；**fields 在前 files 在后**；文件字节原样夹入 |
+
+### 48.3 口径要点
+
+- **窄端口扩口要同步 3 个实现**：`ApiTransport` 共 3 个实现——`ApiClient`（唯一 `dart:io` 实现）、`RefreshingApiTransport`
+  （装饰器）、`ScriptedTransport`（`console_widget_test.dart` 测试桩）。新增 `sendBytes` 若漏改任一实现即**编译断裂**，故本段同步改三处。
+- **请求体两类口径，不可混淆**（本段关键洞察）：`PlanUpsertRequest.toJson()` 走「**整体替换**」——**显式输出全部 4 键**
+  （`null` 也发，解绑底图就是 `mapId: null`）；`RosterEntry` / `StartExerciseRequest.toJson()` 走「**可选缺省**」——
+  **只发非 null 键**（缺席由服务端补 `100/30/30/AUTO`、`battleMode` 沿用想定）。这与 command 域 `VestConfigRequest` 的
+  「只发非 null、缺席即保持原值」是**相反**口径。
+- **RFC 7578 手工拼装**：目标平台 Android / Windows **无浏览器 `FormData`**，故由 `multipartFormData()` 自拼正文与
+  `Content-Type`（含 `boundary`：`----scdsBoundary` + 16 位随机 hex），再交 `sendBytes` 送出；`sendBytes` 与 `send` 的
+  `jsonBody` 是**互斥**两条路（前者只送字节，不做编码）。
+- **模板下载保持原始 `ApiResponse`**：XLSX / CSV 是二进制产物，本层**不解码**，把字节 + `contentType` 交调用方决定落盘或解析。
+- **开演前置链在写库前判定**：503 `INSTANCE_NOT_READY` → 404 `EXERCISE_PLAN_NOT_FOUND`（**开演专属码**，与 `PlanService` 的
+  `PLAN_NOT_FOUND` 分属两个码）→ 400 `EXERCISE_ROSTER_EMPTY` → 409 `DEVICE_LINK_NOT_OPEN` → 409 `EXERCISE_ALREADY_RUNNING`；
+  **停演 409 仅 `EXERCISE_NOT_RUNNING`**（不设链路门禁）。被拒请求**不留半启动状态**。客户端本层**不判业务**，只把错误码透上去。
+- **`null` 与「缺席」在服务端不等价**：`ExerciseController#draft` 把**在场但为 null** 的字段也当 `null` 落库——UI 层若要「只改想定名
+  而不动底图」，须以**服务端回传快照**做完整形式（完整四键）提交，不能只发 `name`。此口径已写入 `PlanUpsertRequest` 注释，**UI 接线留待后段**。
+
+### 48.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**244 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + **本段 19**）；
+  `flutter analyze` → `No issues found! (ran in 2.4s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 7 文件**（0 新 + 7 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- 实现期修一处 `analyze` 告警：`api_client.dart` 间接导入 `BytesBuilder` 触发 `deprecated_export_use`（2 issues）→ 加 `import 'dart:typed_data';` 后归零；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（本机 `HttpServer` 打桩），**未对着真实后端实例**跑过真实想定 CRUD /
+真实 multipart 导入 / 真实模板下载 / 真实开演停演（真实 409 拦截链、真实 XLSX 字节、真实整文件校验未验证）。
+本段为**共享层契约验收**，不是生产发布批准；**UI 接线尚未落地**（想定管理页 / 开停演入口另开段）。

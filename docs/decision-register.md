@@ -1693,10 +1693,47 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 **未验项**：**未对着真实后端实例**跑真实指令下发（真实入队 / 离线 `accepted=false` / 队列满 / 真实 `downlinkHex` 字节核对未验证）；
 `console_app` 的 `onCommand`/`reloadAll` 接线**未在真实实例上走通**（app 级用例仍只覆盖到「入口回调」层）。证据见 [testing](testing.md) **第 47 节**。
 
-**下一段（候选）**：CLIENT-WINDOWS 其余子域（想定与生命周期 exercise 域写端点、地图与标定 map 域、复盘与导出 replay 域）；
-`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
+**下一段（CLIENT-WINDOWS 续段·写端点 · 共享层先行）落地**：用户当次裁定方向「**exercise 写端点（推荐）**」、节奏
+「**共享层先行（推荐）**」（只落 models + api + 契约测试，**UI 接线另开段**），范围「**纳入（推荐）**」（multipart /
+二进制端点一并纳入，不留尾巴）。摸底识别出**结构性缺口**——`ApiTransport` 只支持 JSON 请求体、**不支持 multipart /
+原始字节**（响应侧已能收原始字节，故下载端点无碍），用户当次裁定「**新增 `sendBytes`（推荐）**」。落**一笔**（**7 文件 /
+0 新 7 改**）：
+- `lib/shared/api/api_client.dart`（改）：`ApiTransport` 窄端口新增 `sendBytes(method, path, {query, body, contentType,
+  bearerToken})` 送**原始字节**请求体；`ApiClient` 实现之（`_send` 增 `bytesBody`/`bytesContentType` 分支，
+  `headers.set(contentTypeHeader, ...)` 原样送）；文件末新增 `MultipartFile` / `MultipartBody` 两类型 +
+  `multipartFormData({fields, files, random})` 助手（**RFC 7578** 手工拼装，`boundary` = `----scdsBoundary` + 16 位随机 hex，
+  fields 在前 files 在后，末尾 `--boundary--\r\n`）；
+- `lib/shared/auth/refreshing_api_transport.dart`（改）：新增 `sendBytes` override——经 `_authorized` 转发（与其他方法同口径）；
+- `lib/shared/api/exercise_models.dart`（改）：新增写端点载荷 `PageMeta`/`Plan`/`PlanPage`/`PlanUpsertRequest`/`RosterEntry`/
+  `Roster`/`StartExerciseRequest`/`StopExerciseResult` + `PlanTemplateFormat` 枚举（既有只读类型保留）；
+- `lib/shared/api/exercise_api.dart`（改）：`ExerciseApi` 由 2 端点扩到 **11 方法**——想定 CRUD（`listPlans`/`createPlan`/
+  `getPlan`/`updatePlan`/`deletePlan`）+ 编成（`getRoster`/`replaceRoster`）+ 模板与导入（`downloadPlanTemplate`/`importPlan`）
+  + 生命周期（`startExercise`/`stopExercise`）；
+- `test/shared/api/exercise_api_test.dart`（改，**+16 例**）+ `test/shared/api/api_client_test.dart`（改，**+3 例**）
+  + `test/console_widget_test.dart`（改，`ScriptedTransport` 桩补 `sendBytes` override，**保持 3 个 `ApiTransport`
+  实现同步**、避免编译断裂）。
+
+**口径要点**：**窄端口扩口要同步 3 个实现**（`ApiClient` / `RefreshingApiTransport` / `ScriptedTransport`），漏改任一即编译断裂；
+**请求体两类口径不可混淆**——`PlanUpsertRequest.toJson()` 走「**整体替换**」（**显式输出全部 4 键**，`null` 也发，
+解绑底图 = `mapId: null`），`RosterEntry` / `StartExerciseRequest.toJson()` 走「**可选缺省**」（**只发非 null 键**，
+缺席由服务端补 `100/30/30/AUTO`、`battleMode` 沿用想定）——与 command 域 `VestConfigRequest` 的「只发非 null」**相反**；
+**服务端 `null` 与「缺席」不等价**（`ExerciseController#draft` 把在场但为 null 的字段也当 `null` 落库，故 UI 层改想定须以
+**服务端回传快照**做完整形式提交，此口径留待 UI 接线段落地）；**开演前置链在写库前判定**（503 `INSTANCE_NOT_READY` →
+404 **`EXERCISE_PLAN_NOT_FOUND`**（**开演专属码**，非 `PlanService` 的 `PLAN_NOT_FOUND`）→ 400 `EXERCISE_ROSTER_EMPTY` →
+409 `DEVICE_LINK_NOT_OPEN` → 409 `EXERCISE_ALREADY_RUNNING`），**停演 409 仅 `EXERCISE_NOT_RUNNING`**（不设链路门禁）。
+本原子任务 **7 文件**（0 新 7 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；实现期修一处
+`analyze` 告警（间接导入 `BytesBuilder` → 加 `import 'dart:typed_data';`）。
+
+门禁：`flutter test` → `All tests passed!`（**244 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + **本段 19**）、
+`flutter analyze` → `No issues found! (ran in 2.4s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实想定 CRUD / 真实 multipart 导入 / 真实模板下载 / 真实开演停演（真实 409 拦截链、
+真实 XLSX 字节、真实整文件校验未验证）；**UI 尚未接线**（想定管理页 / 开停演入口另开段）。证据见 [testing](testing.md) **第 48 节**。
+
+**下一段（候选）**：CLIENT-WINDOWS 其余子域（想定管理页与开停演入口 —— exercise 域写端点 UI 接线；地图与标定 map 域；
+复盘与导出 replay 域；device 台账与链路域）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
-安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。各段守「每原子任务 ≤3 文件」。
+安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。后续恢复默认「每原子任务 ≤3 文件」。
 
 
 
