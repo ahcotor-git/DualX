@@ -3013,3 +3013,59 @@ CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水
 
 **未验项**：本段只做 `flutter analyze` + `flutter test`（`HttpServer` 打桩），**未对着真实后端实例**跑过真实当前演习状态
 或真实日志流水拉取；写入类指令（command 域）**尚未实现**。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 46. M6 CLIENT-WINDOWS 续段（写操作共享层）：command 域指挥指令客户端——8 个写端点
+
+承段 45「只读先行，写入另开段」，本段落 command 域**写操作**共享层。经决策点确认：
+范围取「**共享层全 8 端点（推荐）**」（只落 models + api + 测试，恰 **3 文件**；UI 接线另开段），
+且 `moveVest`（契约标 `x-internal`「联调专用」）「**纳入（推荐）**」。
+本段**不含** UI 接线、不含地图/标定、想定、复盘导出。
+
+### 46.1 交付物（1 笔 = 3 文件，3 新）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/shared/api/command_models.dart`(新) | command 域契约模型：`WeaponSlot` / `VestMode` 两枚举 + `ReloadRequest` / `VestConfigRequest` / `MoveVestRequest` 三请求体（各带 `toJson()`）+ `CommandAck` 回执；`Team` **复用** `situation_models.dart` 的既有枚举（`common.yaml#/Team`，不重复定义）；解析口径与 `exercise_models.dart` 同源（**必填缺失 → `TypeError`；形状不符 / 未知枚举字面量 → `FormatException`；可空字段 → nullable**） |
+| `lib/shared/api/command_api.dart`(新) | `CommandApi` 持窄端口 `ApiTransport`，**8 个写端点**：`killVest` / `reviveVest` / `injureVest` / `outOfRangeVest`（POST，无体）、`reloadVest` / `reloadAllVests`（POST，带 `ReloadRequest`）、`setVestConfig`（PUT，带 `VestConfigRequest`）、`moveVest`（POST，带 `MoveVestRequest`）；统一解析 `CommandAck`，非 2xx 交 `ApiTransport` 抛 `ApiException` |
+| `test/shared/api/command_api_test.dart`(新) | **12 例**契约测试（`HttpServer` 打桩，与 `exercise_api_test.dart` 同口径：断言方法 / 路径 / 请求体 JSON / `Bearer` / 非 2xx → `ApiException` 映射） |
+
+### 46.2 用例与判据（12 例）
+
+| 用例 | 判据 |
+|---|---|
+| `killVest`：POST `.../vests/14/kill` 无体、带 `Bearer`，回 `CommandAck` | 方法 `POST`、路径 `$kApiPrefix/command/vests/14/kill`、查询串空、**请求体空**、`Authorization: Bearer access-1`；`command=DIE`、`downlinkHex` 保留、`isBroadcast=false` |
+| `reviveVest` / `injureVest` / `outOfRangeVest` | 路径分别 `.../vests/{n}/revive`、`/injure`、`/out-of-range`，方法均 `POST`、无体 |
+| `reloadVest`：POST `.../vests/14/reload` 带 `{ammo, weapon}` | 请求体恰 `{"ammo":30,"weapon":"PRIMARY"}` |
+| `reloadAllVests`：POST `/api/v1/command/reload-all`，回执 `vestNum=0` 视为「全体」 | 路径 `$kApiPrefix/command/reload-all`、请求体 `{"ammo":5,"weapon":"SECONDARY"}`；`ack.vestNum==0` 且 `ack.isBroadcast==true` |
+| `setVestConfig`：PUT `.../config`，**体只含非 null 键** | 方法 `PUT`；只传 `hp`+`team` 时请求体恰 `{"hp":80,"team":"RED"}`（**未传字段不发**，覆盖语义） |
+| `setVestConfig`：全字段传入逐键序列化 | 请求体恰 `{"mode":"MANUAL","hp":100,"ammo1":30,"ammo2":3,"team":"BLUE"}`（枚举走契约字面量） |
+| `moveVest`：POST `.../move` 带 `{floorNum, posNum}` | 路径 `.../vests/14/move`、请求体恰 `{"floorNum":3,"posNum":12}` |
+| `accepted=false`：仍属 HTTP 200 成功受理 | **不抛异常**、`ack.accepted==false`、`ack.queuedAt` 为 `null` |
+| 409 `EXERCISE_NOT_RUNNING`（无演习） | `failure.statusCode==409`、`failure.code==EXERCISE_NOT_RUNNING` |
+| 403 `COMMAND_MOVE_FORBIDDEN`（正式演习禁手动置位） | `failure.statusCode==403`、`failure.code==COMMAND_MOVE_FORBIDDEN` |
+
+### 46.3 口径要点
+
+- **HTTP 200 只表示「已受理」**：`accepted=false`（马甲离线 / 队列满）仍属成功受理——**未入队、未下发任何字节**、
+  `queuedAt` 为空，调用方应提示「未下发」而非报错；反过来，`accepted=true` **也不等于设备已确认**（协议无回执帧，观察项）。
+- **全体充弹的 `vestNum` 固定为 0**：广播帧不指向具体马甲；前端应据 `vestNum == 0`（`CommandAck.isBroadcast`）
+  显示为「全体」，**不是编号 0 的马甲**（真实编号下界为 1）。
+- **覆盖配置语义**：`VestConfigRequest` 字段全可空，**未传的字段保持原值**，故 `toJson()` **只输出非 `null` 键**
+  （不能把 `null` 当成「置空」下发）；该帧在下一次轮询（默认 200ms）时生效，不是即时单次指令。
+- **全部为 POST/PUT**：不再像旧系统那样用 GET 触发写操作；`setVestConfig` 是唯一的 `PUT`。
+- **`moveVest` 是联调专用**（契约 `x-internal`）：正式演习中服务端按本场模式拒绝（403 `COMMAND_MOVE_FORBIDDEN`）——
+  本段只落 API 层，UI 是否暴露由后续段按 `x-internal` 决定。
+
+### 46.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**215 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + **本段 12**）；
+  `flutter analyze` → `No issues found! (ran in 2.3s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务恰 3 文件**（3 新），**未破「每原子任务 ≤3 文件」上限**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（`HttpServer` 打桩），**未对着真实后端实例**跑过真实指令下发
+（真实入队 / 离线 `accepted=false` / 队列满 / 真实 `downlinkHex` 字节核对未验证）；**UI 尚未接线**（指令按钮与状态反馈另开段）。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。

@@ -1645,8 +1645,33 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 **未验项**：**未对着真实后端实例**跑真实当前演习状态 / 真实日志流水拉取；写入类指令（command 域）**尚未实现**。
 证据见 [testing](testing.md) **第 45 节**。
 
-**下一段（候选）**：command 域**写操作**（判死/活/伤/越界/充弹/全体充弹/改配置/手动置位）；CLIENT-WINDOWS 其余子域
-（想定与生命周期、地图与标定、复盘与导出）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
+**下一段（command 域写操作·共享层）落地**：用户当次裁定「**继续**」，并在决策点选
+「**共享层全 8 端点（推荐）**」（只落 models + api + 测试，恰 3 文件；UI 接线另开段）＋
+`moveVest`「**纳入（推荐）**」。落**一笔** `e464452`（**恰 3 文件 / 3 新 / 516 insertions**）：
+- `lib/shared/api/command_models.dart`（新）：`WeaponSlot` / `VestMode` 两枚举 + `ReloadRequest` / `VestConfigRequest` /
+  `MoveVestRequest` 三请求体（各带 `toJson()`）+ `CommandAck` 回执；`Team` **复用** `situation_models.dart` 既有枚举；
+- `lib/shared/api/command_api.dart`（新）：`CommandApi` 八端点——`killVest` / `reviveVest` / `injureVest` /
+  `outOfRangeVest`（POST 无体）、`reloadVest` / `reloadAllVests`（POST 带体）、`setVestConfig`（**PUT** 带体）、
+  `moveVest`（POST 带体）；
+- `test/shared/api/command_api_test.dart`（新）：**12 例**（`HttpServer` 打桩，断言方法 / 路径 / 请求体 JSON / `Bearer` / 错误映射）。
+
+**口径要点**：**HTTP 200 只表示「已受理」**——`accepted=false`（马甲离线 / 队列满）仍属成功受理，**未入队、未下发任何字节**、
+`queuedAt` 为空，前端应提示「未下发」而非报错；反之 `accepted=true` **也不等于设备已确认**（协议无回执帧，观察项）。
+**全体充弹 `vestNum` 固定为 0**（广播帧不指向具体马甲；据 `CommandAck.isBroadcast` 显示「全体」，**不是编号 0 的马甲**）。
+**覆盖配置语义**：`VestConfigRequest` 字段全可空、**未传保持原值**，故 `toJson()` **只输出非 `null` 键**（不能把 `null` 当「置空」下发），
+该帧下一次轮询（默认 200ms）才生效。**全部为 POST/PUT**（不再用 GET 触发写操作；`setVestConfig` 是唯一 `PUT`）。
+**`moveVest` 联调专用**（契约 `x-internal`，正式演习服务端拒 403 `COMMAND_MOVE_FORBIDDEN`）——本段只落 API 层，UI 暴露与否另定。
+本原子任务**恰 3 文件**，**未破上限**。
+
+门禁：`flutter test` → `All tests passed!`（**215 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + **本段 12**）、`flutter analyze` → `No issues found! (ran in 2.3s)`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实指令下发（真实入队 / 离线 `accepted=false` / 队列满 / 真实 `downlinkHex` 字节核对未验证）；
+**UI 尚未接线**。证据见 [testing](testing.md) **第 46 节**。
+
+**下一段（候选）**：command 域**UI 接线**（单兵指令按钮 + 受理反馈，含「未下发」提示与全体广播显示）；
+CLIENT-WINDOWS 其余子域（想定与生命周期、地图与标定、复盘与导出）；T-PROD 部署；
+平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。各段守「每原子任务 ≤3 文件」。
 
 
