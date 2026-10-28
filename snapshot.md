@@ -1,12 +1,12 @@
 # scds-next 交接快照
 
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M5 REPLAY 施工中，R1（复盘读侧）与 R2（轨迹分片）已去 501**（testing 第 23、24 节）——
+> 当前任务：**M5 REPLAY 施工中，R1（复盘读侧）、R2（轨迹分片）与 R3（统计）已去 501**（testing 第 23、24、25 节）——
 > `GET /api/v1/replays`、`GET /api/v1/replays/{replayId}`、
-> `GET /api/v1/replays/{replayId}/timeline` 已接 core `ReplayService`；
-> 余下 R3 统计 / R4 导出下载仍抛 501。
-> 最新全量 `mvn test` **1112 项，失败/错误/跳过均 0**（见 testing 第 15~24 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~24 节冲突处，以该处为准。
+> `GET /api/v1/replays/{replayId}/timeline`、`GET /api/v1/replays/{replayId}/statistics`
+> 已接 core `ReplayService`；余下 R4 导出下载三条仍抛 501。
+> 最新全量 `mvn test` **1120 项，失败/错误/跳过均 0**（见 testing 第 15~25 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~25 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -25,14 +25,16 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 **M3 CAL-2（UWB 中心基准校准：CAL-2a 状态机 / CAL-2b 端点接线 / CAL-2c V11 + 端到端）**、
 **M4 读侧「当前演习日志流水」`GET /api/v1/exercise/current/logs`**、
 **PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验**、**`getVestLink`（每马甲链路状态去 501）**，
-**M5 REPLAY R1（复盘读侧去 501）**，以及**M5 REPLAY R2（轨迹分片去 501）**。
+**M5 REPLAY R1（复盘读侧去 501）**、**M5 REPLAY R2（轨迹分片去 501）**，
+以及**M5 REPLAY R3（统计去 501）**。
 
-下一原子任务的候选：**M5 REPLAY R3（统计）/ R4（导出与下载）**——
-`ReplayController` 余 4 条仍 501（`getReplayStatistics` /
-`exportReplay` / `getExportTask` / `downloadExport`）；CAL-2 的**现场验收**
-（`calibrated_at` 可读性、50mm 静止阈值是否适配现场噪声）；
+下一原子任务的候选：**M5 REPLAY R4（导出与下载）**——
+`ReplayController` 余 3 条仍 501（`exportReplay` / `getExportTask` / `downloadExport`）；
+**R4 必须一并登记 `REPLAY_EXPORT_FAILED` → 409**，并同步修改把它当「未登记状态」绊线的
+`MvcProblemIT`（L319-322、L398）与 `ApiExceptionHandlerBusinessTest`（L168、L271-276）；
+CAL-2 的**现场验收**（`calibrated_at` 可读性、50mm 静止阈值是否适配现场噪声）；
 Flutter 客户端（Android 单兵端 / Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段 R2 改动**尚未提交**（见 §2），
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段 R3 改动**尚未提交**（见 §2），
 网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
@@ -40,11 +42,11 @@ Flutter 客户端（Android 单兵端 / Windows 指挥端）尚无工程。启�
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本轮沿用 R1 末端 `65d1976`（docs: 回写 M5 REPLAY R1 的证据、口径与快照）；R2 四文件改动在工作树 |
-| 实际远端main | 以 `git status` 为准：**推送须当次授权**，未获授权前 R1 三笔与 R2 改动仅在本机 |
+| 源码本地HEAD | 本轮沿用 R2 末端 `9e3fb7e`（docs: 回写 M5 REPLAY R2 轨迹分片的证据、口径与快照）；R3 六文件改动在工作树 |
+| 实际远端main | 以 `git status` 为准：**推送须当次授权**，未获授权前 R1/R2 各三笔与 R3 改动仅在本机 |
 | 已推送 | 更早批次已在远端：`e0c8192`（feat plan 范围校验）、`8c0f02e`（feat state 每马甲链路计数）、`b460716`（feat device `getVestLink` 接线）、`0df5909`（docs）、`143d40a`（docs）；CAL-2c 四笔、`865a0b9`（feat `moveVest`）、`c1198db`（feat 当前演习日志流水）、`398495b`（docs）与 CAL-1/MR-1~MR-3 亦已在远端 |
-| 未推送（仅本机） | R1 三笔：`86b24b9`（feat replay core 读侧）、`011b0f3`（feat replay api 接线）、`65d1976`（docs）；R2 四文件改动尚未提交（`ReplayService`/`ReplayServiceIT`/`ReplayController`/`ApiSkeletonSmokeIT`） |
-| 本轮继续成果 | **M5 REPLAY R2（轨迹分片）去 501**——`getReplayTimeline` 已接 core `ReplayService.timeline`（新增 8 例 IT）。全量 `mvn test` **1112 项**全绿（**尚未提交**） |
+| 未推送（仅本机） | R1 三笔：`86b24b9`（feat replay core 读侧）、`011b0f3`（feat replay api 接线）、`65d1976`（docs）；R2 三笔：`8fdcadb`（feat replay core timeline）、`63949a1`（feat replay api 接线）、`9e3fb7e`（docs）；R3 六文件改动尚未提交（`ReplayService`/`ReplayServiceIT`/`HitEventRepository`/`HitEventRepositoryIT`/`ReplayController`/`ApiSkeletonSmokeIT`） |
+| 本轮继续成果 | **M5 REPLAY R3（统计）去 501**——`getReplayStatistics` 已接 core `ReplayService.statistics`（新增 7 例 IT + 仓储 1 例）。全量 `mvn test` **1120 项**全绿（**尚未提交**） |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -112,8 +114,8 @@ heartbeat/gps/hit/mortar/simNo 分支记账；`ff06` 恒丢只增 `droppedTotal`
 **404 判据只有一个** `REPLAY_NOT_FOUND`（`ended_at IS NULL` 的进行中场次与「id 不存在」合并）；
 `durationSeconds` 取 `endedAt - startedAt` **定值**（与当前演习 `Instant.now()` 现算口径显式区分）；
 **未新增错误码（复用既有 `REPLAY_NOT_FOUND`）、未新增迁移、未新增依赖、只读**。
-未完成：全仓仍抛 501 的只剩 4 条——`ReplayController` 的
-`getReplayStatistics` / `exportReplay` / `getExportTask` / `downloadExport`（M5 的 R3/R4）。
+未完成：全仓仍抛 501 的只剩 3 条——`ReplayController` 的
+`exportReplay` / `getExportTask` / `downloadExport`（M5 的 R4）。
 新增已完成（**M5 REPLAY R2 轨迹分片去 501**，见 testing 第 24 节）：
 `ReplayController.getReplayTimeline` 接线，经 core `ReplayService.timeline(replayId, cursor, limit, vestNums, stride)`；
 **游标必须是 `t_track_sample.id`**（自增代理键、插入序即采样序，不重不漏），**不是 `t_ms`**
@@ -123,6 +125,18 @@ heartbeat/gps/hit/mortar/simNo 分支记账；`ff06` 恒丢只增 `droppedTotal`
 坏游标（非数字/负值）抛 `VALIDATION_FAILED`（400）**不静默退回 0**；
 404 判据复用 R1 的 `requireReplay`（`REPLAY_NOT_FOUND`）；
 `toTrackSample` 坐标四字段按原样透出、`t` 取 `tMs` 原值；
+**未新增错误码、未新增迁移、未新增依赖、只读**。
+新增已完成（**M5 REPLAY R3 统计去 501**，见 testing 第 25 节）：
+`ReplayController.getReplayStatistics` 接线，经 core `ReplayService.statistics(replayId, timelineBuckets)`；
+**数据源两分**——队伍战损（`teams`）与排行（`topShooters`）取 `t_exercise_unit` 停演**冻结的终局台账**
+（不从 `t_hit_event` 命中流水反推，避免崩溃自愈未冻结时两套数），命中部位分布
+（`hitPartDistribution`）单查 `t_hit_event` 分组（`HitEventRepository.countByHitPart`）；
+**排行只列有战绩者**（`hitsDealt > 0 || kills > 0`），排序 `kills` 降序 → `hitsDealt` 降序 → `vestNum` 升序，
+契约未给上限故**不人为截断**；**存活曲线**把 `[startedAt, endedAt]` 等分 `timelineBuckets` 段，
+段首 `t = durationMs * i / buckets`，「存活」= `finalStatus != DIE`（**`OFFLINE` 计入存活**），
+每段把本场所有队伍填 0 保证键集一致；`DIE` 而 `deadAt` 为 null 按「全程阵亡」处理；
+`timelineBuckets` 由控制器 `@Min(10) @Max(500)` 兜底校验；404 判据与 R1/R2 同源（`REPLAY_NOT_FOUND`）；
+`teams` 段复用 `scds-domain` 的中立线类型 `com.dualx.core.push.TeamSummary`；
 **未新增错误码、未新增迁移、未新增依赖、只读**。
 file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
@@ -134,11 +148,14 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn test`：2026-10-28，**1112项，失败/错误/跳过均0**：
-protocol19 + gateway49 + core579 + api139 + app326（solver/domain无测试）。
+**当前**全量`mvn test`：2026-10-28，**1120项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core587 + api139 + app326（solver/domain无测试）。
 计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）取值；按 `target/surefire-reports/TEST-*.xml`
 累加会少 core 的 21 项（`@Nested` 内部类如 `TrackSamplingTest$Sampler`/`$Writer` 不落在外层类 XML 里），
 口径说明见 testing 第 20 节。
+M5 REPLAY R3 新增证据：core 新增 `ReplayServiceIT` **7 例**（579 → 586）与
+`HitEventRepositoryIT` **1 例**（586 → 587），详见 testing 第 25 节；
+api 139 与 app 326 计数不变（`ApiSkeletonSmokeIT` 仅换 501 示例端点）。
 M5 REPLAY R2 新增证据：core 新增 `ReplayServiceIT` **8 例**（571 → 579，全走真库真事务），
 详见 testing 第 24 节；api 139 与 app 326 计数不变（`ApiSkeletonSmokeIT` 仅换 501 示例端点）。
 M5 REPLAY R1 新增证据：core 新增 `ReplayServiceIT` **7 例**（564 → 571，全走真库真事务），
@@ -177,7 +194,7 @@ API骨架使用standalone且只断言非404，不能证明真实Security或业�
 | R05 | signing=false时无token账号login返回401，目标404 |
 | R06 | 设备登录已按 D02 接线为**边缘本地签发**；只验签实例上该端点仍注册并抛500，是否改为条件注册属独立决策 |
 | R07 | **已闭合**：DeviceAuthService、SID单端在线与换绑清SID已实现；`device/me` 已接线，见 testing 第 13 节 |
-| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线（UWB 标定三端点已于 CAL-2 接线，COMMAND 第 8 条 `move`、「当前演习日志流水」与 `DeviceController.getVestLink` 均已接线，见 testing 第 20/22 节）；`ReplayController` 已接线 3/7（R1 读侧 + R2 轨迹分片，见 testing 第 23/24 节），余 4 条仍 501（属 M5 的 R3/R4） |
+| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线（UWB 标定三端点已于 CAL-2 接线，COMMAND 第 8 条 `move`、「当前演习日志流水」与 `DeviceController.getVestLink` 均已接线，见 testing 第 20/22 节）；`ReplayController` 已接线 4/7（R1 读侧 + R2 轨迹分片 + R3 统计，见 testing 第 23/24/25 节），余 3 条仍 501（属 M5 的 R4） |
 
 R05 仍未修复；R06 的只验签分支待决策。R23数据库隔离子任务已完成；
 R18-R28其他风险仍待对应工作包验证。
@@ -296,6 +313,23 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 **R4 前置提醒**：`REPLAY_EXPORT_FAILED` 的 409 状态刻意仍未登记，落地导出时须一并登记，
 并同步修改把它当「未登记状态」绊线的 `MvcProblemIT` 与 `ApiExceptionHandlerBusinessTest`。
 
+2026-10-28新增已确认（M5 REPLAY R3 统计去 501，见 testing 第 25 节）：
+**数据源两分**——队伍战损与排行取 `t_exercise_unit` 停演**冻结的终局台账**，
+**不**从 `t_hit_event` 命中流水反向统计（崩溃自愈未冻结时会给出两套数）；
+命中部位分布（`hitPartDistribution`）台账里没有，单查 `t_hit_event` 按 `hit_part` 分组；
+**排行只列有战绩者**（`hitsDealt > 0 || kills > 0`），排序 `kills` 降序 → `hitsDealt` 降序 → `vestNum` 升序，
+契约 `topShooters` 未给上限故**不截断**（截断会让「第 N 名」随实现变化、客户端无法复算）；
+**存活曲线**把 `[startedAt, endedAt]` 等分 `timelineBuckets` 段，段首 `t = durationMs * i / buckets`，
+「存活」定义为 `finalStatus != DIE`（**`OFFLINE` 计入存活**——离线不等于阵亡），
+每段把本场所有出现过的队伍都填 0 保证键集一致；`DIE` 而 `deadAt` 为 null 的异常态按「全程阵亡」处理；
+`timelineBuckets` 由控制器 `@RequestParam(defaultValue = "120")` + `@Min(10) @Max(500)` 兜底校验；
+404 判据与 R1/R2 同源（`requireReplay` → `REPLAY_NOT_FOUND`）；
+`teams` 段复用 `scds-domain` 的中立线类型 `com.dualx.core.push.TeamSummary`（不新造同形 DTO）；
+**未新增错误码、未新增迁移、未新增依赖、只读**。
+**R4 前置提醒**（同 R2 段落）：`REPLAY_EXPORT_FAILED` 的 409 状态刻意仍未登记，
+落地导出时须一并登记，并同步修改把它当「未登记状态」绊线的
+`MvcProblemIT`（L319-322、L398）与 `ApiExceptionHandlerBusinessTest`（L168、L271-276）。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -330,7 +364,8 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：M5 REPLAY R2（轨迹分片去 501）详见 testing 第 24 节；
+最新证据：M5 REPLAY R3（统计去 501）详见 testing 第 25 节；
+M5 REPLAY R2（轨迹分片去 501）详见 testing 第 24 节；
 M5 REPLAY R1（复盘读侧去 501）详见 testing 第 23 节；
 `getVestLink`（每马甲链路状态去 501）详见 testing 第 22 节；
 PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验详见 testing 第 21 节；
@@ -339,6 +374,6 @@ M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1112 项测试、M5 REPLAY R2（轨迹分片）交付（代码与文档已就位、**待授权提交与推送**）
-与下一任务候选（REPLAY R3/R4 余 4 条 / Flutter / CAL-2 现场验收），
+本快照已同步 1120 项测试、M5 REPLAY R3（统计）交付（代码与文档已就位、**待授权提交与推送**）
+与下一任务候选（REPLAY R4 余 3 条 / Flutter / CAL-2 现场验收），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。

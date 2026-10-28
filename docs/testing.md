@@ -10,7 +10,8 @@
 > M4 T-STOP停机与立即重启及1021项最新全量结果见第14节（第3节T-STOP行已被第14节取代）。
 > M3 CAL-1 UWB 室内解算链路（解算器 + 装配接线 + app 端到端）与1055项最新全量结果见第17节。
 > M5 REPLAY R1 复盘读侧（`listReplays` / `getReplay`）与1104项全量结果见第23节；
-> R2 轨迹分片（`getReplayTimeline`）与1112项全量结果见第24节。
+> R2 轨迹分片（`getReplayTimeline`）与1112项全量结果见第24节；
+> R3 统计（`getReplayStatistics`）与1120项全量结果见第25节。
 
 ## 1. 本次自动化结果
 
@@ -1565,6 +1566,97 @@ api（`ApiSkeletonSmokeIT`，139，计数不变）：`ReplayController` 的 `get
 **R4 的前置提醒**：`REPLAY_EXPORT_FAILED` 的 409 状态**刻意仍未登记**（走 default → 500，响亮地失败）；
 R4 落地导出时必须一并登记，并同步修改把它当「未登记状态」绊线的两处测试——
 `MvcProblemIT`（L319-322、L398）与 `ApiExceptionHandlerBusinessTest`（L168、L271-276）。
+
+本段为**代码验收**，不是生产发布批准。
+
+## 25. M5 REPLAY R3 统计（`GET /api/v1/replays/{replayId}/statistics`）
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 587 | 0/0/0 | 新增 `ReplayServiceIT` 7 条 + `HitEventRepositoryIT` 1 条（579 → 587） |
+| api | 139 | 0/0/0 | 计数不变：`ApiSkeletonSmokeIT` 仅换 501 示例端点 |
+| app | 326 | 0/0/0 | 未改动 |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1120** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径同第 20~24 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值，
+> 按 `target/surefire-reports/TEST-*.xml` 累加会漏掉 `@Nested` 内部类。
+
+### 25.1 落地范围与口径
+
+**补的是哪一处缺口**：R2 接线第三条后，`ReplayController` 剩 3 条 501；R3 接线第四条——
+统计（`getReplayStatistics`），导出/下载（R4）三条仍 501。
+
+**数据源两分，不从命中流水反推战损**：队伍战损（`teams`）与排行（`topShooters`）取
+`t_exercise_unit` 停演时**冻结的终局台账**（`finalStatus` / `deadAt` / `kills` / `hitsDealt`），
+**不**从 `t_hit_event` 命中流水反向统计——崩溃自愈后若冻结列尚未写全，两处口径会给出两套数；
+命中部位分布（`hitPartDistribution`）是另一类问题（「打了哪里」在台账里没有），故单查
+`t_hit_event` 按 `hit_part` 分组（`HitEventRepository.countByHitPart`）。
+
+**排行只列有战绩者、不截断**：`hitsDealt > 0 || kills > 0` 才入榜；
+排序为 `kills` 降序 → `hitsDealt` 降序 → `vestNum` 升序（末位用编号兜底，避免同分者顺序不稳）。
+契约 `topShooters` **未给上限**，故不人为截断——截断会让「第 N 名」随实现变化，客户端无法复算。
+
+**存活曲线**：把 `[startedAt, endedAt]` 等分 `timelineBuckets` 段，段首时刻
+`t = durationMs * i / buckets`（毫秒，相对开演的偏移）；「存活」定义为 `finalStatus != DIE`——
+**`OFFLINE` 计入存活**（离线不等于阵亡，与状态侧口径一致）。每段把**本场出现过的所有队伍**
+都填成 0 再累加，保证各段键集一致，客户端不必为缺键补默认。
+
+**`DIE` 而 `deadAt` 为 null 的异常态按「全程阵亡」处理**（`aliveAt` 返回 false）——
+宁可少算存活，也不把已知阵亡者当成活人。
+
+**`timelineBuckets` 由控制器兜底校验**：`@RequestParam(defaultValue = "120")` + `@Min(10) @Max(500)`，
+越界即 400（框架校验），core 侧不再重复判。
+
+**404 判据与 R1/R2 同源**：`statistics` 先走 `requireReplay(replayId)`——
+「`ended_at IS NULL`（进行中）」与「id 不存在」折叠成同一个 `REPLAY_NOT_FOUND`。
+
+### 25.2 用例判据
+
+core（`ReplayServiceIT`，新增 7 条，全走真库真事务 `@SpringBootTest @Transactional`）：
+
+1. `statistics_aggregatesTeamsFromFrozenRoster`——每队按冻结台账汇总 total/live/dead/offline 与
+   `hitsDealt`；`OFFLINE` 计入 offline 而非 live/dead。
+2. `statistics_ranksShootersByKillsThenHitsThenVest`——同 `kills` 比 `hitsDealt`，
+   再同则按 `vestNum` 升序；无战绩者不入榜。
+3. `statistics_hitPartDistribution_groupsByPartInEnumOrder`——按 `hit_part` 分组计数，
+   与 `HitPart` 枚举顺序一致（`EnumMap`），且**只统计本场**（跨场不串）。
+4. `statistics_timeline_splitsDurationAndDropsTheDead`——按 `timelineBuckets` 等分，
+   段首时刻 `t = durationMs * i / buckets`；段内阵亡者被剔除、离线者仍在。
+5. `statistics_replayWithoutRosterOrHits_returnsEmptySections`——无台账、无命中的复盘 →
+   四段全为空列表（不报错）。
+6. `statistics_runningExercise_isNotFound`——`ended_at IS NULL` 的场次 → `REPLAY_NOT_FOUND`。
+7. `statistics_unknownId_isNotFound`——不存在的 id → 同一个 `REPLAY_NOT_FOUND`。
+
+core（`HitEventRepositoryIT`，新增 1 条）：
+
+8. `countByHitPart_groupsByPartAndStaysScopedToExercise`——两场各造命中，
+   各自分组结果只含本场；不存在的 id → 空 Map。
+
+api（`ApiSkeletonSmokeIT`，139，计数不变）：`ReplayController` 的 `getReplayStatistics` 已接线，
+替身 `ReplayService` 一律抛占位异常，501 示例端点由 `GET /api/v1/replays/{replayId}/statistics`
+改为**仍是真占位**的 `GET /api/v1/replays/{replayId}/exports/{format}`。
+
+### 25.3 边界与不变式
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不开启 out-of-order。本段**未新增错误码**（复用 `VALIDATION_FAILED` / `REPLAY_NOT_FOUND`）、
+**未新增迁移**、**未新增依赖**（`ExerciseUnitRepository` / `HitEventRepository` 早已就位）。
+
+**只读**：`ReplayService.statistics` 标 `@Transactional(readOnly = true)`，R3 不写任何表。
+
+**`TeamSummary` 复用中立线类型**：`teams` 段直接复用 `com.dualx.core.push.TeamSummary`
+（原本就住在 `scds-domain`，core 可直接引用），不新造同形 DTO。
+
+**R4 的前置提醒**（与第 24 节同）：`REPLAY_EXPORT_FAILED` 的 409 状态**刻意仍未登记**
+（走 default → 500，响亮地失败）；R4 落地导出时必须一并登记，并同步修改把它当「未登记状态」
+绊线的两处测试——`MvcProblemIT`（L319-322、L398）与 `ApiExceptionHandlerBusinessTest`（L168、L271-276）。
 
 本段为**代码验收**，不是生产发布批准。
 
