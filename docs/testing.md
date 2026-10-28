@@ -2599,4 +2599,66 @@ docs 在本节一次回写。范围＝**「连接配置 → 设备登录 → 自
 本段为**客户端 UI 装配与仿真联调验收**，不是生产发布批准；冒烟为 simulator 网关 + 本机回环，
 **不代表已过真机、真实串口或现场网络**。
 
+## 39. M6 CLIENT-WINDOWS 段 5：Windows 指挥端骨架（平台入口分派 + 连接配置健康诊断 + 账号登录 + 队伍汇总总览）
+
+段 5 落 **两笔**（共享层先行 → 指挥端装配），docs 在本节一次回写。范围＝**「入口分派 + 连接配置（含健康诊断）+ 账号登录 + 队伍汇总总览（HTTP Poll）」**，
+**不含 WebSocket、不含 revision 缓存聚合、不含 refresh/me/logout、不含指令与复盘**。
+本段**未做** Windows 原生构建与真实后端联调（本机**未安装 Visual Studio**，`flutter build windows` 与 Windows 桌面运行**不可验**，按下文 39.4 记为未验项）。
+
+### 39.1 交付物（2 笔 = 13 文件，8 新 5 改）
+
+| 笔 | 提交 | 文件 | 内容 |
+|---|---|---|---|
+| 共享层 | `17a0e10` | `lib/shared/api/api_client.dart`(改) | 抽出私有 `_send(method, Uri, ...)`；`send` 改为委托 `_send(api(path, query))`；**新增 `probe(String path)`** 走 `resolve(path)`（**不带** `/api/v1` 前缀），供应用级端点探活 |
+| 共享层 | `17a0e10` | `lib/shared/api/health_api.dart`(新) | `kHealthPath = '/actuator/health'`；`HealthReport{status, detail, httpStatus?}`（`isUp`/`reachable`）；`InstanceHealthApi.probe()` **永不抛异常**，把 2xx / 非 2xx / 网络失败三类收敛成 `HealthReport`（`UNKNOWN`/`HTTP_<code>`/`UNREACHABLE`） |
+| 共享层 | `17a0e10` | `lib/shared/polling/poller.dart`(新) | 把段 4c 的 `SituationPoller` 抽成**泛型** `PollingFeed<T> extends ChangeNotifier`：`Timer.periodic` + `_inFlight` 单飞（上一拍未回跳过本拍）+ 失败保陈旧数据只置 `lastError` + `successCount` + `describeError` 回调；`start`/`stop`/`dispose` 幂等 |
+| 共享层 | `17a0e10` | `lib/features/situation/situation_page.dart`(改) | 删除内部 `SituationPoller`，改用共享 `PollingFeed<UnitState>`；`describeError` 把 `DEVICE_VEST_NOT_FOUND` 翻成中文；**控件键与页面文案不变** |
+| 指挥端 | `aa5457b` | `lib/main.dart`(改) | **平台分派**：`Platform.isWindows ? ScdsConsoleApp : ScdsClientApp`（`dart:io`），注入内存连接配置存储 + 内存会话存储 |
+| 指挥端 | `aa5457b` | `lib/app/client_factory.dart`(新) | `httpApiClient(ConnectionConfig)` 工厂从 `main.dart` 迁出，**双端入口共用** |
+| 指挥端 | `aa5457b` | `lib/app/device_app.dart`(新) | 原 `ScdsClientApp` 整体迁入（Android 单兵端外壳）；链路 连接配置页（**不传 probe**）→ 设备登录页 → 自身态势页；换实例先 `close` 旧客户端 |
+| 指挥端 | `aa5457b` | `lib/app/console_app.dart`(新) | `ScdsConsoleApp`（Windows 指挥端外壳）：`_probe` 用**一次性客户端**（`finally close()`，不顶掉业务链路 `_client`）；链路 连接配置页（**传 probe**）→ 账号登录页 → 队伍汇总总览页 |
+| 指挥端 | `aa5457b` | `lib/features/connection/connection_page.dart`(改) | 新增可选 `probe` 参数与健康诊断区（4 控件键 `connection.health*`）；`_diagnose()` 用**当前输入字段**而非已存配置；端口非数字 → 本地报错且**不调用探活**；`probe == null`（单兵端）时该区**整块不渲染**；`_save()` 校验口径与 `_restoreDefaults`/`_clear` 语义不变 |
+| 指挥端 | `aa5457b` | `lib/features/console/console_login_page.dart`(新) | 账号登录页：账号 trim 后空 / 密码空 → 本地报错；`authBadCredentials`→「账号或密码不正确」、`rateLimited`→「尝试过于频繁」、其余展示码；提交期间禁用按钮与输入；**不做 refresh/me/logout**；控件键 `consoleLogin.*` |
+| 指挥端 | `aa5457b` | `lib/features/console/team_summary_page.dart`(新) | 队伍汇总总览页：`PollingFeed<List<TeamSummary>>`（默认 2000ms）+ `已刷新 N 次（每 X ms）`；**直读 `getTeamSummary`**（不读恒空的 `SituationEnvelope.teamSummary`）；空数组 → 「本场没有已编成的队伍」；**可选计数缺失显示 `—`**（不臆造 0）；控件键 `teamSummary.*` + `teamSummary.row.<wire>` |
+| 指挥端 | `aa5457b` | `test/widget_test.dart`(改) | 1 行 import：`main.dart` → `app/device_app.dart`（`ScdsClientApp` 迁址），4 个 group 内容未动 |
+| 指挥端 | `aa5457b` | `test/console_widget_test.dart`(新) | 指挥端 23 例（见 39.2） |
+
+### 39.2 用例与判据（23 例 = 外壳 4 + 健康诊断 5 + 登录 7 + 汇总 7）
+
+| 组 | 用例 | 判据 |
+|---|---|---|
+| 指挥端外壳装配（4） | 默认进连接配置页且预填 `127.0.0.1:11001` 且**带诊断入口**；存储已有值时预填该值；保存合法配置 → 写存储 + 跳账号登录页；空白地址 → 行内报错**不写库不跳转** | 指挥端外壳**必须**注入 `probe`（否则健康诊断区不渲染）；保存纪律与单兵端一致 |
+| 连接配置页健康诊断（5） | 未点击**不探测**、点击后展示状态与详情；探测用**当前输入字段**而非已存配置；503 → 「实例可达但未就绪」；探活抛异常 → 收敛 `UNREACHABLE`；端口非数字 → 报错且**不调用探活** | 诊断**永不冒泡异常**（UI 只呈现 `HealthReport`）；失败收敛，不红屏 |
+| 指挥端登录页（7） | 账号空 / 密码空 → 本地报错**不调用登录端口**；成功 → 账号 `trim`、密码**原样**提交、回调带 `AccountSession`；401 `AUTH_BAD_CREDENTIALS` → 可读文案且**不回调**；429 `RATE_LIMITED` → 限流文案；网络异常 → 可读错误不红屏；提交期间按钮禁用 + 显示进度 | 本地校验**只覆盖契约 required**；非 2xx 一律经 `ApiException` 呈现；令牌不出现在 UI |
+| 队伍汇总总览页（7） | 首帧前提示等待、成功后逐行展示队伍与计数（`RED｜总数 6｜存活 4｜阵亡 1｜离线 1｜命中送出 12`）；可选计数缺失 → `—`；空数组 → 空态文案；按注入周期轮询（`successCount` 递增）；上一拍未回**跳过本拍**；网络异常**不清空**上次数据；401 `AUTH_TOKEN_EXPIRED` → 展示码 | 轮询周期**可注入**（默认 2000ms）；失败语义＝「陈旧数据 + 明示失败」；计数**不臆造 0** |
+
+### 39.3 口径要点
+
+- **`/actuator/health` 不走 `/api/v1`**：故新增 `ApiClient.probe()` 走 `resolve()`，而非放宽 `api()` 语义；
+  健康端点**无令牌**（安全链白名单），期望 200 `UP`（依据 `environments.md` §4）。
+- **`PollingFeed<T>` 是双端唯一轮询纪律**：段 4c 的 `SituationPoller` 被抽出替换，
+  避免两套轮询逻辑漂移；段 4 既测用例行为不变、全绿。
+- **诊断用一次性客户端**：`_probe` 造独立 `ApiClient` 并在 `finally` 关闭，**不顶掉**业务链路正在用的 `_client`。
+- **队伍汇总直读专用端点**：`GET /api/v1/situation/teams/summary` 直接回数组；**不混用** `SituationEnvelope.teamSummary`
+  （增量帧该字段恒为空，客户端须自行缓存全量）。
+- **平台分派靠 `Platform.isWindows`**：不拆多 Flutter 工程（承 D12），单工程 + 共享契约/通信包 + 双入口。
+- **存储仍不落盘**：连接配置与会话都是内存实现，App 重启即回默认；平台持久化（Android Keystore / Windows DPAPI）
+  需另授权引依赖后再换实现。
+- **本段不做**：WS 连接、revision 缓存聚合、refresh/me/logout、指令、地图/标定、想定、复盘导出（均在后续段）。
+
+### 39.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**118 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23）；
+  `flutter analyze` → `No issues found! (ran in 3.9s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（0/0/0）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、轮询周期、在线窗口、
+  校验算法、四角编号口径、`docs/api/**` 契约、迁移、`scds-solver`；**未新增依赖**
+  （仍只 `dart:io` + `flutter_test` / `flutter SDK`）。
+
+**未验项（本机环境限制）**：本机**未安装 Visual Studio**，故 `flutter build windows`、Windows 原生运行与
+**真实后端联调**在本段**不可执行**；本节门禁只覆盖 `flutter analyze` + `flutter test`（widget 层）。
+Windows 页面测试**不得**用 Chrome 替代 Windows 桌面构建验收（承 `implementation-plan.md` §7）。
+
+本段为**客户端骨架与 widget 层验收**，不是生产发布批准；**不代表已过 Windows 原生构建、真机联调或现场网络**。
+
 

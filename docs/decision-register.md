@@ -115,6 +115,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | M6 CLIENT-BASE 段 2b（auth 客户端基座测试 + 前缀缺陷修复） | 用户当次裁定「**提 3 笔（fix + test + docs）并推送**」。段 2b 补测中**抓到真实缺陷**：`ApiClient.send` 用 `resolve()` 不补 `kApiPrefix`，`AuthApi` 五端点实际请求无 `/api/v1` 前缀路径。用户当次裁定修法取「**修 `ApiClient`，`send` 统一走 `api()`**」。**已落地提交** `54e830b`（fix，1 文件）+ `d770556`（test，3 文件，**24 用例**）；`flutter test` **39 例**全绿、`flutter analyze` 无问题。细节见文末该节与 [testing](testing.md) 第 36 节 |
 | M6 CLIENT-BASE 段 3（连接配置 + 自身态势只读） | 用户当次裁定四项：切分取「**拆 3a/3b/3c 三段**」、配置存储取「**内存实现先行，不引依赖**」、态势范围取「**四端点只读全做**」、提笔取「**每段 1 笔代码 + 末段统一 docs**」。**已落地 3 笔代码**：`1fc329a`（3a，`ConnectionConfig` + `ConnectionConfigStore`/`InMemoryConnectionConfigStore` + 10 例）、`c5c1e70`（3b，`situation_models.dart` 一套 Poll/WS 同构契约类型 + 8 枚举 + 15 例）、`6b58f93`（3c，`SituationApi` 四只读端点 + 9 例）。`flutter test` **73 例**全绿、`flutter analyze` 无问题；Dart 产物不进 Maven reactor，全量仍 **1151 项**。细节见文末该节与 [testing](testing.md) 第 37 节 |
 | M6 CLIENT-BASE 段 4（Android 入口装配 + 模拟器冒烟） | 用户当次裁定两项：网关取「**启动，simulator 网关**」（本机前台跑开发实例，附 `--scds.gateway.mode=simulator`——不占真串口、不监听 12001；**仿真通过不得写成现场通过**）、种子取「**完整种子，争取全绿 200**」（向开发库写专属编号段 **62400** 的 `t_vest`（含 BCrypt 绑定密钥）/`t_plan`/`t_plan_roster`，用**本地签发**的 ADMIN 令牌调 HTTP 开链路、开演）。**已落地 4 笔**：`1f61d27`（4a 入口装配 + 连接配置页）、`ee33764`（4b 设备登录页 + 接线）、`1bbb284`（4c 自身态势页 + 1s 轮询）、`3600056`（4d Android debug 回环明文许可）。冒烟在 `emulator-5554`（AVD `zaa_pixel6`）+ `adb reverse tcp:11001` 上全绿：设备登录成功，自身态势 `已刷新 5 次 → 20 次（每 1000 ms）` 持续增长，字段与种子编成逐项一致；冒烟后按 62400 段**精确回收**并停实例、关模拟器。`flutter test` **95 例**全绿、`flutter analyze` 无问题；Dart 产物不进 reactor，全量仍 **1151 项**。细节见文末该节与 [testing](testing.md) 第 38 节 |
+| M6 CLIENT-WINDOWS 段 5（Windows 指挥端骨架） | 用户当次裁定「**段 5 Windows 指挥端骨架（推荐）**」，并在无人值守下授权「按推荐方式继续」且**放宽「每原子任务 ≤3 文件」上限**（改超 3 文件不再单独授权；其余顶层纪律不变）。范围＝**入口分派 + 连接配置（含健康诊断）+ 账号登录 + 队伍汇总总览（HTTP Poll）**，**不含 WS / revision 缓存聚合 / refresh·me·logout / 指令 / 复盘**。**已落地 2 笔**：`17a0e10`（共享层：`ApiClient.probe` + `health_api.dart` + 泛型 `shared/polling/poller.dart` + `situation_page.dart` 改用 `PollingFeed`）、`aa5457b`（指挥端装配：`main.dart` 平台分派 + `app/client_factory.dart`/`device_app.dart`/`console_app.dart` + `console_login_page.dart` + `team_summary_page.dart` + `connection_page.dart` 健康诊断区 + `console_widget_test.dart`）。`flutter test` **118 例**全绿、`flutter analyze` 无问题；Dart 产物不进 Maven reactor，全量仍 **1151 项**。**未验项**：本机未装 Visual Studio，Windows 原生构建与真机联调**不可执行**。细节见文末该节与 [testing](testing.md) 第 39 节 |
 | 提交/推送 M2 LEDGER 成果 | 用户本轮明确授权“提交 LEDGER 并尝试推送”。**已落地 5 个本地提交**（`86e9b71` 契约、`a95bcf3` 服务、`9c3ab09` 接线+权限、`74162ca` 测试、`e8258a0` 文档），叠加既有 4 个后 `main` 领先 `origin/main` **9 个提交**；推送**两次均因网络失败**（`Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。不推导后续自动提交授权 |
 | 提交/推送 M2 MAP-BASE A1/A2 与 B1-B3 | 用户当次选择“提交并尝试推送”与“B2 + B3 连做”。**已落地 5 个本地提交**（`c8c1d5d` 契约 A1/A2、`867bd4c` 裁定登记、`8e1adbd` B1 存储端口与实现、`55739f1` B2 签名 URL、`7846030` B3 单测与配置）。`867bd4c` 那次推送已成功入远端；B1-B3 三次推送**均因网络失败**（`Connection was reset` / 无法连接 github.com:443），`main` 领先 `origin/main` **3 个提交**，**远端未更新** |
 | 提交/推送 M2 MAP-BASE 分段 C 与“演习中删图”裁定 | 用户当次选择“提交并重试推送”与“一并拦截，复用 MAP_IN_USE”。**已落地 3 个本地提交**（`3787254` C1 错误码与契约登记、`e8006b6` C2 台账服务与想定/演习引用判据、`8b9de5c` C2 用例），叠加既有 4 个后 `main` 领先 `origin/main` **7 个提交**；本轮推送**两次均因网络失败**（`Recv failure: Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。`C` 段已跑通全量 `mvn -B verify`（716 项，protocol 19 / core 316 / api 100 / app 281） |
@@ -1442,9 +1443,41 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。证据见 [testin
 **局限**：simulator 网关无真实串口帧（`status=OFFLINE`/`position=null`/`positionSource=NONE` 属预期），
 **不证明硬件链路、真机网络与 WS**。证据见 [testing](testing.md) **第 38 节**。
 
-**再下一段（候选）**：段 5 Windows 指挥端骨架（本机缺 Visual Studio，**不能原生构建**，安装工作负载需另授权）
-→ T-PROD 部署；以及单列后续的 WS 连接与轮询调度器、平台安全存储（Android Keystore / Windows DPAPI）
-＋连接配置落盘（需另授权引依赖）。各段仍守「每原子任务 ≤3 文件」。
+**再下一段（段 5）落地**：用户当次裁定「**段 5 Windows 指挥端骨架（推荐）**」，并在无人值守下授权
+「**按推荐方式继续**」且**放宽「每原子任务 ≤3 文件」上限**（改超 3 文件不再单独授权；其余顶层纪律——
+提交/推送仍逐次授权、协议冻结字节/端口、不改历史迁移、不清库删卷、不 force push、不改写历史——**一律不变**）。
+范围＝**入口分派 + 连接配置（含 `/actuator/health` 健康诊断）+ 账号登录 + 队伍汇总总览（HTTP Poll）**，
+**不含 WS、不含 revision 缓存聚合、不含 refresh/me/logout、不含指令与复盘**。按裁定落 **两笔**（共享层先行 → 指挥端装配）：
+- **共享层**（`17a0e10`，4 文件）：`lib/shared/api/api_client.dart`（抽出私有 `_send`，新增 `probe(path)`
+  走 `resolve()`——**不带** `/api/v1` 前缀，供应用级端点探活）＋ `lib/shared/api/health_api.dart`（新：
+  `kHealthPath` / `HealthReport` / `InstanceHealthApi.probe()`，**永不抛异常**，把 2xx / 非 2xx / 网络失败
+  三类收敛成 `UNKNOWN` / `HTTP_<code>` / `UNREACHABLE`）＋ `lib/shared/polling/poller.dart`（新：把段 4c 的
+  `SituationPoller` 抽成**泛型** `PollingFeed<T>`，`Timer.periodic` + `_inFlight` 单飞 + 失败保陈旧数据 +
+  `successCount` + `describeError`）＋ `lib/features/situation/situation_page.dart`（改用 `PollingFeed<UnitState>`，
+  **控件键与文案不变**）；
+- **指挥端装配**（`aa5457b`，9 文件）：`lib/main.dart`（**平台分派** `Platform.isWindows ? ScdsConsoleApp : ScdsClientApp`）
+  ＋ `lib/app/client_factory.dart`（新：`httpApiClient` 双端共用）＋ `lib/app/device_app.dart`（新：原 `ScdsClientApp` 迁入）
+  ＋ `lib/app/console_app.dart`（新：`ScdsConsoleApp`，`_probe` 用**一次性客户端**探完即关、不顶掉业务链路）
+  ＋ `lib/features/connection/connection_page.dart`（改：可选 `probe` + 健康诊断区 4 控件键；`_diagnose()` 用**当前输入字段**；
+  `probe == null` 时该区整块不渲染，**单兵端不受影响**）＋ `lib/features/console/console_login_page.dart`（新）
+  ＋ `lib/features/console/team_summary_page.dart`（新：**直读** `getTeamSummary`，不读恒空的增量帧 `teamSummary`；
+  可选计数缺失显示 `—` 不臆造 0；默认 2000ms）＋ `test/widget_test.dart`（改 1 行 import：`ScdsClientApp` 迁址）
+  ＋ `test/console_widget_test.dart`（新：**23 例** = 外壳 4 + 健康诊断 5 + 登录 7 + 汇总 7）。
+
+**口径要点**：`/actuator/health` **不走 `/api/v1`** 故新增 `probe()` 而非放宽 `api()`；`PollingFeed<T>` 是**双端唯一轮询纪律**
+（段 4c 的 `SituationPoller` 被抽出替换，段 4 既测用例行为不变）；队伍汇总**只信专用端点**，客户端须自缓存全量；
+平台分派靠 `Platform.isWindows`，**不拆多 Flutter 工程**（承 D12）；存储仍为内存实现，App 重启即回默认。
+
+门禁：`flutter test` → `All tests passed!`（**118 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23）、
+`flutter analyze` → `No issues found! (ran in 3.9s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。
+**未验项**：本机**未安装 Visual Studio**，`flutter build windows` / Windows 原生运行 / **真实后端联调**在本段
+**不可执行**；Windows 页面测试**不得**用 Chrome 替代 Windows 桌面构建验收（承 `implementation-plan.md` §7）。
+证据见 [testing](testing.md) **第 39 节**。
+
+**再下一段（候选）**：T-PROD 部署；CLIENT-RESILIENCE（WS 连接与轮询调度器、同源归并、重连、刷新单飞、退出竞态、缓存隔离）；
+CLIENT-WINDOWS 续段（refresh/me/logout、指令、地图/标定、想定、复盘导出）；平台安全存储（Android Keystore /
+Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐
+**Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（本段经授权放宽，后续恢复默认）。
 
 
 
