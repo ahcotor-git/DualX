@@ -2471,4 +2471,54 @@ flutter create --org com.dualx --project-name scds_client --platforms=android,wi
 
 本段为**客户端测试验收（auth 域层）**，不是生产发布批准；测试用 `HttpServer` 打桩，**不代表已与后端联调**。
 
+---
+
+## 37. M6 CLIENT-BASE 段 3：连接配置（3a）+ 态势契约模型（3b）+ 态势只读四端点（3c）
+
+段 3 按裁定拆成 **3a / 3b / 3c** 三段，每段各提 **1 笔代码笔**（守「原子 ≤3 文件」）；
+docs 统一在本节一次回写。范围是**「连接配置 + 自身态势只读」**，
+**不含 WebSocket、不含定时轮询调度器**——双通道调度与本地缓存聚合留待段 4 与 UI 装配一起接线。
+
+### 37.1 交付物（7 文件 = 3 段 × (源文件 + 测试)）
+
+| 段 | 提交 | 文件 | 内容 |
+|---|---|---|---|
+| 3a | `1fc329a` | `lib/shared/config/connection_config.dart`(新) | `ConnectionConfig`：构造即校验（空白地址 / 越界端口抛 `ArgumentError`）、默认值与 `kDefaultHost`/`kHttpPort` 对齐、`baseUri`/`display` |
+| 3a | `1fc329a` | `lib/shared/config/connection_config_store.dart`(新) | `ConnectionConfigStore` 端口 + `InMemoryConnectionConfigStore`（**不落盘**） |
+| 3a | `1fc329a` | `test/shared/config/connection_config_test.dart`(新) | 10 例 |
+| 3b | `c5c1e70` | `lib/shared/api/situation_models.dart`(新) | `SituationEnvelope`/`UnitState`/`HitEvent`/`TeamSummary`/`GeoPoint`/`HitEventPage` + 8 个契约枚举 |
+| 3b | `c5c1e70` | `test/shared/api/situation_models_test.dart`(新) | 15 例 |
+| 3c | `6b58f93` | `lib/shared/api/situation_api.dart`(新) | `SituationApi` 四只读端点 |
+| 3c | `6b58f93` | `test/shared/api/situation_api_test.dart`(新) | 9 例 |
+
+### 37.2 用例与判据
+
+| 段 | 用例 | 判据 |
+|---|---|---|
+| 3a（10） | `defaults` 与契约常量一致且 `baseUri` = `http://127.0.0.1:11001`；现场地址 `host:port` 呈现；地址前后空白被裁剪；空白地址（空串 / 纯空格）抛 `ArgumentError`；端口 0 / 65536 抛 `ArgumentError`；端口 1 / 65535 合法；存储初始 `read` 为 `null`（回落 `defaults`）/ 写入可读回 / 二次写入覆盖 / `clear` 回 `null` | 默认值**逐字**等于契约常量；**构造即校验**（用户输入边界）；端口是硬约束，不提供改端口语义 |
+| 3b（15） | 全量快照（必填 + `units` + `teamSummary` + `hits`）解析；增量（`changes`/`removedVestNums`）且未出现的可空集合落空列表；`running=false` 且 `exerciseId` 为 `null`；缺必填 `serverTime` → `TypeError`；`UnitState` 全字段（室内坐标 / 运动 / 心跳 / `deadAt`）；离线未定位 `position` 显式 `null`；未知 `status` → `FormatException`；缺 `revision` → `TypeError`；`GeoPoint` 空对象全 `null`；室外双坐标并存；危险物命中（`shooterNum=65535`、`shooterWeaponKind=GRENADE`）；缺 `seq` → `TypeError`；未知 `hitPart` → `FormatException`；`TeamSummary` 仅 `team` 必填；`HitEventPage` 的 `items`/`latestSeq` 与 `items` 缺省为空列表 | **不臆造缺省值**：必填缺失 → `TypeError`、形状不符与**未知枚举字面量** → `FormatException`、可空集合缺省 → 空列表；`GeoPoint` 契约未声明必填故全可空 |
+| 3c（9） | `getSituation` 不带 `sinceRevision` → 路径 `/api/v1/situation` 且**查询串为空**、`Bearer` 注入、回全量；带 `sinceRevision`/`hitsLimit`/`includeSnapshotOnFirst=false` → 查询串逐项拼出；409 `SITUATION_REVISION_TOO_OLD` 带码；`getVestState` → `/api/v1/situation/vests/14`；404 带出服务端 `code`；`getTeamSummary` 直回数组（含空数组）；`listHits` 带 `sinceSeq`/`limit`；不带参数时不拼查询串 | 路径**逐字**对齐契约（自动带 `/api/v1`）；查询串**只拼非 null 参数**，缺省交由服务端默认值；非 2xx 统一 `ApiException`（`code` 稳定） |
+
+### 37.3 口径要点
+
+- **连接配置**：默认 `127.0.0.1:11001`（与 `servers` 一致）；现场主机 IP 由用户在设置页覆盖；
+  存储**端口与实现分离**（`ConnectionConfigStore`），平台持久化（文件 / SharedPreferences）
+  待后续授权引依赖后再换实现，本段不引任何第三方依赖（仍只 `dart:io`）。
+- **同构承诺**：`situation_models.dart` 一套类型同时服务 HTTP Poll 与 WS 帧（硬约束），
+  故 WS 落地时**不新增第二套解析**。
+- **换代判据**：`SituationEnvelope.epoch` 与本地保存值不一致即视为服务端重启，
+  本地 `sinceRevision` 作废、改全量重拉；`sinceRevision` 超窗则服务端回 409
+  `SITUATION_REVISION_TOO_OLD`（Poll）/ close 4000（WS，段 4 落地）。
+- **本段不做**：WS 连接、轮询调度、revision 缓存聚合、界面（均在段 4）。
+
+### 37.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**73 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 模板 1）；
+  `flutter analyze` → `No issues found!`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（0/0/0）；
+- **未改动**：后端任何模块、协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期、在线窗口、
+  校验算法、`docs/api/**` 契约、迁移、`scds-solver`；**未新增依赖**（测试仍只用 `dart:io` + `flutter_test`）。
+
+本段为**客户端契约层验收**，不是生产发布批准；测试用 `HttpServer` 打桩，**不代表已与后端联调**。
+
 
