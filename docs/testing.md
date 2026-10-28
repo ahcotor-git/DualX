@@ -11,7 +11,8 @@
 > M3 CAL-1 UWB 室内解算链路（解算器 + 装配接线 + app 端到端）与1055项最新全量结果见第17节。
 > M5 REPLAY R1 复盘读侧（`listReplays` / `getReplay`）与1104项全量结果见第23节；
 > R2 轨迹分片（`getReplayTimeline`）与1112项全量结果见第24节；
-> R3 统计（`getReplayStatistics`）与1120项全量结果见第25节。
+> R3 统计（`getReplayStatistics`）与1120项全量结果见第25节；
+> R4 导出与下载（`exportReplay` / `getExportTask` / `downloadExport`）与1136项全量结果见第26节。
 
 ## 1. 本次自动化结果
 
@@ -1657,6 +1658,129 @@ api（`ApiSkeletonSmokeIT`，139，计数不变）：`ReplayController` 的 `get
 **R4 的前置提醒**（与第 24 节同）：`REPLAY_EXPORT_FAILED` 的 409 状态**刻意仍未登记**
 （走 default → 500，响亮地失败）；R4 落地导出时必须一并登记，并同步修改把它当「未登记状态」
 绊线的两处测试——`MvcProblemIT`（L319-322、L398）与 `ApiExceptionHandlerBusinessTest`（L168、L271-276）。
+
+本段为**代码验收**，不是生产发布批准。
+
+## 26. M5 REPLAY R4 导出与下载（`POST /api/v1/replays/{replayId}/exports` + `GET .../exports/{taskId}` + `GET .../exports/{taskId}/download`）
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 603 | 0/0/0 | 新增 `ExportTaskServiceIT` 16 条（587 → 603） |
+| api | 139 | 0/0/0 | 计数不变：`ApiSkeletonSmokeIT` 换替身/构造/路由值，`ApiExceptionHandlerBusinessTest` 换绊线码 |
+| app | 326 | 0/0/0 | 计数不变：`RoleWritePermissionIT` 补一个替身 Bean，`MvcProblemIT` 换绊线码 |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1136** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径同第 20~25 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值，
+> 按 `target/surefire-reports/TEST-*.xml` 累加会漏掉 `@Nested` 内部类。
+
+### 26.1 落地范围与口径
+
+**补的是哪一处缺口**：R4 之后 `ReplayController` 的七条方法**全部去 501**——本段接线导出/查询/下载三条
+（`exportReplay` / `getExportTask` / `downloadExport`），全仓「仍抛 501 的方法」计数由 3 降为 **0**。
+
+**导出内容 = 统计三表 + 编成台账，不含逐点轨迹**（决策，见 §6）。产物由 `ReplayExportReport.build(...)`
+纯函数生成：`队伍战损`（队伍,总人数,存活,阵亡,掉线,命中）、`命中排行`（马甲编号,姓名,命中,击杀）、
+`命中部位分布`（部位,次数）、`编成台账`（马甲编号,姓名,队伍,终局,阵亡时刻,击杀,命中，按 `vestNum` 升序）。
+**不复用轨迹抽稀**——逐点轨迹体量大且与「统计」是两个用途，导出只给汇总口径，
+避免把 M5-R2 的游标分片逻辑拖进异步任务。
+
+**格式与写法**：`ExportFormat` 只有 `XLSX`/`CSV` 两种；`XLSX` 出四个命名标签页，`CSV` 出**纵向长表**
+（多一列「表类型」，四种表纵向拼接），带 UTF-8 BOM。两种写法都走 R4-A1 抽出的通用写手
+`SheetWriter`（`xlsx(List<Sheet>)` / `csv(List<List<String>>)`），取向与 PLAN 模板导出**同一套**
+（决策：不引 POI / commons-csv，用 JDK 自带 `java.util.zip` + `javax.xml.stream` 手写；
+写用 `inlineStr`、读兼容 `sharedStrings`，见 decision-register L535-578）。
+
+**异步载体 = core `@Scheduled` 扫描执行器**（决策）。`ExportTaskService.tick()` 每 **2s** 一拍，
+`findPending(BATCH_LIMIT)` 取旧不取新（防饿死）逐条 `execute(taskId)`。**core 测试上下文不跑 `@Scheduled`**
+（`@EnableScheduling` 只在 `scds-app` 的 `ScdsNextApplication` 上开启），故 IT 直接调 `tick()` / `execute()` 驱动。
+
+**状态流转靠「当前态守卫」而非锁**：`ExportTaskRepository` 每个 UPDATE 的 WHERE 都带旧态
+（`markRunning` 只从 `PENDING` 推进），影响行数为 0 即「别人已推进」；`execute` **不标 `@Transactional`**
+（一边写库一边写文件，只做短事务式的多次提交），`markRunning` 的零影响行数是唯一并发闸门
+（`execute_isSingleShot` 用例即验此）。
+
+**受理语义（POST）不返 409**：`request(replayId, format)` 先 `replays.get(replayId)`（复用 R1 的 404 判据
+`REPLAY_NOT_FOUND`），再 `findActive` 命中同格式活跃任务则**合并返回**、否则新建 PENDING
+（`UuidV7.generate()`）。**「失败后重导」做成新的 202 受理**，而非要求客户端先重置——契约 `exportReplay`
+虽列了 409 `REPLAY_EXPORT_FAILED`，但本实现只在 `download` 用 409（决策：只在 download 用 409）。
+
+**`download` 的 409 三合一**：任务未 SUCCEEDED / `expireAt` 已过 / 产物在存储里读不到，
+三种成因折叠成同一个 409 `REPLAY_EXPORT_FAILED`（对下载入口它们是同一件事——「现在拿不到」）。
+
+**`downloadUrl` 每次重新签发**：`toAsyncTask` 只在 `state == SUCCEEDED && filePath != null` 时给值，
+且**每次调用都重签**（`FileUrlSigner.sign` 是短时效签名，默认 TTL 15 分钟、可在窗口内重复使用）；
+URL 形状归接口层组装（`/api/v1/files?path=...&exp=...&signature=...`，含 `URLEncoder` 编码），
+与 `MapController.imageUrl` 同形；端口 `FileUrlSigner` 本身不含 URL 组装。
+
+**过期清理**：产物 TTL 由 `scds.export.expire-ttl` 决定（默认 **24h**，决策），`markSucceeded` 时按
+`Instant.now(clock).plus(ttl)` 写 `expire_at`；**不新增清理任务**（决策），过期后由 `download` 判 409。
+
+**新增 `@ConfigurationProperties("scds.export")`**（record `ExportProperties`）：`expireTtl` 默认 `24h`，
+构造时校验必须为正的时长，否则启动即失败。
+
+### 26.2 用例判据
+
+core（`ExportTaskServiceIT`，新增 16 条，全走真库真事务 `@SpringBootTest @Transactional`，
+落盘隔离用 `@DynamicPropertySource` 覆盖 `scds.files.root` 到 `target/test-files/{uuid}`）：
+
+1. `request_createsPendingTask`——首次受理落一条 `PENDING`，返回其 `id`。
+2. `request_secondCallMergesIntoTheActiveTask`——同复盘同格式再受理，**合并**到同一活跃任务（不新建第二行）。
+3. `request_differentFormatIsNotMerged`——同复盘换格式（`XLSX` ↔ `CSV`）是另一件事，另建任务。
+4. `request_runningExercise_isNotFound`——进行中（`ended_at IS NULL`）的场次 → `REPLAY_NOT_FOUND`。
+5. `tick_rendersXlsxAndStoresIt`——`tick()` 驱动后任务转 `SUCCEEDED`、`fileName` 以 `.xlsx` 结尾、
+   产物已落 `files` 存储。
+6. `tick_rendersCsvWithBom`——`CSV` 产物以 UTF-8 BOM（`EF BB BF`）开头。
+7. `execute_isSingleShot`——同一任务重复 `execute`，`markRunning` 第二次返回 0 行即**让位**，
+   不重复渲染、不重复落盘。
+8. `tick_skipsReplaysThatNoLongerExist`——受理后复盘行被删（先删子表 `t_exercise_unit` 再删 `t_exercise`），
+   渲染期 `requireReplay` 抛错 → 任务转 `FAILED`，不把异常吞成成功。
+9. `get_unknownTask_isNotFound`——不存在的 taskId → `REPLAY_NOT_FOUND`。
+10. `get_taskOfAnotherReplay_isNotFound`——taskId 属于**另一条**复盘 → 同一个 `REPLAY_NOT_FOUND`
+    （不串场次）。
+11. `download_beforeCompletion_isConflict`——任务未 `SUCCEEDED` 即下载 → 409 `REPLAY_EXPORT_FAILED`。
+12. `download_expiredFile_isConflict`——直改列把 `expire_at` 拨到过去（此时任务已 `SUCCEEDED`，
+    `markSucceeded` 的守卫会拒绝，故走 `jdbc` 直更新）→ 下载 409。
+13. `download_missingFile_isConflict`——产物路径在存储里读不到 → 下载 409（与 11/12 同码）。
+14. `report_csvIsOneLongTableWithTableTypeColumn`——`CSV` 是纵向长表，含「表类型」列把四张表区分开。
+15. `report_xlsxHasFourNamedSheets`——`XLSX` 有四个标签页，页名与四表对应。
+16. `report_rosterIsSortedAndBlanksAreEmpty`——编成台账按 `vestNum` 升序，空值渲染成空串（非 `null` 字面量）。
+
+api（`ApiSkeletonSmokeIT`，71 条，计数不变）：`ReplayController` 构造扩为三参
+（`ReplayService` / `ExportTaskService` / `FileUrlSigner`），`ExportTaskService` 替身一律抛占位异常，
+故三条导出端点在本测试里仍表现为 501（只证明**路由注册**）；501 示例端点由导出查询端点的
+`{taskId}` 占位（值从 `t1` 改为合法 UUID 常量 `TASK_ID`）承载——非法 UUID 会被 `taskId(String)`
+折叠成 `REPLAY_NOT_FOUND`，不再是「真占位」。
+
+api（`ApiExceptionHandlerBusinessTest`，23 条，计数不变）：`statusOf` 已登记 `REPLAY_EXPORT_FAILED → 409`，
+原把它当「未登记码」绊线（断言 500）的用例改抛**唯一仍未登记**的
+`DEVICE_ANCHOR_NOT_CALIBRATED`，仍验「未登记业务码走 default 响亮 500 而非猜状态」。
+
+app（`MvcProblemIT`，27 条，计数不变）：同源改动——`businessUnregisteredMappingStillFailsLoudly`
+与 `Endpoints.business()` 由 `REPLAY_EXPORT_FAILED` 换 `DEVICE_ANCHOR_NOT_CALIBRATED`。
+
+app（`RoleWritePermissionIT`，65 条，计数不变）：`ReplayController` 构造需 `ExportTaskService`，
+测试上下文补一个 `stub(ExportTaskService.class)` Bean。
+
+### 26.3 边界与不变式
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不补 V8、不开启 out-of-order。本段**未新增迁移**（复用 V5 的 `t_export_task`）、
+**未新增依赖**（XLSX/CSV 手写走 JDK 自带）、**只读态**由 `@Scheduled` 执行器推进。
+
+**唯一新增错误码登记**：本段只做了「回 `ApiExceptionHandler.statusOf` 登记 `REPLAY_EXPORT_FAILED → 409`」；
+该码与 `REPLAY_NOT_FOUND` 早在 R1/R2 时已登记在 `ApiErrorCode` 与 `common.yaml` 的 `Problem.code` 描述里，
+**未改 openapi、未新增码**。
+
+**未交付边界**：R4 的三端点仅有 `ApiSkeletonSmokeIT`（路由注册）与 `ExportTaskServiceIT`（服务层）覆盖；
+**HTTP 端到端**（真 Boot + 真安全链 + 真落盘 + 签名 URL 取回）尚未有 `scds-app` 层用例——留作独立工作包，
+不得把本段的「服务层绿」当作「HTTP 闭环已验」。
 
 本段为**代码验收**，不是生产发布批准。
 
