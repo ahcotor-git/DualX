@@ -7,8 +7,10 @@ import com.dualx.api.dto.replay.Replay;
 import com.dualx.api.dto.replay.ReplayPage;
 import com.dualx.api.dto.replay.ReplayStatistics;
 import com.dualx.api.dto.replay.TimelineChunk;
+import com.dualx.api.dto.replay.TrackSample;
 import com.dualx.api.error.NotImplementedException;
 import com.dualx.core.domain.Exercise;
+import com.dualx.core.domain.GeoPoint;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.core.replay.ReplayService;
@@ -40,8 +42,9 @@ import java.util.UUID;
  * 就是演习 ID。</p>
  *
  * <p><b>已接线</b>：{@code listReplays} 与 {@code getReplay} 走 {@link ReplayService}
- * （R1 复盘读侧），本层只做契约形状的搬运（领域 {@link Exercise} → DTO），分页元信息
- * 与 {@link PageRequest} 的换算在此完成。轨迹分片（R2）、统计（R3）与导出（R4）仍抛
+ * （R1 复盘读侧），{@code getReplayTimeline} 亦走 {@link ReplayService#timeline}
+ * （R2 轨迹分片），本层只做契约形状的搬运（领域 {@link Exercise} / 领域 {@code TrackSample} → DTO），
+ * 分页元信息与 {@link PageRequest} 的换算在此完成。统计（R3）与导出（R4）仍抛
  * {@link NotImplementedException}，按 M5 的分段逐步落地。</p>
  */
 @RestController
@@ -83,7 +86,10 @@ public class ReplayController {
                                            @RequestParam(required = false) @Size(max = 200) List<Integer> vestNums,
                                            @RequestParam(required = false, defaultValue = "1")
                                            @Min(1) @Max(60) int stride) {
-        throw new NotImplementedException("getReplayTimeline");
+        ReplayService.Chunk chunk = replays.timeline(replayId(replayId), cursor, limit, vestNums, stride);
+        return new TimelineChunk(
+                chunk.samples().stream().map(ReplayController::toTrackSample).toList(),
+                chunk.nextCursor());
     }
 
     /** 复盘统计：队伍战损、命中排行、命中部位分布、存活人数曲线。 */
@@ -141,5 +147,25 @@ public class ReplayController {
                 exercise.endedAt() == null ? null
                         : Duration.between(exercise.startedAt(), exercise.endedAt()).toSeconds(),
                 exercise.rosterCount(), exercise.hitCount(), exercise.deadCount());
+    }
+
+    /**
+     * 领域采样点 → 契约 DTO。
+     *
+     * <p>四个坐标字段按原样透出、不用 {@code coordinateSystem} 做取舍：库里哪一套有效就只写哪一套，
+     * 另一套本就是 null；在读取侧再判一次等于把「同时存两套坐标」的约定重新解释一遍，
+     * 而设计已把 Y 轴映射放在写入前完成，客户端不得自行换算。</p>
+     *
+     * <p>{@code t} 用 {@code tMs} 原值——它本来就是「相对开演的毫秒偏移」，这正是契约要的语义，
+     * 不能在这里加上 {@code startedAt} 变成绝对时间。</p>
+     */
+    private static TrackSample toTrackSample(com.dualx.core.domain.TrackSample sample) {
+        GeoPoint position = sample.position();
+        return new TrackSample(sample.tMs(), sample.vestNum(),
+                position == null ? null : position.xPct(),
+                position == null ? null : position.yPct(),
+                position == null ? null : position.lng(),
+                position == null ? null : position.lat(),
+                sample.hp(), sample.status());
     }
 }

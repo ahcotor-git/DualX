@@ -363,16 +363,16 @@ class ApiSkeletonSmokeIT {
     @DisplayName("未实现接口统一 501 + application/problem+json + code=NOT_IMPLEMENTED + traceId")
     void notImplementedIsReportedAsProblem() throws Exception {
         String traceId = "smoke-trace-0001";
-        // 用仍是真占位的复盘端点：R1 已接线 listReplays / getReplay，轨迹分片（R2）尚未落地，
-        // 故这里改取 timeline 端点——它由控制器直接抛占位异常，与接线情况无关。
-        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/replays/" + REPLAY_ID + "/timeline")
+        // 用仍是真占位的复盘端点：R1 已接线 listReplays / getReplay，R2 又接线了 timeline，
+        // 故这里改取统计端点——它由控制器直接抛占位异常，与接线情况无关。
+        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/replays/" + REPLAY_ID + "/statistics")
                         .header(TraceIdFilter.HEADER, traceId))
                 .andExpect(status().isNotImplemented())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(header().string(TraceIdFilter.HEADER, traceId))
                 .andExpect(jsonPath("$.status").value(501))
                 .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"))
-                .andExpect(jsonPath("$.instance").value("/api/v1/replays/" + REPLAY_ID + "/timeline"))
+                .andExpect(jsonPath("$.instance").value("/api/v1/replays/" + REPLAY_ID + "/statistics"))
                 .andExpect(jsonPath("$.traceId").value(traceId));
     }
 }
