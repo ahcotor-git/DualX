@@ -1,121 +1,67 @@
 import 'package:flutter/material.dart';
 
+import 'features/connection/connection_page.dart';
+import 'shared/config/connection_config.dart';
+import 'shared/config/connection_config_store.dart';
+
 void main() {
-  runApp(const MyApp());
+  runApp(ScdsClientApp(configStore: InMemoryConnectionConfigStore()));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+/// 单兵端应用外壳（M6 CLIENT-BASE 段 4a）。
+///
+/// 只做「装配」：注入连接配置存储端口，并把首页指向连接配置页。
+/// 段 4b 在此接上设备登录页与自身态势轮询。
+class ScdsClientApp extends StatelessWidget {
+  const ScdsClientApp({super.key, required this.configStore});
 
-  // This widget is the root of your application.
+  /// 连接配置存储端口。当前为内存实现（不落盘）；
+  /// 换平台安全存储需另行授权引依赖。
+  final ConnectionConfigStore configStore;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+      title: 'SCDS 单兵端',
+      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal)),
+      home: Builder(
+        builder: (BuildContext context) => ConnectionPage(
+          store: configStore,
+          onConnected: (ConnectionConfig config) {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (BuildContext pageContext) =>
+                    _PendingHomePage(config: config),
+              ),
+            );
+          },
+        ),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+/// 段 4a 的临时落点：确认连接配置已保存。
+///
+/// 段 4b 用设备登录页替换本页，届时本类删除。
+class _PendingHomePage extends StatelessWidget {
+  const _PendingHomePage({required this.config});
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
+  final ConnectionConfig config;
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
+      appBar: AppBar(title: const Text('连接已保存')),
       body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Text(config.display, key: const Key('pendingHome.display')),
+            const SizedBox(height: 8),
+            const Text('设备登录与自身态势在段 4b 接入'),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
       ),
     );
   }
