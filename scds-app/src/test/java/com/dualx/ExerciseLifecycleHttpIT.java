@@ -187,7 +187,80 @@ class ExerciseLifecycleHttpIT {
                 .param("planId", emptyPlanId).query(Long.class).single()).isZero();
     }
 
+    @Test
+    @DisplayName("当前演习日志流水：无场次是空页、sinceSeq 游标增量推进、latestSeq 取本批末条")
+    void currentLogsFollowTheSeqCursor() throws Exception {
+        // 无演习进行中：契约没有 404，是 200 + 空页
+        JsonNode idle = json(get("/api/v1/exercise/current/logs"));
+        assertThat(idle.path("items")).isEmpty();
+        assertThat(idle.path("latestSeq").isNull()).isTrue();
+
+        int vestNum = register("日志甲", "RED");
+        String planId = createPlan("http-logs-" + UUID.randomUUID(), vestNum);
+        HttpResponse<byte[]> started = postExercise(mapper.createObjectNode().put("planId", planId));
+        assertThat(started.statusCode()).isEqualTo(201);
+        String exerciseId = json(started).path("exerciseId").asText();
+        createdExercises.add(exerciseId);
+
+        // 刚开演尚未写任何日志：仍是空页——证明按「当前场次」过滤，而不是把历史行带出来
+        JsonNode empty = json(get("/api/v1/exercise/current/logs"));
+        assertThat(empty.path("items")).isEmpty();
+        assertThat(empty.path("latestSeq").isNull()).isTrue();
+
+        // 种两行：本类只验 HTTP 接线与游标口径，「谁在何时写日志」由服务层与其调用方覆盖
+        long first = seedLog(exerciseId, "SHOT", vestNum, "seed-1");
+        long second = seedLog(exerciseId, "DIE", vestNum, "seed-2");
+
+        // 不传 sinceSeq = 最新一页：按 seq 升序，latestSeq 取本批末条
+        JsonNode latest = json(get("/api/v1/exercise/current/logs"));
+        assertThat(latest.path("items")).hasSize(2);
+        assertThat(latest.path("items").get(0).path("seq").asLong()).isEqualTo(first);
+        assertThat(latest.path("items").get(1).path("seq").asLong()).isEqualTo(second);
+        assertThat(latest.path("items").get(0).path("type").asText()).isEqualTo("SHOT");
+        assertThat(latest.path("items").get(0).path("vestNum").asInt()).isEqualTo(vestNum);
+        assertThat(latest.path("items").get(0).path("detail").asText()).isEqualTo("seed-1");
+        assertThat(latest.path("latestSeq").asLong()).isEqualTo(second);
+
+        // 带 sinceSeq：只回 seq 更大的那条，latestSeq 随之推进
+        JsonNode delta = json(get("/api/v1/exercise/current/logs?sinceSeq=" + first));
+        assertThat(delta.path("items")).hasSize(1);
+        assertThat(delta.path("items").get(0).path("seq").asLong()).isEqualTo(second);
+        assertThat(delta.path("latestSeq").asLong()).isEqualTo(second);
+
+        // 游标推到末尾：空列表 + latestSeq 为 null，客户端据此判断「已是最新」
+        JsonNode drained = json(get("/api/v1/exercise/current/logs?sinceSeq=" + second));
+        assertThat(drained.path("items")).isEmpty();
+        assertThat(drained.path("latestSeq").isNull()).isTrue();
+
+        // limit 生效：最新一页取 seq 最大的 limit 条，但仍按 seq 升序
+        JsonNode limited = json(get("/api/v1/exercise/current/logs?limit=1"));
+        assertThat(limited.path("items")).hasSize(1);
+        assertThat(limited.path("items").get(0).path("seq").asLong()).isEqualTo(second);
+
+        // 契约边界：limit 越界拦在参数校验层（400），与「路由没注册」的 404 区分开
+        assertThat(get("/api/v1/exercise/current/logs?limit=0").statusCode()).isEqualTo(400);
+
+        // 收尾：本类硬约束「同一时刻至多一场演习」，留下进行中的场次会让同类其他用例的
+        // 「开演前无演习」前置断言失败；日志行随 createdExercises 在 cleanUp 里按场次回收。
+        assertThat(delete("/api/v1/exercise/current").statusCode()).isEqualTo(200);
+    }
+
     // ── 夹具 ─────────────────────────────────────────────────────────────────
+
+    /**
+     * 直插一条日志行并返回库生成的 {@code seq}。
+     *
+     * <p>{@code t_exercise_log.seq} 由库自增（仓储刻意不提供「插入后取自增值」这条路），
+     * 故用 {@code MAX(seq)} 读回；本用例串行执行，不存在与别场的并发插入。</p>
+     */
+    private static long seedLog(String exerciseId, String logType, Integer vestNum, String detail) {
+        jdbc.sql("INSERT INTO t_exercise_log (exercise_id, at, log_type, vest_num, detail)"
+                        + " VALUES (:exerciseId, NOW(3), :logType, :vestNum, :detail)")
+                .param("exerciseId", exerciseId).param("logType", logType)
+                .param("vestNum", vestNum).param("detail", detail).update();
+        return jdbc.sql("SELECT MAX(seq) FROM t_exercise_log WHERE exercise_id = :exerciseId")
+                .param("exerciseId", exerciseId).query(Long.class).single();
+    }
 
     private static int register(String name, String team) throws Exception {
         int vestNum = FIRST_VEST_NUM + createdVests.size();

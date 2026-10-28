@@ -100,6 +100,26 @@ public class ExerciseLifecycleService {
     }
 
     /**
+     * 当前演习的日志流水（契约 {@code listCurrentExerciseLogs}）：{@code seq > sinceSeq} 的条目，
+     * 按 seq 升序（即时间顺序），至多 {@code limit} 条。
+     *
+     * <p><b>游标口径</b>：{@code sinceSeq} 为 {@code null} 表示「不传」，契约要求返回<b>最新一页</b>
+     * ——取 seq 最大的 limit 条再升序，故走 {@link ExerciseLogRepository#findLatest}；非 null 走
+     * {@link ExerciseLogRepository#findByExerciseIdSince}。库里 {@code seq} 是**全局自增**（不按场次
+     * 分段），故换了场次游标也不回退；客户端把本批末条 {@code seq} 作为下次的 {@code sinceSeq}。</p>
+     *
+     * <p><b>无演习进行中返回空列表，不查库</b>：与态势读侧 {@code SituationQuery.hitsSince} 同一取向
+     * （本端点的契约响应只有 200，没有 404，故不编造场次也不报错）。</p>
+     */
+    public List<ExerciseLogEntry> currentLogs(Long sinceSeq, int limit) {
+        return currentExercise()
+                .map(running -> sinceSeq == null
+                        ? logs.findLatest(running.id(), limit)
+                        : logs.findByExerciseIdSince(running.id(), sinceSeq, limit))
+                .orElse(List.of());
+    }
+
+    /**
      * 发布「启动自愈已完成」：调用方是 {@code ExerciseLivenessRecover}，在自愈正常返回之后调一次。
      *
      * <p><b>只进不退</b>：没有对应的「复位」方法。自愈在一个进程生命周期里只可能跑一次，

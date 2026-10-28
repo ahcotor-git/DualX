@@ -10,7 +10,7 @@ import com.dualx.api.dto.exercise.Roster;
 import com.dualx.api.dto.exercise.RosterEntry;
 import com.dualx.api.dto.exercise.StartExerciseRequest;
 import com.dualx.api.dto.exercise.StopExerciseResult;
-import com.dualx.api.error.NotImplementedException;
+import com.dualx.api.dto.situation.ExerciseLogEntry;
 import com.dualx.core.domain.BattleMode;
 import com.dualx.core.domain.ExportFormat;
 import com.dualx.core.domain.PollMode;
@@ -61,9 +61,10 @@ import java.util.UUID;
  * 100/30/30/AUTO、{@code battleMode} = TRAIN）——「想定正在演习中不能改」这类判断全在服务层，
  * 写进控制器会让同一规则在 REST 与将来的 WS 入口上各写一遍。</p>
  *
- * <p><b>仍是占位（501）</b>：{@code listCurrentExerciseLogs} 未接线——它的游标口径
- * （{@code sinceSeq} 到 {@code latestSeq} 的推进）归 M4 PUSH。{@code getCurrentExercise} 已接线：
- * 行数据读库、在线数读态势读侧，无演习时按契约返回 200 + {@code running=false}。</p>
+ * <p><b>当前演习三端点均已接线</b>：{@code getCurrentExercise} 行数据读库、在线数读态势读侧，
+ * 无演习时按契约返回 200 + {@code running=false}；{@code listCurrentExerciseLogs} 的游标口径
+ * （{@code sinceSeq} → {@code latestSeq} 的推进）接在
+ * {@link ExerciseLifecycleService#currentLogs}，无演习时返回空页。</p>
  *
  * <p>不设类级路径前缀，逐方法写完整绝对路径。</p>
  */
@@ -220,12 +221,23 @@ public class ExerciseController {
                 outcome.endReason());
     }
 
-    /** 当前演习日志流水：按 seq 增量拉取。 */
+    /**
+     * 当前演习日志流水：按 seq 增量拉取。
+     *
+     * <p>契约没有 404：无演习进行中时是 200 + 空页（{@code items=[]}、{@code latestSeq=null}）。
+     * {@code latestSeq} 取本批**末条**（列表已按 seq 升序）——客户端把它作为下次的 {@code sinceSeq}；
+     * 本层不判「游标推没推到末尾」，那由客户端拿 {@code latestSeq} 自己比。</p>
+     */
     @GetMapping("/api/v1/exercise/current/logs")
     public ExerciseLogList listCurrentExerciseLogs(
             @RequestParam(name = "sinceSeq", required = false) Long sinceSeq,
-            @RequestParam(name = "limit", required = false, defaultValue = "100") int limit) {
-        throw new NotImplementedException("listCurrentExerciseLogs");
+            @RequestParam(name = "limit", required = false, defaultValue = "100")
+            @Min(1) @Max(500) int limit) {
+        List<ExerciseLogEntry> items = lifecycle.currentLogs(sinceSeq, limit).stream()
+                .map(ExerciseController::toLogEntry)
+                .toList();
+        Long latestSeq = items.isEmpty() ? null : items.get(items.size() - 1).seq();
+        return new ExerciseLogList(items, latestSeq);
     }
 
     // ── 契约形状的搬运 ──────────────────────────────────────────────────────
@@ -305,6 +317,18 @@ public class ExerciseController {
     private static RosterEntry toEntry(com.dualx.core.domain.RosterEntry entry) {
         return new RosterEntry(entry.vestNum(), entry.name(), entry.team(), entry.hp(),
                 entry.ammo1(), entry.ammo2(), entry.mode());
+    }
+
+    /**
+     * 领域日志行 → 契约 DTO。
+     *
+     * <p>两侧的 {@code ExerciseLogEntry} 同名不同形状：领域侧多一个 {@code exerciseId}
+     * （请求问的就是「当前场次」，不进契约），字段名是 {@code logType}/{@code operatorName}。
+     * 故这里写全名，避免与导入的契约 DTO 撞名（与 {@link #toEntry} 同一处理）。</p>
+     */
+    private static ExerciseLogEntry toLogEntry(com.dualx.core.domain.ExerciseLogEntry entry) {
+        return new ExerciseLogEntry(entry.seq(), entry.at(), entry.logType(), entry.vestNum(),
+                entry.operatorName(), entry.detail(), entry.downlinkHex());
     }
 
     /**
