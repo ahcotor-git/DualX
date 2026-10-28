@@ -201,6 +201,25 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         queue.offer(new StateEvent.LinkChanged(kind, state, message));
     }
 
+    // ------------------------------------------------------------------ 操作员写入（COMMAND）
+
+    /**
+     * 手动置位（COMMAND {@code moveVest}，联调专用）：把某马甲的坐标置为指定楼层的点位坐标。
+     *
+     * <p><b>只投事件，不在这里改状态</b>：坐标、revision、轨迹采样与下行推送都是写手线程的职责，
+     * HTTP 线程直写就会破坏「单一状态所有者」（设计 06 §4.1）——与 {@link #onSerialFrame} 同一纪律。
+     * 「这个点位在哪」由调用方（{@code CommandService} 按本场底图的点位表查好）传进来：本类只管态势，
+     * 不读底图。</p>
+     *
+     * @return 事件是否已入队；{@code false} 表示已停机或队列满被拒（调用方据此回 {@code accepted=false}）
+     */
+    public boolean moveVest(int vestNum, int floorNum, int posNum, double xPct, double yPct) {
+        if (!accepting) {
+            return false;
+        }
+        return queue.offer(new StateEvent.ManualPosition(vestNum, floorNum, posNum, xPct, yPct));
+    }
+
     // ------------------------------------------------------------------ 写手线程
 
     /** 起唯一写手线程（平台线程，非虚拟线程：D10 要求先实测选型）。 */
@@ -246,6 +265,7 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
             case StateEvent.Uwb u -> applyUwb(u.frame());
             case StateEvent.LinkChanged c -> linkStates.put(c.kind(), c.state());
             case StateEvent.OfflineScan scan -> scanOffline(scan.at());
+            case StateEvent.ManualPosition move -> applyManualPosition(move);
         }
     }
 
@@ -368,6 +388,38 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
         u.positionSource = PositionSource.UWB;
         u.signalQuality = fix.usedCount();
         publish(u);
+    }
+
+    /**
+     * 手动置位（联调专用）：把坐标直接写成底图点位，来源记 {@link PositionSource#MANUAL}。
+     *
+     * <p><b>阵亡单元照样冻结</b>：{@code INV-FREEZE}（阵亡停最后有效坐标）是硬约束，人工置位不该
+     * 成为绕过它的后门——这条指令的用途是「把马甲摆到某点位上做联调」，真要挪动阵亡马甲先下判活。</p>
+     *
+     * <p>{@code signalQuality} 不动：它记的是「本帧解算用上的基站数」，人工置位不产生测距。
+     * GPS 分支同样保留上一次的值，两处口径一致——半个字段的口径分叉比留一个陈旧值更难查。</p>
+     *
+     * <p>记 {@code EVENT}（必记）而非 {@code STATE_CHANGE}：人工置位是一次离散的操作员动作，
+     * 与命中 / 阵亡 / 判活同类，复盘时要能在轨迹里一眼看到「这一刻被人为挪过」。</p>
+     */
+    private void applyManualPosition(StateEvent.ManualPosition move) {
+        Unit u = units.get(move.vestNum());
+        if (u == null) {
+            // 编成外马甲：与上行帧同一计数口径（COMMAND 侧已按编成挡过一次，这里只会是换场竞态）。
+            framesFromUnknownVest.incrementAndGet();
+            return;
+        }
+        if (u.status == VestStatus.DIE) {
+            return;
+        }
+        u.position = new GeoPoint(
+                CoordinateSystem.INDOOR,
+                move.xPct(), move.yPct(),
+                move.floorNum(), move.posNum(),
+                null, null,
+                null, null);
+        u.positionSource = PositionSource.MANUAL;
+        publishEvent(u);
     }
 
     private void recordHit(SerialFrame.Hit hit, Instant now) {

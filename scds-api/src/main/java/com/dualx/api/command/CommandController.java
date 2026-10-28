@@ -5,7 +5,6 @@ import com.dualx.api.dto.command.MoveVestRequest;
 import com.dualx.api.dto.command.ReloadRequest;
 import com.dualx.api.dto.command.VestConfigRequest;
 import com.dualx.api.dto.command.WeaponSlot;
-import com.dualx.api.error.NotImplementedException;
 import com.dualx.core.command.CommandService;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
@@ -30,8 +29,8 @@ import java.util.UUID;
  * <p>全部指令行 POST/PUT，响应统一为 {@link CommandAck}；路径不与类级前缀拼装，
  * 每个方法写完整绝对路径，便于与 openapi.yaml 逐条对照。</p>
  *
- * <p><b>已落地 7 条</b>（判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 全体充弹 / 覆盖配置），编排在
- * {@link CommandService}。{@code move}（依赖地图置位写入口）仍是骨架，另行单列任务。</p>
+ * <p><b>已落地 8 条</b>（判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 全体充弹 / 覆盖配置 / 手动置位），
+ * 编排在 {@link CommandService}。</p>
  *
  * <p>失败不经控制器判定：语境（无演习 → 409）、编成（马甲不在编成 → 404）与下行失败都在
  * {@link CommandService} 里抛 {@link BusinessException}，由全局异常出口统一映射——控制器里再判
@@ -101,10 +100,15 @@ public class CommandController {
                 operatorId(jwt)));
     }
 
-    /** 手动置位（联调专用）：直接把马甲坐标置为指定楼层/点位。 */
+    /**
+     * 手动置位（联调专用）：把马甲坐标置为本场底图指定楼层/点位表里的那个点。
+     *
+     * <p>正式演习中由 {@link CommandService} 按本场模式拒绝（403 {@code COMMAND_MOVE_FORBIDDEN}），
+     * 控制器只做 DTO 搬运。</p>
+     */
     @PostMapping("/api/v1/command/vests/{vestNum}/move")
     public CommandAck moveVest(@PathVariable int vestNum, @RequestBody @Valid MoveVestRequest request) {
-        throw new NotImplementedException("moveVest");
+        return toAck(commands.moveVest(vestNum, request.floorNum(), request.posNum()));
     }
 
     private static CommandAck toAck(CommandService.Ack ack) {

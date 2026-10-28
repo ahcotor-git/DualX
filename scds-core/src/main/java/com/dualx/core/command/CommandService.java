@@ -1,5 +1,6 @@
 package com.dualx.core.command;
 
+import com.dualx.core.domain.BattleMode;
 import com.dualx.core.domain.Exercise;
 import com.dualx.core.domain.ExerciseCommand;
 import com.dualx.core.domain.ExerciseCommandState;
@@ -13,12 +14,14 @@ import com.dualx.core.domain.RosterEntry;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.core.exercise.ExerciseLifecycleService;
+import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.repository.AccountRepository;
 import com.dualx.core.repository.ExerciseCommandRepository;
 import com.dualx.core.repository.ExerciseLogRepository;
 import com.dualx.core.repository.PlanRosterRepository;
 import com.dualx.core.state.SituationQuery;
+import com.dualx.core.state.SituationStateService;
 import com.dualx.protocol.Hex;
 import com.dualx.protocol.Team;
 import com.dualx.protocol.serial.DownlinkCommands;
@@ -34,8 +37,7 @@ import java.util.UUID;
 /**
  * 单兵即时指令的编排（M3 COMMAND，契约 {@code docs/api/paths/command.yaml}）。
  *
- * <p><b>本段做 7 条</b>：判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 全体充弹 / 覆盖配置。手动置位
- * （{@code move}）依赖地图置位写入口，另行单列任务。</p>
+ * <p><b>本段做 8 条</b>：判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 全体充弹 / 覆盖配置 / 手动置位。</p>
  *
  * <p><b>顺序即纪律：先发字节，成功后落库</b>。契约把「受理」定义为「指令进入发送队列」，
  * 而物理下发一旦发生就无法回滚（决策 D11：不得把 Accepted 当设备执行成功）。因此本段不写
@@ -78,6 +80,8 @@ public final class CommandService {
     private final ExerciseCommandRepository commands;
     private final ExerciseLogRepository logs;
     private final AccountRepository accounts;
+    private final MapLedgerService maps;
+    private final SituationStateService state;
     private final Clock clock;
 
     public CommandService(ExerciseLifecycleService lifecycle,
@@ -87,6 +91,8 @@ public final class CommandService {
                           ExerciseCommandRepository commands,
                           ExerciseLogRepository logs,
                           AccountRepository accounts,
+                          MapLedgerService maps,
+                          SituationStateService state,
                           Clock clock) {
         this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
         this.situations = Objects.requireNonNull(situations, "situations");
@@ -95,6 +101,8 @@ public final class CommandService {
         this.commands = Objects.requireNonNull(commands, "commands");
         this.logs = Objects.requireNonNull(logs, "logs");
         this.accounts = Objects.requireNonNull(accounts, "accounts");
+        this.maps = Objects.requireNonNull(maps, "maps");
+        this.state = Objects.requireNonNull(state, "state");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -193,6 +201,55 @@ public final class CommandService {
         return deliver(exercise, vestNum, "CONFIG",
                 DownlinkCommands.pollConfig(vestNum, modeCode(mode), hp, ammo1, ammo2, team),
                 configPayloadJson(mode, hp, ammo1, ammo2, team), operatorId, null, null);
+    }
+
+    // ------------------------------------------------------------------ 手动置位（联调专用）
+
+    /**
+     * 手动置位：把某马甲的坐标直接置为**本场底图**楼层点位表里的那个点（契约 {@code moveVest}）。
+     *
+     * <p><b>为什么不发字节</b>：本条指令不下发任何下行帧——马甲自己的 UWB 上行会随后把坐标覆盖回去，
+     * 因此它不落 {@code t_exercise_command} 队列行（那张表记的是「发给网关的指令」），也不写
+     * {@code t_exercise_log}（{@link ExerciseLogType} 没有对应条目、协议 {@code LogType} 是冻结区），
+     * 回执里的 {@code downlinkHex} 恒为 {@code null}。代价是本动作**没有按操作员记名的审计留痕**，
+     * 因此它被严格限制在训练/联调范围内使用。</p>
+     *
+     * <p><b>403 判据是本场演习的 {@link BattleMode}</b>：正式演习（{@code BATTLE}）期间人为改坐标会污染
+     * 真实态势，换谁登录都拒绝；训练/联调（{@code TRAIN}）放行。刻意不复用 {@code AUTH_FORBIDDEN}——
+     * 那是「角色/权限不足」，用户被拒后的动作是去要权限，而这里是「本场不允许」。</p>
+     *
+     * <p><b>坐标只能取自楼层点位表</b>：请求只给「楼层 + 点位号」，实际坐标由
+     * {@link MapLedgerService#floorPoint} 从本场底图的点位表里查。查不到即 404
+     * {@code MAP_FLOOR_POINT_NOT_FOUND}。刻意不接受请求直接传坐标：点位表就是「本场允许出现的位置」
+     * 这层约束，否则联调期谁都能把马甲放到任意位置。</p>
+     *
+     * <p><b>状态不在本线程改</b>：这里只调 {@link SituationStateService#moveVest} 投一个事件，
+     * 由唯一写手线程写坐标、计 revision、采样与推送（设计 06 §4.1）。事件未入队（已停机 / 队列满）时
+     * 回 {@code accepted=false}，与其它指令「未入队」的口径一致。</p>
+     *
+     * @param floorNum 目标楼层；{@code null} 即请求没给全，回 400
+     * @param posNum   目标点位编号；{@code null} 同上
+     */
+    public Ack moveVest(int vestNum, Integer floorNum, Integer posNum) {
+        Exercise exercise = requireRunningExercise();
+        if (exercise.battleMode() == BattleMode.BATTLE) {
+            throw new BusinessException(ApiErrorCode.COMMAND_MOVE_FORBIDDEN, "正式演习中禁止手动置位");
+        }
+        if (floorNum == null || posNum == null) {
+            throw new BusinessException(ApiErrorCode.VALIDATION_FAILED, "手动置位需要 floorNum 与 posNum");
+        }
+        requireInRoster(vestNum);
+        UUID mapId = exercise.mapId();
+        if (mapId == null) {
+            throw new BusinessException(ApiErrorCode.MAP_NOT_FOUND, "本场演习未绑定底图，无处可置位");
+        }
+        MapLedgerService.FloorPointPosition point = maps.floorPoint(mapId, floorNum, posNum)
+                .orElseThrow(() -> new BusinessException(ApiErrorCode.MAP_FLOOR_POINT_NOT_FOUND,
+                        "本场底图的第 " + floorNum + " 层没有点位 " + posNum));
+        if (!state.moveVest(vestNum, floorNum, posNum, point.xPct(), point.yPct())) {
+            return new Ack(vestNum, "MOVE", false, null, null);
+        }
+        return new Ack(vestNum, "MOVE", true, clock.instant(), null);
     }
 
     // ------------------------------------------------------------------ 编排本体
@@ -352,7 +409,8 @@ public final class CommandService {
      *                    未入队（链路未开 / 队列满），此时 {@code queuedAt} 为 {@code null}
      * @param queuedAt   入队时刻；未入队时为 {@code null}
      * @param downlinkHex 组装出的下行原文。无论是否入队都返回——排障时最要紧的正是
-     *                    「本来要发什么字节」这个事实
+     *                    「本来要发什么字节」这个事实。手动置位（{@code moveVest}）不发字节，恒为
+     *                    {@code null}
      */
     public record Ack(int vestNum, String command, boolean accepted, Instant queuedAt, String downlinkHex) {
     }

@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -279,6 +280,48 @@ public class MapLedgerService {
     public void replaceFloorPoints(UUID mapId, int floorNum, String pointsJson) {
         require(mapId);
         floors.upsertByMapIdAndFloorNum(mapId, floorNum, pointsJson);
+    }
+
+    /**
+     * 取某楼层点位表里某个点位的归一化坐标（COMMAND 手动置位的唯一坐标来源）。
+     *
+     * <p>点位表的冻结结构是裸数组 {@code [{posNum,xPct,yPct,label}]}（与 API 同形，见
+     * {@code MapFloor}），因此这里按数组逐项找出 {@code posNum} 相同的那一项。</p>
+     *
+     * <p><b>「找不到」折叠成一个空 Optional</b>：楼层没录过点位表、文本损坏、数组里没有这个点位号、
+     * 该项缺坐标——对调用方都是同一件事「这个楼层没有这个点位，置位无处可去」，处置动作也相同
+     * （先去把点位表补上）。拆开只会让前端多几条无从分辨的分支。</p>
+     */
+    public Optional<FloorPointPosition> floorPoint(UUID mapId, int floorNum, int posNum) {
+        require(mapId);
+        String points = floors.findByMapIdAndFloorNum(mapId, floorNum).map(MapFloor::points).orElse(null);
+        if (points == null || points.isBlank()) {
+            return Optional.empty();
+        }
+        JsonNode root;
+        try {
+            root = JSON.readTree(points);
+        } catch (JsonProcessingException broken) {
+            return Optional.empty();
+        }
+        if (root == null || !root.isArray()) {
+            return Optional.empty();
+        }
+        for (JsonNode node : root) {
+            if (!node.isObject() || !node.path("posNum").isNumber() || node.get("posNum").asInt() != posNum) {
+                continue;
+            }
+            JsonNode x = node.get("xPct");
+            JsonNode y = node.get("yPct");
+            if (x != null && x.isNumber() && y != null && y.isNumber()) {
+                return Optional.of(new FloorPointPosition(x.doubleValue(), y.doubleValue()));
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** 楼层点位表里某个点位的归一化坐标（原点左上）。 */
+    public record FloorPointPosition(double xPct, double yPct) {
     }
 
     // ── UWB 标定（契约 getUwbMeta / putUwbMeta）──────────────────────────────

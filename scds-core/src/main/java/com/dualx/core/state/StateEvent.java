@@ -20,7 +20,8 @@ import java.time.Instant;
  * 200ms 后同一马甲会重报同样的 hp/弹药；而命中等离散事件丢了就永久缺失。</p>
  */
 public sealed interface StateEvent
-        permits StateEvent.Serial, StateEvent.Uwb, StateEvent.LinkChanged, StateEvent.OfflineScan {
+        permits StateEvent.Serial, StateEvent.Uwb, StateEvent.LinkChanged, StateEvent.OfflineScan,
+                StateEvent.ManualPosition {
 
     /** 队列满时是否可以丢这一条（见类型注释：唯一判据是「下一帧会重报」）。 */
     boolean droppable();
@@ -63,6 +64,30 @@ public sealed interface StateEvent
         @Override
         public boolean droppable() {
             // 扫描是幂等的（下一拍会重算），但丢它会让离线跳变推迟一个周期，收益不抵代价。
+            return false;
+        }
+    }
+
+    /**
+     * 手动置位（COMMAND {@code moveVest}，联调专用）：操作员把某马甲的坐标直接置为指定楼层的点位。
+     *
+     * <p>它不是硬件上报（坐标来自本场底图的点位表，由 COMMAND 的编排层查好后传进来），但争抢的
+     * 仍是同一份内存态（坐标、revision、轨迹采样、下行推送），因此照样走这条队列、由同一个写手
+     * 线程处理——操作员直写就会多出一个状态所有者（设计 06 §4.1）。</p>
+     *
+     * <p><b>不可丢</b>：人工置位是一次显式动作，不像心跳那样 200ms 后重报；丢了它，操作员已经拿到
+     * 200 受理回执，客户端却永远看不到这次跳变。</p>
+     *
+     * @param floorNum 楼层号（来自请求，与点位表同层）
+     * @param posNum   楼层内点位号
+     * @param xPct     底图归一化横坐标 0~1（原点左上，点位表原值）
+     * @param yPct     底图归一化纵坐标 0~1
+     */
+    record ManualPosition(int vestNum, int floorNum, int posNum, double xPct, double yPct)
+            implements StateEvent {
+
+        @Override
+        public boolean droppable() {
             return false;
         }
     }

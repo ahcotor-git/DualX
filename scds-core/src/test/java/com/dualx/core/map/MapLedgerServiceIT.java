@@ -259,6 +259,50 @@ class MapLedgerServiceIT {
         assertCode(() -> ledger.replaceFloorPoints(absent, 1, "[]"), ApiErrorCode.MAP_NOT_FOUND);
     }
 
+    @Test
+    @DisplayName("取点位坐标：命中的点位回它那一项的归一化坐标（COMMAND 手动置位的唯一坐标来源）")
+    void floorPoint_findsTheMatchingPoint() {
+        UUID id = insertMap("取点位", null, null);
+        ledger.replaceFloorPoints(id, 1, "[{\"posNum\":1,\"xPct\":0.25,\"yPct\":0.75,\"label\":\"东门\"},"
+                + "{\"posNum\":7,\"xPct\":0.5,\"yPct\":0.5,\"label\":\"大厅\"}]");
+
+        assertThat(ledger.floorPoint(id, 1, 7))
+                .contains(new MapLedgerService.FloorPointPosition(0.5, 0.5));
+        assertThat(ledger.floorPoint(id, 1, 1))
+                .contains(new MapLedgerService.FloorPointPosition(0.25, 0.75));
+    }
+
+    @Test
+    @DisplayName("取点位坐标：「找不到」一律折叠成空 Optional，不拆成多种原因")
+    void floorPoint_foldsEveryMissIntoEmpty() {
+        UUID id = insertMap("取不到的点位", null, null);
+
+        // 这个楼层还没录过点位表
+        assertThat(ledger.floorPoint(id, 9, 1)).isEmpty();
+
+        // 楼层在，但数组里没有这个点位号
+        ledger.replaceFloorPoints(id, 2, "[{\"posNum\":1,\"xPct\":0.1,\"yPct\":0.1}]");
+        assertThat(ledger.floorPoint(id, 2, 99)).isEmpty();
+
+        // 点位在，但缺 xPct / yPct：置位无处可去，与「没这个点位」同一处置
+        ledger.replaceFloorPoints(id, 3, "[{\"posNum\":5,\"label\":\"只有标签\"}]");
+        assertThat(ledger.floorPoint(id, 3, 5)).isEmpty();
+
+        // 合法 JSON 但不是数组（绕过 PUT 的结构约束直接落库）
+        floors.insert(new MapFloor(0L, id, 4, "{\"posNum\":1,\"xPct\":0.1,\"yPct\":0.1}", null, null));
+        assertThat(ledger.floorPoint(id, 4, 1)).isEmpty();
+
+        // 数组里混入非对象与「posNum 不是数字」：跳过它们继续找，最后仍无命中
+        ledger.replaceFloorPoints(id, 5, "[\"x\",{\"posNum\":\"7\",\"xPct\":0.5,\"yPct\":0.5}]");
+        assertThat(ledger.floorPoint(id, 5, 7)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("取点位坐标先判图在不在：底图不存在 → MAP_NOT_FOUND")
+    void floorPoint_unknownMap_isMapNotFound() {
+        assertCode(() -> ledger.floorPoint(UuidV7.generate(), 1, 1), ApiErrorCode.MAP_NOT_FOUND);
+    }
+
     // ── UWB 标定（契约 getUwbMeta / putUwbMeta）─────────────────────────────
 
     @Test

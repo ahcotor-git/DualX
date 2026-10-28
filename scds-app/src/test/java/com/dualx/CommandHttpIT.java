@@ -1,6 +1,10 @@
 package com.dualx;
 
+import com.dualx.core.domain.CoordinateSystem;
+import com.dualx.core.domain.PositionSource;
 import com.dualx.core.port.DeviceLinkAdmin;
+import com.dualx.core.push.UnitState;
+import com.dualx.core.state.SituationQuery;
 import com.dualx.gateway.sim.SimulatedLinkAdapter;
 import com.dualx.protocol.Hex;
 import com.dualx.protocol.Team;
@@ -33,11 +37,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 指挥指令下发的端到端 HTTP 验收（MR-1 的 5 条单兵即时指令 + MR-2 的全体充弹与覆盖配置）。
+ * 指挥指令下发的端到端 HTTP 验收（MR-1 的 5 条单兵即时指令 + MR-2 的全体充弹与覆盖配置
+ * + COMMAND 第 8 条手动置位）。
  *
  * <p>走完整生产入口——真 MySQL、真安全链、真 HTTP、{@code scds.gateway.mode=simulator}——
  * 把 {@code CommandController} 的端点接到真实装配出来的编排服务与仿真链路上，验证
@@ -65,11 +72,13 @@ class CommandHttpIT {
     private static ObjectMapper mapper;
     private static HttpClient client;
     private static JdbcClient jdbc;
+    private static SituationQuery situations;
     private static String admin;
 
     private static final List<Integer> createdVests = new ArrayList<>();
     private static final List<String> createdPlans = new ArrayList<>();
     private static final List<String> createdExercises = new ArrayList<>();
+    private static final List<String> createdMaps = new ArrayList<>();
 
     @BeforeAll
     static void bootSimulator() throws Exception {
@@ -82,6 +91,8 @@ class CommandHttpIT {
                 + ((ServletWebServerApplicationContext) context).getWebServer().getPort();
         mapper = context.getBean(ObjectMapper.class);
         jdbc = context.getBean(JdbcClient.class);
+        // 态势读侧（core S7）：手动置位的产物落在内存态，异步写手线程处理完才可读。
+        situations = context.getBean(SituationQuery.class);
         admin = ApplicationStartupSupport.externalAccessToken(key, List.of("ADMIN"));
         client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
 
@@ -109,6 +120,11 @@ class CommandHttpIT {
             }
             for (int vestNum : createdVests) {
                 jdbc.sql("DELETE FROM t_vest WHERE vest_num = :vestNum").param("vestNum", vestNum).update();
+            }
+            // 底图放在想定之后：服务层以 t_plan.map_id 判 MAP_IN_USE，想定还在就删不掉。
+            for (String mapId : createdMaps) {
+                jdbc.sql("DELETE FROM t_map_floor WHERE map_id = :mapId").param("mapId", mapId).update();
+                jdbc.sql("DELETE FROM t_map WHERE id = :mapId").param("mapId", mapId).update();
             }
         }
         if (client != null) {
@@ -300,6 +316,83 @@ class CommandHttpIT {
                 404, "DEVICE_VEST_NOT_FOUND", absentPath);
     }
 
+    @Test
+    @DisplayName("手动置位：受理为 MOVE 但不下发字节、不进队列、不写审计；态势里坐标取楼层点位表、来源 MANUAL")
+    void moveVestRepositionsUnitFromFloorPointWithoutTouchingQueueOrAudit() throws Exception {
+        String absentBeforeStart = "/api/v1/command/vests/" + FIRST_VEST_NUM + "/move";
+        assertProblem(post(absentBeforeStart, mapper.createObjectNode().put("floorNum", 1).put("posNum", 7)),
+                409, "EXERCISE_NOT_RUNNING", absentBeforeStart);
+
+        // 想定必须绑底图、底图必须有该楼层点位表——置位的坐标只能从那里来
+        String mapId = createIndoorMapWithPoint(3, 7, 0.25, 0.75);
+        int[] vests = startRunningExerciseOnMap("move", 2, mapId, null);
+        int target = vests[0];
+        openSerial();
+
+        String exerciseId = createdExercises.getLast();
+        long commandsBefore = commandCount(exerciseId);
+        long logsBefore = totalLogCount(exerciseId);
+
+        String path = "/api/v1/command/vests/" + target + "/move";
+        JsonNode ack = json(post(path, mapper.createObjectNode().put("floorNum", 3).put("posNum", 7)));
+        assertThat(ack.path("vestNum").asInt()).isEqualTo(target);
+        assertThat(ack.path("command").asText()).isEqualTo("MOVE");
+        assertThat(ack.path("accepted").asBoolean()).isTrue();
+        assertThat(ack.path("queuedAt").isNull()).isFalse();
+        // 手置位不是下行指令：没有字节可发，回执也没有下行帧
+        assertThat(ack.path("downlinkHex").isNull()).isTrue();
+        assertThat(links.sentCommands()).isEmpty();
+        // 也不进指令队列、不写审计：协议 LogType 里没有 MOVE，不能借用别的类型
+        assertThat(commandCount(exerciseId)).isEqualTo(commandsBefore);
+        assertThat(totalLogCount(exerciseId)).isEqualTo(logsBefore);
+
+        // 态势落点走唯一写手线程、异步完成：断言前先等它把事件处理完
+        await("马甲 " + target + " 的手动置位落进态势", () -> situations.unit(target)
+                .map(unit -> unit.positionSource() == PositionSource.MANUAL)
+                .orElse(false));
+        UnitState unit = situations.unit(target).orElseThrow();
+        assertThat(unit.position()).isNotNull();
+        assertThat(unit.position().coordinateSystem()).isEqualTo(CoordinateSystem.INDOOR);
+        assertThat(unit.position().xPct()).isEqualTo(0.25);
+        assertThat(unit.position().yPct()).isEqualTo(0.75);
+        assertThat(unit.position().floorNum()).isEqualTo(3);
+        assertThat(unit.position().posNum()).isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("手动置位的拒绝路径：正式演习 403，点位表没有这个点 404，缺楼层/点位号 400")
+    void moveVestRefusalsAreContractShaped() throws Exception {
+        String mapId = createIndoorMapWithPoint(1, 5, 0.4, 0.6);
+        int[] vests = startRunningExerciseOnMap("move-refuse", 2, mapId, null);
+        int target = vests[0];
+        String path = "/api/v1/command/vests/" + target + "/move";
+
+        // 点位表只有「1 层 5 号点」：点位号不存在与整层未录都是同一个 404（对调用方是同一件事）
+        assertProblem(post(path, mapper.createObjectNode().put("floorNum", 1).put("posNum", 6)),
+                404, "MAP_FLOOR_POINT_NOT_FOUND", path);
+        assertProblem(post(path, mapper.createObjectNode().put("floorNum", 9).put("posNum", 5)),
+                404, "MAP_FLOOR_POINT_NOT_FOUND", path);
+
+        // 楼层号与点位号是这条指令的定义要素，缺一即请求不成立 → 400
+        assertProblem(post(path, mapper.createObjectNode().put("posNum", 5)),
+                400, "VALIDATION_FAILED", path);
+        assertProblem(post(path, mapper.createObjectNode().put("floorNum", 1)),
+                400, "VALIDATION_FAILED", path);
+
+        // 不在编成：与其它单兵指令同一个 404 码
+        String absentPath = "/api/v1/command/vests/" + LAST_VEST_NUM + "/move";
+        assertProblem(post(absentPath, mapper.createObjectNode().put("floorNum", 1).put("posNum", 5)),
+                404, "DEVICE_VEST_NOT_FOUND", absentPath);
+
+        stopExerciseIfRunning();
+
+        // 正式演习：换谁登录都拒——403 说的是「这场演习的模式不允许」，不是权限不足
+        int[] battle = startRunningExerciseOnMap("move-battle", 1, mapId, "BATTLE");
+        String battlePath = "/api/v1/command/vests/" + battle[0] + "/move";
+        assertProblem(post(battlePath, mapper.createObjectNode().put("floorNum", 1).put("posNum", 5)),
+                403, "COMMAND_MOVE_FORBIDDEN", battlePath);
+    }
+
     // ── 夹具 ─────────────────────────────────────────────────────────────────
 
     /** 注册 {@code count} 个马甲 + 建想定 + 开演，返回马甲编号；场次记入回收清单。 */
@@ -360,6 +453,55 @@ class CommandHttpIT {
         return planId;
     }
 
+    /**
+     * 建一张室内底图 + 录一个点位的楼层点位表，返回 mapId（记入回收清单）。
+     *
+     * <p>不带 {@code uwb_meta}：手动置位只读楼层点位表，不需要室内解算几何——
+     * 底图缺标定参数时装配层只记一条告警，开演照常。</p>
+     */
+    private static String createIndoorMapWithPoint(int floorNum, int posNum, double xPct, double yPct)
+            throws Exception {
+        HttpResponse<byte[]> created = post("/api/v1/maps",
+                mapper.createObjectNode().put("name", "cmd-map-" + UUID.randomUUID()).put("type", "INDOOR"));
+        assertThat(created.statusCode()).isEqualTo(201);
+        String mapId = json(created).path("mapId").asText();
+        createdMaps.add(mapId);
+
+        ObjectNode body = mapper.createObjectNode();
+        body.putArray("points").add(mapper.createObjectNode()
+                .put("posNum", posNum).put("xPct", xPct).put("yPct", yPct).put("label", "东门"));
+        assertThat(put("/api/v1/maps/" + mapId + "/floors/" + floorNum + "/points", body).statusCode())
+                .isEqualTo(200);
+        return mapId;
+    }
+
+    /**
+     * 建想定、<b>开演前</b>把底图与演习模式绑上去，再开演；返回马甲编号。
+     *
+     * <p>绑定必须赶在开演之前：想定一旦被演习占用就禁止改动（{@code PLAN_IN_USE}）。
+     * {@code battleMode} 为 null 时走契约默认值 {@code TRAIN}。</p>
+     */
+    private static int[] startRunningExerciseOnMap(String tag, int count, String mapId, String battleMode)
+            throws Exception {
+        int[] vests = new int[count];
+        for (int i = 0; i < count; i++) {
+            vests[i] = register("cmd-" + tag + "-" + i, i == 0 ? "RED" : "BLUE");
+        }
+        String planName = "cmd-" + tag + "-" + UUID.randomUUID();
+        String planId = createPlan(planName, vests);
+        ObjectNode binding = mapper.createObjectNode().put("name", planName).put("mapId", mapId);
+        if (battleMode != null) {
+            binding.put("battleMode", battleMode);
+        }
+        assertThat(put("/api/v1/plans/" + planId, binding).statusCode()).isEqualTo(200);
+
+        HttpResponse<byte[]> started = post("/api/v1/exercise/current",
+                mapper.createObjectNode().put("planId", planId));
+        assertThat(started.statusCode()).isEqualTo(201);
+        createdExercises.add(json(started).path("exerciseId").asText());
+        return vests;
+    }
+
     private static void openSerial() throws Exception {
         assertThat(post("/api/v1/devices/links/serial",
                 mapper.createObjectNode().put("portName", "COM7")).statusCode()).isEqualTo(200);
@@ -389,6 +531,23 @@ class CommandHttpIT {
         } else {
             assertThat(ack.path("queuedAt").isNull()).isTrue();
         }
+    }
+
+    /** 轮询到条件成立或超时：态势写手线程是异步消费者，断言它写出的结果前必须先等它处理完。 */
+    private static void await(String what, BooleanSupplier condition) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("等待被中断：" + what, e);
+            }
+        }
+        throw new AssertionError("等待超时（10s）：" + what);
     }
 
     private static Map<String, Object> commandRow(String exerciseId, int vestNum, String command) {

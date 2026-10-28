@@ -295,6 +295,9 @@ public class ApiExceptionHandler {
             case COMMAND_INVALID_WEAPON_SLOT -> HttpStatus.BAD_REQUEST;
             case COMMAND_VEST_OFFLINE, COMMAND_VEST_DEAD -> HttpStatus.CONFLICT;
             case COMMAND_QUEUE_FULL -> HttpStatus.SERVICE_UNAVAILABLE;
+            // moveVest 的 403：「正式演习禁止手动置位」。与 AUTH_FORBIDDEN 的 403 同为 FORBIDDEN，
+            // 但语义是「演习模式不允许」（换账号也一样被拒），前端按 code 分流。
+            case COMMAND_MOVE_FORBIDDEN -> HttpStatus.FORBIDDEN;
 
             // ── 地图域（M2 MAP-BASE）────────────────────────────────────────────
             // 底图台账：查不到是 404；被想定引用/演习在用是 409
@@ -306,6 +309,9 @@ public class ApiExceptionHandler {
             // MAP_CALIBRATION_IN_PROGRESS（契约路径里写明）；「UWB 链路未开启」的 409
             // 走 DEVICE_LINK_NOT_OPEN（登记在硬件链路那一节，同码不分处）。
             case MAP_NOT_FOUND, MAP_NOT_CALIBRATED, MAP_IMAGE_MISSING -> HttpStatus.NOT_FOUND;
+            // moveVest 的 404：「图在、点位表里没这个点」。与 MAP_NOT_FOUND 同状态不同码——
+            // 现场处置不同（去补点位表 vs 换一张图），前端据此分支。
+            case MAP_FLOOR_POINT_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case MAP_UWB_META_INCOMPLETE -> HttpStatus.BAD_REQUEST;
             case MAP_IN_USE, MAP_CALIBRATION_IN_PROGRESS -> HttpStatus.CONFLICT;
 

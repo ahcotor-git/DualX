@@ -41,6 +41,14 @@ public enum ApiErrorCode {
     COMMAND_VEST_DEAD,
     COMMAND_INVALID_WEAPON_SLOT,
     COMMAND_QUEUE_FULL,
+    /**
+     * 正式演习中禁止手动置位（HTTP 403，契约 {@code moveVest} 的 403）。
+     *
+     * <p>与 {@link #AUTH_FORBIDDEN} 严格分工：后者是「令牌有效但角色不允许」，换个有权限的账号就能过；
+     * 本码说的是**这一场演习的模式不允许该动作**——{@code BattleMode.BATTLE} 期间人为改坐标会污染
+     * 真实态势，换谁登录都得拒。前端据此提示「本功能仅联调/训练可用」，而不是引导用户去要权限。</p>
+     */
+    COMMAND_MOVE_FORBIDDEN,
 
     // ===== DEVICE_* 设备与链路 =====
     DEVICE_VEST_NOT_FOUND,
@@ -90,6 +98,14 @@ public enum ApiErrorCode {
      * 故单独成码——地图被引用是运营动作（先解绑想定），不是参数错误。</p>
      */
     MAP_IN_USE,
+    /**
+     * 本场底图的该楼层没有这个点位（HTTP 404，契约 {@code moveVest}）。
+     *
+     * <p>手动置位的坐标只能取自楼层点位表（{@code MapFloor.points}），点位表没录、点位号不存在、
+     * 该项缺坐标——对调用方都是同一件事「置位无处可去」，故合成一个码，处置动作也相同（先把点位表补上）。
+     * 与 {@link #MAP_NOT_FOUND} 分码：前者是「图在、点位表里没这个点」，后者是「图都不在」。</p>
+     */
+    MAP_FLOOR_POINT_NOT_FOUND,
 
     // ===== PLAN_* 想定 =====
     /**

@@ -463,6 +463,74 @@ class SituationStateServiceTest {
                 .isNotEqualTo(first);
     }
 
+    // ------------------------------------------------------------------ 手动置位（COMMAND moveVest）
+
+    @Test
+    void manualPositionWritesIndoorPointAsManualSourceAndCountsRevision() {
+        long before = state.revision();
+
+        state.dispatch(new StateEvent.ManualPosition(1, 3, 7, 0.25, 0.75));
+
+        assertThat(state.unit(1)).get().satisfies(u -> {
+            assertThat(u.positionSource()).isEqualTo(PositionSource.MANUAL);
+            assertThat(u.position().coordinateSystem()).isEqualTo(CoordinateSystem.INDOOR);
+            assertThat(u.position().xPct()).isEqualTo(0.25);
+            assertThat(u.position().yPct()).isEqualTo(0.75);
+            assertThat(u.position().floorNum()).isEqualTo(3);
+            assertThat(u.position().posNum()).isEqualTo(7);
+            assertThat(u.position().wgs84Lng()).as("室内坐标不带 WGS-84").isNull();
+        });
+        assertThat(state.revision()).as("人工置位是一次单元变化，计入 revision").isEqualTo(before + 1);
+        assertThat(pushed).as("变化要推一帧增量").hasSize(1);
+    }
+
+    @Test
+    void manualPositionIsSampledAsMandatoryEventPoint() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+        state.dispatch(new StateEvent.ManualPosition(1, 0, 7, 0.25, 0.75));
+
+        state.endExercise();
+
+        assertThat(flushedTrackSamples())
+                .filteredOn(s -> s.vestNum() == 1)
+                .extracting(TrackSample::sampleReason)
+                .as("在线建立记 STATE_CHANGE，人工置位记必记的 EVENT")
+                .containsExactly(SampleReason.STATE_CHANGE, SampleReason.EVENT);
+    }
+
+    @Test
+    void manualPositionIsIgnoredForDeadAndUnknownVests() {
+        state.dispatch(new StateEvent.Serial(heartbeat(1, 0, 30, 30), SOURCE));
+        assertThat(state.unit(1)).get().extracting(UnitState::status).isEqualTo(VestStatus.DIE);
+
+        state.dispatch(new StateEvent.ManualPosition(1, 0, 1, 0.5, 0.5));
+
+        assertThat(state.unit(1)).get().satisfies(u -> {
+            assertThat(u.positionSource()).as("阵亡冻结是硬约束，人工置位不能绕过").isEqualTo(PositionSource.NONE);
+            assertThat(u.position()).isNull();
+        });
+
+        state.dispatch(new StateEvent.ManualPosition(99, 0, 1, 0.5, 0.5));
+        assertThat(state.unit(99)).isEmpty();
+        assertThat(state.framesFromUnknownVest()).as("与上行帧同一计数口径").isEqualTo(1);
+    }
+
+    @Test
+    void moveVestOnlyEnqueuesTheEventInsteadOfWritingStateDirectly() {
+        StateEventQueue queue = newQueue();
+        SituationStateService service = new SituationStateService(queue, hitEvents, clock, sampler, trackWriter,
+                revisionLog, indoor, push);
+        service.beginExercise(EXERCISE_ID, T0, List.of(roster(1, "红军-01", Team.RED)));
+
+        assertThat(service.moveVest(1, 3, 7, 0.25, 0.75)).isTrue();
+
+        assertThat(queue.size()).as("生产者只投事件").isEqualTo(1);
+        assertThat(service.unit(1)).get()
+                .extracting(UnitState::positionSource)
+                .as("坐标仍由唯一写手线程写，HTTP 线程不得直改")
+                .isEqualTo(PositionSource.NONE);
+    }
+
     // ------------------------------------------------------------------ 编成、终局与链路
 
     @Test

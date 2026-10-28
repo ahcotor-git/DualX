@@ -1101,4 +1101,41 @@ CAL-1（解算链路）交付后开工的**标定本体**，把 MAP-BASE 分段 
 （改字段名要动冻结契约与两个客户端），语义以描述为准 = `realWidthCm`（现场宽度基准 bs1↔bs4）。
 如将来要正名，须作为一次契约变更统一处理，不在实现侧偷偷改名。
 
+### `moveVest` 口径（2026-10-28，COMMAND 第 8 条手动置位）
+
+8 条指令里**最后一条**（契约 `docs/api/paths/command.yaml` 的 `x-internal` 联调端点，
+`POST /api/v1/command/vests/{vestNum}/move`）。它与其余 7 条**结构不同**：不下发任何字节，
+只把马甲坐标置成「本场底图某个楼层点位表里的那个点」。落地口径：
+
+| 项 | 裁定 |
+|---|---|
+| 403 判据 | **本场 `BattleMode.BATTLE`** → 403（新码 `COMMAND_MOVE_FORBIDDEN`），不复用 `AUTH_FORBIDDEN` |
+| 坐标来源 | **只能**取自本场底图的楼层点位表；未绑图 404 `MAP_NOT_FOUND`，图在但无此点 404 `MAP_FLOOR_POINT_NOT_FOUND` |
+| 写入口 | **只投事件**（`StateEvent.ManualPosition`），坐标由唯一写手线程写入，`PositionSource.MANUAL` |
+| 落地分段 | **三段**：写入口 + 单测 → 楼层点位读取 + IT → 端点接线 + 端到端 + 回写 |
+
+- **判据顺序固定（`CommandService.moveVest` 一处判完）**：无进行中演习 → 409 `EXERCISE_NOT_RUNNING`；
+  `BATTLE` → 403 `COMMAND_MOVE_FORBIDDEN`；`floorNum` / `posNum` 任一为 null → 400 `VALIDATION_FAILED`；
+  不在编成 → 404 `DEVICE_VEST_NOT_FOUND`；本场未绑底图 → 404 `MAP_NOT_FOUND`；
+  点位表里没有这个点 → 404 `MAP_FLOOR_POINT_NOT_FOUND`；最后投事件。
+- **403 与 `AUTH_FORBIDDEN` 分属两件事**：后者是「令牌有效但角色不允许」，换个有权限的账号就能过；
+  `COMMAND_MOVE_FORBIDDEN` 说的是**这一场演习的模式不允许该动作**，换谁登录都得拒。前端据此提示
+  「本功能仅联调/训练可用」，而不是引导用户去要权限。
+- **404 分两码、点位表内部 miss 折叠成一码**：`MAP_NOT_FOUND`（图都不在）与
+  `MAP_FLOOR_POINT_NOT_FOUND`（图在、点位表里没这个点）对调用方的处置动作不同（换图 vs 补点位表），
+  故不合并；但「整层没录 / 点位号不存在 / 该项缺 `xPct`,`yPct` / `points` 文本损坏 / 合法 JSON 但不是数组」
+  一律折叠成同一个 `MAP_FLOOR_POINT_NOT_FOUND`——对调用方都是同一件事「置位无处可去」。
+- **写入口只投事件**：`SituationStateService.moveVest` 只在队列上 `offer` 一个 `StateEvent.ManualPosition`，
+  真正写进内存态在唯一写手线程 `scds-state-writer` 的 `applyManualPosition` 里
+  （`CoordinateSystem.INDOOR` + `PositionSource.MANUAL`）。`accepted=false` 只有一种成因：
+  态势侧已停止接收。**阵亡马甲不绕冻结**——「阵亡冻结在最后有效坐标」是硬约束，手置位不是它的例外。
+- **不发字节、不落队列、不写审计**：回执 `downlinkHex` 恒为 `null`；不写 `t_exercise_command`
+  （没有下行帧，写进去只会得到一行永远发不出去的假队列）；不写 `t_exercise_log`——协议 `LogType`
+  里**没有 `MOVE`**，而协议已冻结、不新增值，故不借用别的类型。
+- **不记操作员审计**：`CommandService.moveVest` 与 `CommandController.moveVest` 都不取 `Jwt` 操作员
+  （与前 7 条落 `t_exercise_command` 的指令不同）——它不产生任何外部动作留痕需求。
+- **新错误码按纪律三层登记**：先写进 openapi 的 `Problem.code` 描述（`common.yaml`），
+  再回 `ApiErrorCode` 补枚举，最后由 `ApiExceptionHandler.statusOf` 登记状态（403 / 404）。
+
+
 
