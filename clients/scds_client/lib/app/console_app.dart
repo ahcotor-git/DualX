@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../features/connection/connection_page.dart';
 import '../features/console/account_page.dart';
+import '../features/console/command_page.dart';
 import '../features/console/console_login_page.dart';
 import '../features/console/overall_situation_page.dart';
 import '../features/console/team_summary_page.dart';
 import '../shared/api/api_client.dart';
 import '../shared/api/auth_api.dart';
 import '../shared/api/auth_models.dart';
+import '../shared/api/command_api.dart';
+import '../shared/api/command_models.dart';
 import '../shared/api/health_api.dart';
 import '../shared/api/situation_api.dart';
 import '../shared/auth/refreshing_api_transport.dart';
@@ -131,6 +134,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
               final RefreshingApiTransport transport = _transportFor(client, navigator);
               final AuthApi auth = AuthApi(transport);
               final SituationApi situations = SituationApi(transport);
+              final CommandApi command = CommandApi(transport);
 
               navigator.push(
                 MaterialPageRoute<void>(
@@ -167,6 +171,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                               navigator: navigator,
                               baseUri: baseUri,
                               situations: situations,
+                              command: command,
                             ),
                           ),
                         ),
@@ -242,6 +247,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
     required NavigatorState navigator,
     required Uri baseUri,
     required SituationApi situations,
+    required CommandApi command,
   }) {
     navigator.push(
       MaterialPageRoute<void>(
@@ -255,6 +261,50 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             baseUri: baseUri,
             accessToken: _account!.accessToken,
             sinceRevision: sinceRevision,
+          ),
+          onCommand: (int vestNum) =>
+              _openCommand(navigator: navigator, command: command, vestNum: vestNum),
+          reloadAll: (ReloadRequest request) =>
+              command.reloadAllVests(request: request, token: _account!.accessToken),
+        ),
+      ),
+    );
+  }
+
+  /// 段 47：打开单兵指挥指令页（从「全体态势」页所选单元行进入，目标编号不手输）。
+  ///
+  /// 六个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
+  /// 令牌到期时自动续期并重试一次。
+  void _openCommand({
+    required NavigatorState navigator,
+    required CommandApi command,
+    required int vestNum,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => CommandPage(
+          vestNum: vestNum,
+          session: session,
+          kill: () => command.killVest(vestNum: vestNum, token: _account!.accessToken),
+          revive: () => command.reviveVest(vestNum: vestNum, token: _account!.accessToken),
+          injure: () => command.injureVest(vestNum: vestNum, token: _account!.accessToken),
+          outOfRange: () =>
+              command.outOfRangeVest(vestNum: vestNum, token: _account!.accessToken),
+          reload: (ReloadRequest request) => command.reloadVest(
+            vestNum: vestNum,
+            request: request,
+            token: _account!.accessToken,
+          ),
+          setConfig: (VestConfigRequest request) => command.setVestConfig(
+            vestNum: vestNum,
+            request: request,
+            token: _account!.accessToken,
           ),
         ),
       ),

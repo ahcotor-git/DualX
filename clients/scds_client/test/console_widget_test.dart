@@ -7,6 +7,7 @@ import 'package:scds_client/app/client_factory.dart';
 import 'package:scds_client/app/console_app.dart';
 import 'package:scds_client/features/connection/connection_page.dart';
 import 'package:scds_client/features/console/account_page.dart';
+import 'package:scds_client/features/console/command_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
@@ -14,6 +15,7 @@ import 'package:scds_client/shared/api/api_client.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
 import 'package:scds_client/shared/api/api_problem.dart';
 import 'package:scds_client/shared/api/auth_models.dart';
+import 'package:scds_client/shared/api/command_models.dart';
 import 'package:scds_client/shared/api/health_api.dart';
 import 'package:scds_client/shared/api/situation_models.dart';
 import 'package:scds_client/shared/auth/session_store.dart';
@@ -236,10 +238,70 @@ void main() {
     WidgetTester tester, {
     required Future<SituationEnvelope> Function({int? sinceRevision}) fetch,
     required Future<SituationSocket> Function({int? sinceRevision}) connect,
+    void Function(int vestNum)? onCommand,
+    Future<CommandAck> Function(ReloadRequest request)? reloadAll,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: OverallSituationPage(session: accountSession(), fetch: fetch, connect: connect),
+        home: OverallSituationPage(
+          session: accountSession(),
+          fetch: fetch,
+          connect: connect,
+          onCommand: onCommand,
+          reloadAll: reloadAll,
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 47：造一条契约形状的受理回执。
+  CommandAck ackOf({
+    int vestNum = 14,
+    String command = 'DIE',
+    bool accepted = true,
+    String? downlinkHex,
+  }) =>
+      CommandAck(
+        vestNum: vestNum,
+        command: command,
+        accepted: accepted,
+        downlinkHex: downlinkHex,
+      );
+
+  /// 段 47：未注入的指令端口被触发即判失败（用例应只点注入过的按钮）。
+  Future<CommandAck> unexpectedCommand() async => fail('未预期的指令下发');
+
+  /// 段 47：单兵指令页直接挂树——六个端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 页面较长（`ListView` 懒构建），把测试视口放大到一屏容纳全部控件，
+  /// 免得底部的回执 / 错误文本因在屏外而未构建。
+  Future<void> pumpCommand(
+    WidgetTester tester, {
+    int vestNum = 14,
+    required Future<CommandAck> Function() kill,
+    Future<CommandAck> Function()? revive,
+    Future<CommandAck> Function()? injure,
+    Future<CommandAck> Function()? outOfRange,
+    Future<CommandAck> Function(ReloadRequest request)? reload,
+    Future<CommandAck> Function(VestConfigRequest request)? setConfig,
+  }) async {
+    tester.view.physicalSize = const Size(1200, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommandPage(
+          vestNum: vestNum,
+          session: accountSession(),
+          kill: kill,
+          revive: revive ?? unexpectedCommand,
+          injure: injure ?? unexpectedCommand,
+          outOfRange: outOfRange ?? unexpectedCommand,
+          reload: reload ?? (ReloadRequest _) => unexpectedCommand(),
+          setConfig: setConfig ?? (VestConfigRequest _) => unexpectedCommand(),
+        ),
       ),
     );
     await tester.pump();
@@ -1383,6 +1445,248 @@ void main() {
       expect(sinceRevisions, <int?>[null]);
       expect(find.byKey(overallSituationUnitRowKey(14)), findsNothing);
       expect(find.byKey(kOverallSituationWaitingKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 47：单兵指挥指令页——从「全体态势」页所选单元行进入，目标编号不手输。
+  ///
+  /// 六个写端点全部是注入的闭包桩（**不发真实请求**）。判据围绕三条契约口径：
+  /// 「受理 ≠ 下发」（`accepted=false` 只提示未下发）、覆盖配置的**只发非空键**语义、
+  /// 以及写操作的**单飞去重**。
+  group('指挥指令页（段 47）', () {
+    testWidgets('目标来自所选单元行：判死下发后显示受理回执（含下发字节）', (WidgetTester tester) async {
+      int kills = 0;
+      await pumpCommand(tester, kill: () async {
+        kills++;
+        return ackOf(command: 'DIE', downlinkHex: '0B01');
+      });
+
+      expect(tester.widget<Text>(find.byKey(kCommandTargetKey)).data, '目标 #14｜admin（OPERATOR）');
+      expect(find.text('尚未下发指令'), findsOneWidget);
+
+      await tester.tap(find.byKey(kCommandKillButtonKey));
+      await tester.pump();
+
+      expect(kills, 1);
+      expect(
+        tester.widget<Text>(find.byKey(kCommandAckKey)).data,
+        'DIE → #14｜已下发：0B01',
+      );
+    });
+
+    testWidgets('accepted=false：提示「未下发」而非报错（HTTP 200 只表示已受理）', (WidgetTester tester) async {
+      await pumpCommand(tester, kill: () async => ackOf(command: 'DIE', accepted: false));
+
+      await tester.tap(find.byKey(kCommandKillButtonKey));
+      await tester.pump();
+
+      expect(
+        tester.widget<Text>(find.byKey(kCommandAckKey)).data,
+        contains('未下发'),
+      );
+      expect(find.byKey(kCommandErrorKey), findsNothing);
+    });
+
+    testWidgets('契约错误码映射为现场文案（演习未运行）', (WidgetTester tester) async {
+      await pumpCommand(
+        tester,
+        kill: () async => throw apiFailure(409, ApiErrorCode.exerciseNotRunning),
+      );
+
+      await tester.tap(find.byKey(kCommandKillButtonKey));
+      await tester.pump();
+
+      expect(
+        tester.widget<Text>(find.byKey(kCommandErrorKey)).data,
+        contains('当前没有进行中的演习'),
+      );
+      expect(find.byKey(kCommandAckKey), findsNothing);
+    });
+
+    testWidgets('单兵充弹：非法弹量不发请求，合法则带契约请求体', (WidgetTester tester) async {
+      final List<ReloadRequest> sent = <ReloadRequest>[];
+      await pumpCommand(tester, kill: unexpectedCommand, reload: (ReloadRequest request) async {
+        sent.add(request);
+        return ackOf(command: 'RELOAD', downlinkHex: '0B02');
+      });
+
+      await tester.enterText(find.byKey(kCommandReloadAmmoFieldKey), 'abc');
+      await tester.tap(find.byKey(kCommandReloadButtonKey));
+      await tester.pump();
+
+      expect(sent, isEmpty);
+      expect(
+        tester.widget<Text>(find.byKey(kCommandErrorKey)).data,
+        contains('0..65535'),
+      );
+
+      await tester.enterText(find.byKey(kCommandReloadAmmoFieldKey), '60000');
+      await tester.tap(find.byKey(kCommandReloadButtonKey));
+      await tester.pump();
+
+      expect(sent.single.ammo, 60000);
+      expect(sent.single.weapon, WeaponSlot.primary);
+      expect(
+        tester.widget<Text>(find.byKey(kCommandAckKey)).data,
+        contains('RELOAD → #14'),
+      );
+    });
+
+    testWidgets('覆盖配置：全空不发请求；只填 HP 则请求体只含 hp 键', (WidgetTester tester) async {
+      final List<VestConfigRequest> sent = <VestConfigRequest>[];
+      await pumpCommand(tester, kill: unexpectedCommand,
+          setConfig: (VestConfigRequest request) async {
+        sent.add(request);
+        return ackOf(command: 'CONFIG', downlinkHex: '0E01');
+      });
+
+      await tester.tap(find.byKey(kCommandConfigSaveButtonKey));
+      await tester.pump();
+
+      expect(sent, isEmpty);
+      expect(
+        tester.widget<Text>(find.byKey(kCommandErrorKey)).data,
+        contains('至少'),
+      );
+
+      await tester.enterText(find.byKey(kCommandConfigHpFieldKey), '200');
+      await tester.tap(find.byKey(kCommandConfigSaveButtonKey));
+      await tester.pump();
+
+      // 覆盖语义：未填字段不得下发（`null` 不是「置空」）。
+      expect(sent.single.toJson(), <String, Object?>{'hp': 200});
+      expect(
+        tester.widget<Text>(find.byKey(kCommandAckKey)).data,
+        contains('CONFIG → #14'),
+      );
+    });
+
+    testWidgets('下发期间单飞去重：连点只发一次请求', (WidgetTester tester) async {
+      final Completer<CommandAck> pending = Completer<CommandAck>();
+      int kills = 0;
+      await pumpCommand(tester, kill: () {
+        kills++;
+        return pending.future;
+      });
+
+      await tester.tap(find.byKey(kCommandKillButtonKey));
+      await tester.pump();
+      await tester.tap(find.byKey(kCommandKillButtonKey));
+      await tester.pump();
+
+      expect(kills, 1);
+
+      pending.complete(ackOf(command: 'DIE'));
+      await tester.pump();
+
+      expect(
+        tester.widget<Text>(find.byKey(kCommandAckKey)).data,
+        contains('DIE → #14'),
+      );
+    });
+  });
+
+  /// 段 47：「全体态势」页的两处指令入口——单元行 → 单兵指令页；AppBar → 全体充弹（广播）。
+  ///
+  /// 两个端口都是**可选注入**：不注入时页面与既有只读用例渲染完全一致（回归在此固定）。
+  group('指挥端全体态势页·指令入口（段 47）', () {
+    Future<void> pumpWithUnits(
+      WidgetTester tester, {
+      void Function(int vestNum)? onCommand,
+      Future<CommandAck> Function(ReloadRequest request)? reloadAll,
+    }) async {
+      final TestSituationConnector connector = TestSituationConnector(silent: true);
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) async => fullEnvelope(
+          revision: 10,
+          units: <UnitState>[unitOf(14), unitOf(21)],
+        ),
+        connect: connector.call,
+        onCommand: onCommand,
+        reloadAll: reloadAll,
+      );
+      await tester.pump();
+    }
+
+    testWidgets('注入 onCommand：单元行可点，回调目标编号', (WidgetTester tester) async {
+      final List<int> tapped = <int>[];
+      await pumpWithUnits(tester, onCommand: tapped.add);
+
+      // 未注入 reloadAll → AppBar 不渲染广播入口。
+      expect(find.byKey(kOverallSituationReloadAllButtonKey), findsNothing);
+
+      await tester.tap(find.byKey(overallSituationUnitTapKey(21)));
+      await tester.pump();
+
+      expect(tapped, <int>[21]);
+      // 行文本键不变（点击只是包了一层 InkWell）。
+      expect(
+        tester.widget<Text>(find.byKey(overallSituationUnitRowKey(21))).data,
+        '#21 LIVE｜HP —',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入 onCommand：行仍为只读文本，无点击键', (WidgetTester tester) async {
+      await pumpWithUnits(tester);
+
+      expect(find.byKey(overallSituationUnitRowKey(14)), findsOneWidget);
+      expect(find.byKey(overallSituationUnitTapKey(14)), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('注入 reloadAll：AppBar 入口 → 对话框 → 广播回执提示为「全体」', (WidgetTester tester) async {
+      final List<ReloadRequest> sent = <ReloadRequest>[];
+      await pumpWithUnits(tester, reloadAll: (ReloadRequest request) async {
+        sent.add(request);
+        return ackOf(vestNum: 0, command: 'RELOAD', downlinkHex: '0B03');
+      });
+
+      await tester.tap(find.byKey(kOverallSituationReloadAllButtonKey));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.enterText(find.byKey(kReloadAllAmmoFieldKey), '50');
+      await tester.tap(find.byKey(kReloadAllConfirmKey));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(sent.single.ammo, 50);
+      expect(sent.single.weapon, WeaponSlot.primary);
+      // 广播回执 vestNum 固定为 0 → 文案显示「全体」。
+      expect(find.text('RELOAD → 全体｜已下发：0B03'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('全体充弹对话框：非法弹量不关闭且不发请求', (WidgetTester tester) async {
+      final List<ReloadRequest> sent = <ReloadRequest>[];
+      await pumpWithUnits(tester, reloadAll: (ReloadRequest request) async {
+        sent.add(request);
+        return ackOf(vestNum: 0, command: 'RELOAD');
+      });
+
+      await tester.tap(find.byKey(kOverallSituationReloadAllButtonKey));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.enterText(find.byKey(kReloadAllAmmoFieldKey), 'x');
+      await tester.tap(find.byKey(kReloadAllConfirmKey));
+      await tester.pump();
+
+      expect(sent, isEmpty);
+      expect(find.byKey(kReloadAllErrorKey), findsOneWidget);
+      expect(find.byKey(kReloadAllConfirmKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kReloadAllCancelKey));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       await unmount(tester);
     });
