@@ -2255,3 +2255,39 @@ LIFE 分段（一）的 §L6 已裁定：同库单实例保护落在**进程管�
 
 本段为**代码验收**，不是生产发布批准。
 
+## 32. M6 CLIENT-BASE 段 0：Flutter 工程脚手架（D13 一次性例外）
+
+客户端开工前的最后两个前置 **D12 / D13** 于 2026-10-28 裁定（见 [decision-register](decision-register.md) 文末
+「D12 / D13 裁定与 M6 CLIENT-BASE 段 0」）。本段**只做脚手架，不含业务**。
+
+### 32.1 生成口径
+
+```powershell
+flutter create --org com.dualx --project-name scds_client --platforms=android,windows clients/scds_client
+```
+
+- 采用 D13 授权的**仅一次**脚手架例外，目标目录 `clients/scds_client` 与文件清单固定；
+- 依赖**只有模板默认**（`flutter` + `cupertino_icons` + `flutter_lints`），**未新增第三方依赖**；
+- 磁盘写 50 文件，**git 跟踪 45 文件**；`build/`、`.dart_tool/`、Gradle wrapper 等由模板自带 `.gitignore` 排除；
+- 平台为 `android,windows` 两端（D12 的双入口）：`android/**` 的 `MainActivity.kt` 落在 `com.dualx.scds_client`；
+  `windows/**` 为 CMake + runner C++（**本机缺 Visual Studio，不构建**）。
+
+### 32.2 验收证据（客户端验收层的最小门禁）
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 静态分析 | `flutter analyze` | `No issues found!` |
+| 组件冒烟 | `flutter test` | `All tests passed!`（模板默认 Counter widget test） |
+| 环境 | `flutter --version` / `flutter doctor` | Flutter 3.47.7 stable / Dart 3.13.5；`flutter doctor` 报缺 Visual Studio（Windows 桌面构建不可用） |
+
+### 32.3 边界与未覆盖
+
+- **未做真实联调**：尚无 HTTP 客户端、无登录、无后端对接，故不产生后端侧计数变化；
+- **计数**：本地全量仍 **1151** 项——脚手架是 Dart 侧资产，**不在 Maven reactor 内**；
+- **未改动**：后端模块、协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期、在线窗口、
+  校验算法、四角编号口径、`scds-solver`、迁移与错误码**均未动**；
+- **本机限制**：Windows 端**不能原生构建**（缺 VS 的 Desktop development with C++ 工作负载，安装需另授权）；
+  Android 端可构建，模拟器 `zaa_pixel6` 可用但**本轮未启动**。
+
+本段为**代码验收（脚手架层）**，不是生产发布批准，也不代表客户端已联调。
+

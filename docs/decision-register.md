@@ -103,11 +103,12 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | D15 | 2026-10-21 用户裁定：保留 `xPx/yPx` 只修描述；无演习/离线/阵亡/危险物按统一口径。见下节。**仅裁定口径，实现后续分段** |
 | D06 / D10 | 2026-10-23 用户逐项裁定（4 项，见下「D06 / D10 执行边界」）：UWB SERIAL **首版一并交付**；已开重开**对齐契约返回 409**；**做**无硬件仿真适配器（profile 显式开启）；D10 **先落可配置项并标注未验证**。**仅裁定口径与分段方案，`scds-gateway` 尚无源码，实现未开始** |
 | D11 | **2026-10-28 已裁定并落地**：同事务尾段下发（先落库、再发硬件）、发送失败**只留痕不回滚**（响应仍 201/200）、链路未开**静默跳过**。见文末「网关下行接线与 D11 口径」 |
-| D05、D07、D08、D12-D13 | 待确认 |
+| D05、D07、D08 | 待确认 |
 | 业务批量实施 | 未授权 |
 | 创建隔离数据库 | 已批准在scds-local-mysql创建scds_next_test及scds_test；不创建新容器，不改开发.env |
-| 安装 VS | 未授权 |
-| Flutter 批量生成例外 | 未授权 |
+| 安装 VS | **仍未授权**（`flutter doctor`：Visual Studio 未安装）——Windows 端可写代码但**本机不能原生构建**；安装 Desktop development with C++ 需另授权并核验磁盘空间 |
+| D12 / D13 | **2026-10-28 用户裁定**：D12 取「单工程 + 共享 Dart 契约/通信包 + Android 单兵入口 / Windows 指挥入口」；D13 授权**仅一次** `flutter create` 脚手架例外。见文末「D12 / D13 裁定与 M6 CLIENT-BASE 段 0」 |
+| M6 CLIENT-BASE 段 0（脚手架） | 用户当次授权并选择「拆 2 笔（脚手架 + docs）并推送」。**已落地提交** `b16c348`（`clients/scds_client`，45 文件）；`flutter analyze` 无问题、默认 widget test 通过。细节见文末该节 |
 | 提交/推送 M2 LEDGER 成果 | 用户本轮明确授权“提交 LEDGER 并尝试推送”。**已落地 5 个本地提交**（`86e9b71` 契约、`a95bcf3` 服务、`9c3ab09` 接线+权限、`74162ca` 测试、`e8258a0` 文档），叠加既有 4 个后 `main` 领先 `origin/main` **9 个提交**；推送**两次均因网络失败**（`Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。不推导后续自动提交授权 |
 | 提交/推送 M2 MAP-BASE A1/A2 与 B1-B3 | 用户当次选择“提交并尝试推送”与“B2 + B3 连做”。**已落地 5 个本地提交**（`c8c1d5d` 契约 A1/A2、`867bd4c` 裁定登记、`8e1adbd` B1 存储端口与实现、`55739f1` B2 签名 URL、`7846030` B3 单测与配置）。`867bd4c` 那次推送已成功入远端；B1-B3 三次推送**均因网络失败**（`Connection was reset` / 无法连接 github.com:443），`main` 领先 `origin/main` **3 个提交**，**远端未更新** |
 | 提交/推送 M2 MAP-BASE 分段 C 与“演习中删图”裁定 | 用户当次选择“提交并重试推送”与“一并拦截，复用 MAP_IN_USE”。**已落地 3 个本地提交**（`3787254` C1 错误码与契约登记、`e8006b6` C2 台账服务与想定/演习引用判据、`8b9de5c` C2 用例），叠加既有 4 个后 `main` 领先 `origin/main` **7 个提交**；本轮推送**两次均因网络失败**（`Recv failure: Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。`C` 段已跑通全量 `mvn -B verify`（716 项，protocol 19 / core 316 / api 100 / app 281） |
@@ -1296,6 +1297,44 @@ D（app 端到端）四段实施。这也正是 **D11**（「整体回滚」不�
 
 **验证**：整仓 `mvn -o test` 全绿，**1151 项**（计数不变——本任务只改 javadoc 与文档，无测试增减）。
 用例判据与现场验收清单见 [testing](testing.md) 第 30 节。
+
+
+## D12 / D13 裁定与 M6 CLIENT-BASE 段 0（Flutter 工程脚手架，2026-10-28）
+
+**起因**：`implementation-plan.md` §5 的 **M6 CLIENT-BASE** 工作包（Flutter 工程、共享契约模型、网络、Problem、
+安全存储、身份与配置）前置是 **D12**（客户端分包方式）与 **D13**（脚手架文件数超限的处置）。两者长期停在
+「待确认」，且 §4 执行规则明确「不能直接运行 `flutter create` 绕过限制」，故 Flutter 工程一直无法开工
+（`snapshot.md` 一直记「Flutter 工程尚无」）。
+
+**裁定（用户，2026-10-28）**
+
+- **D12**：取「**单工程 + 共享 Dart 契约/通信包 + Android 单兵入口 / Windows 指挥入口**」——
+  即一个 Flutter 工程承载双端，契约与通信代码放在共享位置，两个平台入口各自装配。
+  **不**拆多个 Flutter 工程、**不**引入代码生成器产出 SDK（与后端「手写 DTO 不用生成器」的取向一致）。
+- **D13**：授权**仅一次** `flutter create` 脚手架例外——目标目录与文件清单固定、**不包含业务**。
+  该授权是**一次性**的，不成为后续常规手段；业务代码仍按「每原子任务 ≤3 文件」推进。
+
+**段 0（脚手架）落地**
+
+| 项 | 事实 |
+|---|---|
+| 命令 | `flutter create --org com.dualx --project-name scds_client --platforms=android,windows clients/scds_client` |
+| 目录 | `clients/scds_client`（仓库根下 `clients/`，已核查未被 `.gitignore` 忽略） |
+| 生成体量 | 磁盘写 50 文件，**git 跟踪 45 文件**（`build/`、`.dart_tool/`、Gradle wrapper 等由模板自带 `.gitignore` 排除） |
+| 主要产物 | `lib/main.dart`（模板默认 Counter）、`test/widget_test.dart`、`android/**`（KTS + `MainActivity.kt` 落在 `com.dualx.scds_client`）、`windows/**`（CMake + runner C++）、`pubspec.yaml`、`analysis_options.yaml` |
+| 依赖 | 仅模板默认（`flutter` + `cupertino_icons` + `flutter_lints`）；**未新增第三方依赖** |
+| 验收 | `flutter analyze` → `No issues found!`；`flutter test` → `All tests passed!`（模板默认 Counter widget test） |
+| 提交 | `b16c348 chore(clients): 生成 Flutter 工程脚手架（D13 一次性例外）`，已推送（`1950b4e..b16c348`） |
+
+**未改动 / 未做**
+
+- **未写业务代码**（段 1 才是共享契约/通信基座：Dart 侧常量、HTTP 客户端、`ApiProblem`/RFC 7807 错误模型）；
+- **未安装 Visual Studio**——`vswhere.exe` 不存在、`flutter doctor` 报缺 Desktop development with C++，
+  故 **Windows 端本机不能原生构建**（可写代码；安装工作负载需另授权并核验磁盘空间）；
+- 后端任何模块、协议冻结字节/端口（HTTP 11001 / UWB TCP 12001）/轮询周期/在线窗口/校验算法/
+  四角编号口径/`scds-solver`/迁移/错误码**均一字未动**；本段不进 Maven reactor，全量计数仍 **1151** 项。
+
+**下一段**：段 1「共享契约/通信基座」（用户已选），仍守 ≤3 文件。证据见 [testing](testing.md) 第 32 节。
 
 
 

@@ -1,20 +1,22 @@
 # scds-next 交接快照
 
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**R4 遗留收口——`downloadUrl` 签名窗口过期的 HTTP 用例（testing 第 31 节）**——在
-> `ReplayExportHttpIT.xlsxExportOverRealHttp` 内补「签名正确、仅 `exp` 已过 → 403 `FILE_URL_INVALID`」断言；
-> 因 HTTP IT 推不动签名器的 `Clock.systemUTC()`，改由**测试侧按契约独立重算**签名（固定
-> `scds.files.sign-secret` ＋ `路径 + '\n' + exp` 的 HMAC-SHA256），先用「未过期」正例自证算法一致、再验过期；
-> **未改验签逻辑、未引入可注入 Clock 到生产、未新增用例（计数仍 1151）**。
-> 本任务紧接 **L6 单实例保护口径收口（testing 第 30 节）**（归属进程管理层，无 Java 改动）、
-> **M3 LIFE 开演链路就绪 409 硬前置（testing 第 29 节）**（`startExercise` 写库前先校验
-> `SERIAL_VEST` 链路已 `OPEN`，未开即 409 `DEVICE_LINK_NOT_OPEN`，含既有 IT 的「先开串口链路」改造）
-> 与 **M3 LIFE 网关下行接线（testing 第 28 节）**，三者**均已在远端**。
+> 当前任务：**M6 CLIENT-BASE 段 0——Flutter 工程脚手架（testing 第 32 节）**——经用户 2026-10-28 裁定
+> **D12**（单工程 + 共享 Dart 契约/通信包 + Android 单兵入口 / Windows 指挥入口）与
+> **D13**（授权**仅一次** `flutter create` 脚手架例外，固定目录与文件清单、不含业务）后，
+> 用 `flutter create --org com.dualx --project-name scds_client --platforms=android,windows clients/scds_client`
+> 生成 `clients/scds_client`（磁盘 50 文件 / **git 跟踪 45 文件**），`flutter analyze` 无问题、
+> `flutter test` 通过。**只做脚手架，不含业务**；未新增依赖、未安装 Visual Studio（Windows 本机不能原生构建）；
+> 后端与协议冻结项一字未动，Maven 全量计数仍 **1151**。
+> 本任务紧接 **R4 遗留收口——`downloadUrl` 签名窗口过期的 HTTP 用例（testing 第 31 节）**（HTTP IT 推不动
+> 签名器的 `Clock.systemUTC()`，改由**测试侧按契约独立重算**签名、先用「未过期」正例自证，**未改验签逻辑、
+> 未引入可注入 Clock 到生产**）、**L6 单实例保护口径收口（testing 第 30 节）**（归属进程管理层，无 Java 改动）
+> 与 **M3 LIFE 开演链路就绪 409 硬前置（testing 第 29 节）**，三者**均已在远端**。
 > 更早已落 **M5 REPLAY 四段**（R1 复盘读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
 > `ReplayController` 七条全去 501、**全仓「仍抛 501 的方法」计数为 0**）与 **M3 CAL-2 现场验收收口**，
 > 两者亦**均已在远端**。
 > 最新全量 `mvn test` **1151 项，失败/错误/跳过均 0**（见 testing 第 15~31 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~31 节冲突处，以该处为准。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~32 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -38,24 +40,28 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 以及**M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站）**，
 **M3 LIFE 开演链路就绪 409 硬前置（`DEVICE_LINK_NOT_OPEN`，含既有 IT 的「先开串口链路」改造）**，
 **L6 单实例保护口径收口（归属进程管理层，无 Java 改动）**，
-**R4 遗留收口（`downloadUrl` 签名窗口过期 HTTP 用例，测试侧独立重算签名；在既有用例内扩断言，计数仍 1151）**。
+**R4 遗留收口（`downloadUrl` 签名窗口过期 HTTP 用例，测试侧独立重算签名；在既有用例内扩断言，计数仍 1151）**、
+**M6 CLIENT-BASE 段 0（Flutter 工程脚手架，D12/D13 裁定后一次性生成 `clients/scds_client`，不含业务）**。
 
-下一原子任务的候选：**Flutter 客户端工程**（Android 单兵端 / Windows 指挥端均未开工）；
-**T-PROD 部署**；以及一条**观察项**——硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，
-且协议无回执帧）。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮 R4 遗留收口改动**已本地提交 3 笔（2 笔交付 + 1 笔快照订正）
-并已推送**（首次推送因网络不可达失败，连通性恢复后 `git push` 成功，见 §2）。
+下一原子任务的候选：**M6 CLIENT-BASE 段 1「共享契约/通信基座」**（用户已选：Dart 侧常量 + HTTP 客户端 +
+`ApiProblem`/RFC 7807 错误模型，手写模型不用生成器，仍守 ≤3 文件）；其后为段 2 登录（对接 `AuthService` RS256）
+→ 段 3 连接配置 + 自身态势只读（Android 优先）→ 段 4 Android 入口装配 + 模拟器 `zaa_pixel6` 冒烟 →
+段 5 Windows 指挥端骨架（本机缺 Visual Studio，**不能原生构建**，安装需另授权）。
+另有一条单列后续：**T-PROD 部署**；以及一条**观察项**——硬件 ACK 解析（「已发送」≠「已确认」仍无人写入
+`ACKED`，且协议无回执帧）。启动前须重新核查仓库与环境，
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮 M6 CLIENT-BASE 段 0 的脚手架**已提交 1 笔并推送**
+（`b16c348`，见 §2），docs 回写笔待提交。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本轮 R4 遗留收口三笔已入远端，工作树**干净**、与 `origin/main` 同步；其上另有若干 docs 回写提交，HEAD 会随回写前移，故不钉死具体 hash |
-| 实际远端main | 本轮 R4 遗留收口三笔 tip `068d706`（`test(app)` / `docs` / 快照订正）已入远端；更早为 L6 口径收口三笔 `ac9353a..4b76f2b` |
-| 已推送 | `4b76f2b..068d706` 已入远端：本轮 R4 遗留收口三笔（`eb755f0` `test(app)` + `4f2d546` `docs` + `068d706` 快照订正；首次推送因网络不可达失败，连通性恢复后成功）；更早批次（L6 口径收口三笔 `2bafcbf`/`7d398d7`/`4b76f2b`、链路就绪硬前置三笔 `479fc30`/`68eb2d9`/`f5bb261` 与两笔 docs 回写 `c9e1b02`/`ac9353a`、网关下行五笔 `2594b04`/`e715138`/`84d6809`/`f13e90f`/`8dda7be`、CAL-2 现场验收收口三笔 `3b6b482`/`1c8e5bd`/`0d8ef02`、R1/R2/R3 各三笔与 R4 全部改动含 HTTP 端到端补测 `62d03c7`/`5e641b2`、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs，以及 CAL-1/MR-1~MR-3）亦已在远端 |
-| 未推送（仅本机） | **无**。本轮 R4 遗留收口的 3 个文件（`ReplayExportHttpIT.java`：`@BeforeAll` 加固定 `scds.files.sign-secret` + 新辅助 `resignWithExp`/`hmac` + `xlsxExportOverRealHttp` 内扩断言；`docs/testing.md`：§26.2 第 17 条扩写 + §26.3 改写 + 新增第 31 节；`snapshot.md`）**已全部提交并推送** |
-| 本轮继续成果 | **R4 遗留收口：`downloadUrl` 签名窗口过期的 HTTP 用例**——在 `ReplayExportHttpIT.xlsxExportOverRealHttp` 内补「签名正确、仅 `exp` 已过 → 403 `FILE_URL_INVALID`」断言；因 HTTP IT 推不动签名器的 `Clock.systemUTC()`，改由**测试侧按契约独立重算**签名（固定测试密钥 + `路径 + '\n' + exp` 的 HMAC-SHA256、Base64URL 无填充），先用「未过期」正例自证算法一致、再验过期。**未改验签逻辑、未引入可注入 Clock 到生产**；在既有用例内扩断言，**无新增用例**；全量 `mvn -o test` **1151 项**全绿（定向 `ReplayExportHttpIT` 2/2 绿）。**已推送** |
+| 源码本地HEAD | 本轮 M6 CLIENT-BASE 段 0 的**脚手架一笔已入远端**（`b16c348`），工作树在提交本 docs 笔前仅有本笔 3 个文档改动（`docs/decision-register.md`/`docs/testing.md`/`snapshot.md`）；HEAD 随 docs 回写前移，故不钉死具体 hash |
+| 实际远端main | 本轮已入远端的是 **`b16c348 chore(clients): 生成 Flutter 工程脚手架（D13 一次性例外）`**（其前为 `1950b4e` 快照订正）；更早为本轮 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
+| 已推送 | `1950b4e..b16c348` 已入远端：**M6 CLIENT-BASE 段 0 脚手架一笔**（`clients/scds_client`，45 文件）；更早 `4b76f2b..068d706` 为 R4 遗留收口三笔（`eb755f0` `test(app)` + `4f2d546` `docs` + `068d706` 快照订正）、`ac9353a..4b76f2b` 为 L6 口径收口三笔；再往前（链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3）亦均在远端 |
+| 未推送（仅本机） | 本笔 **docs 回写**——`docs/decision-register.md`（待确认表 D12/D13 裁定行 + 文末「D12 / D13 裁定与 M6 CLIENT-BASE 段 0」节）、`docs/testing.md`（新增第 32 节）、`snapshot.md`（本快照）；提交并推送后此格即为**无** |
+| 本轮继续成果 | **M6 CLIENT-BASE 段 0：Flutter 工程脚手架**——按 D12（单工程 + 共享包 + 双入口）/D13（一次性脚手架例外）生成 `clients/scds_client`（`flutter create --org com.dualx --project-name scds_client --platforms=android,windows`；磁盘 50 文件 / **git 跟踪 45 文件**），`flutter analyze` 无问题、`flutter test` 通过（模板默认 Counter）。**只做脚手架，不含业务**：未新增依赖、未安装 Visual Studio（Windows 本机不能原生构建）、后端与协议冻结项一字未动，**Maven 全量计数仍 1151**。脚手架笔 `b16c348` **已推送**；本 docs 笔待提交 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -194,8 +200,20 @@ D app 端到端与既有 IT 改造 / E 文档收口五段，见 testing 第 29 �
 **在既有用例内扩断言，无新增用例**（计数仍 1151）；**未改验签逻辑、未引入可注入 Clock 到生产**。
 **未做**：硬件 ACK 解析（「已发送」≠「已确认」那条线仍在，且协议无回执帧）。
 **未新增错误码、未新增迁移、未新增依赖**。
+新增已完成（**M6 CLIENT-BASE 段 0：Flutter 工程脚手架**，见 testing 第 32 节）：
+按 D12（**单工程 + 共享 Dart 契约/通信包 + Android 单兵入口 / Windows 指挥入口**）与
+D13（授权**仅一次** `flutter create` 例外，固定目录与文件清单、**不含业务**）生成
+`clients/scds_client`——`flutter create --org com.dualx --project-name scds_client --platforms=android,windows`，
+磁盘写 50 文件、**git 跟踪 45 文件**（`build/`/`.dart_tool/`/Gradle wrapper 由模板自带 `.gitignore` 排除）；
+`lib/main.dart` 为模板默认 Counter、`android/**` 的 `MainActivity.kt` 落在 `com.dualx.scds_client`、
+`windows/**` 为 CMake + runner C++；**依赖只有模板默认**（`flutter` + `cupertino_icons` + `flutter_lints`）；
+验收 `flutter analyze` → `No issues found!`、`flutter test` → `All tests passed!`；
+**未写业务代码**（段 1 才是共享契约/通信基座）、**未安装 Visual Studio**（`vswhere` 不存在、
+`flutter doctor` 报缺 Desktop development with C++，故 Windows 端**本机不能原生构建**）；
+本段是 Dart 侧资产、**不进 Maven reactor**，全量计数仍 **1151**。
 file / map 其余业务方法按 testing 第 3 节矩阵推进。
-Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
+Flutter 工程**脚手架已就位**（`clients/scds_client`，D12 双入口），但**业务未开工**——
+Android 单兵端与 Windows 指挥端**均无业务代码**，也**未与后端联调**。
 
 实际版本为Java21、Spring Boot **3.5.7**、MySQL本机8.4.11；
 以pom和当前代码为准，不沿用历史记忆里的Boot3.3.5。
@@ -215,6 +233,10 @@ L6 单实例保护口径收口新增证据：**无测试增减**——本任务�
 R4 遗留收口新增证据：**无测试增减**——本任务在既有 `ReplayExportHttpIT.xlsxExportOverRealHttp` 内扩断言
 （`@BeforeAll` 加固定 `scds.files.sign-secret` + 新辅助 `resignWithExp`/`hmac`），全量仍 **1151 项**（0/0/0）不变；
 定向 `mvn -o -pl scds-app -am test -Dtest=ReplayExportHttpIT` 亦 2/2 绿（0/0/0），构造口径详见 testing 第 31 节。
+M6 CLIENT-BASE 段 0（Flutter 脚手架）证据：**Maven 侧无增减**——本段产物在 `clients/scds_client`（Dart），
+**不在 reactor 内**，全量仍 **1151 项**（0/0/0）；客户端侧门禁为 `flutter analyze` → `No issues found!`
+与 `flutter test` → `All tests passed!`（模板默认 Counter widget test），详见 testing 第 32 节。
+**Windows 桌面端未构建**（本机缺 Visual Studio）；Android 端未启动模拟器 `zaa_pixel6`，故**不代表任何联调通过**。
 M3 LIFE 开演链路就绪 409 硬前置新增证据：core `ExerciseLifecycleServiceIT` **+1**（610 → 611，
 新增 `startExercise_withVestLinkClosed_isDeviceLinkNotOpen` 并加 `@BeforeEach openVestLink()` 补前置）；
 app `ExerciseLifecycleHttpIT` **+1**（331 → 333 中的一笔，新增 `startWithVestLinkClosedIsRejectedAs409`）、
@@ -481,6 +503,17 @@ HTTP IT 推不动时钟，故在**测试侧按契约独立重算**签名（`@Bef
 过期样本的 403 才说明是过期而非签错**；`path` 参数原样沿用原 URL 已编码片段、只换 `exp` 与 `signature`；
 **未改验签逻辑、未引入可注入 Clock 到生产、未新增用例**（即测试侧扩断言），全量计数仍 **1151** 项。
 
+2026-10-28新增已确认（D12 / D13 与 M6 CLIENT-BASE 段 0，见 testing 第 32 节）：
+**D12** 取「**单工程 + 共享 Dart 契约/通信包 + Android 单兵入口 / Windows 指挥入口**」——一个 Flutter 工程
+承载双端、契约与通信代码共享、两平台入口各自装配，**不**拆多工程、**不**引代码生成器产 SDK；
+**D13** 授权**仅一次** `flutter create` 脚手架例外（固定目录与文件清单、**不含业务**），
+**不成为后续常规手段**，业务代码仍守「每原子任务 ≤3 文件」；
+段 0 生成 `clients/scds_client`（`--org com.dualx --project-name scds_client --platforms=android,windows`，
+磁盘 50 / git 跟踪 45 文件），依赖仅模板默认，`flutter analyze` 无问题、`flutter test` 通过；
+**Windows 端本机不能原生构建**（`vswhere` 不存在、`flutter doctor` 缺 VS 的 Desktop development with C++，
+安装工作负载**需另授权**）；本段**未写业务、未新增依赖、未改后端与协议冻结项**，
+Maven 全量计数仍 **1151** 项。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -515,7 +548,9 @@ HTTP IT 推不动时钟，故在**测试侧按契约独立重算**签名（`@Bef
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：R4 遗留收口——`downloadUrl` 签名窗口过期的 HTTP 用例（测试侧独立重算签名，
+最新证据：M6 CLIENT-BASE 段 0——Flutter 工程脚手架（`clients/scds_client`，D12 双入口 / D13 一次性例外，
+`flutter analyze` 无问题 + `flutter test` 通过，不含业务）详见 testing 第 32 节；
+R4 遗留收口——`downloadUrl` 签名窗口过期的 HTTP 用例（测试侧独立重算签名，
 在既有 `ReplayExportHttpIT.xlsxExportOverRealHttp` 内扩断言）详见 testing 第 31 节；
 L6 单实例保护口径收口（归属进程管理层，以 `environments.md` §6.4 为准，无 Java 改动）
 详见 testing 第 30 节；
@@ -534,11 +569,13 @@ M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1151 项测试、R4 遗留收口（`downloadUrl` 签名窗口过期 HTTP 用例，测试侧独立重算签名，
+本快照已同步 1151 项测试、M6 CLIENT-BASE 段 0（Flutter 工程脚手架 `clients/scds_client`，D12 双入口 /
+D13 一次性例外，不含业务；`flutter analyze` + `flutter test` 通过，**脚手架已推送** `1950b4e..b16c348`）、
+R4 遗留收口（`downloadUrl` 签名窗口过期 HTTP 用例，测试侧独立重算签名，
 在既有用例内扩断言）、L6 单实例保护口径收口（归属进程管理层，以 `environments.md` §6.4 为准，
 无 Java 改动）、M3 LIFE 开演链路就绪 409 硬前置（`DEVICE_LINK_NOT_OPEN`，含既有 IT 的
 「先开串口链路」改造，**已推送** `8dda7be..f5bb261`）、M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，D11 落地口径，
 **已推送** `0d8ef02..8dda7be`）、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
 含 HTTP 端到端补测）与 M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性，**均已推送**）
-与下一任务候选（Flutter 客户端 / T-PROD 部署），
+与下一任务候选（M6 CLIENT-BASE 段 1 契约/通信基座 / T-PROD 部署），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。
