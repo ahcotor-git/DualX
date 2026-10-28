@@ -8,6 +8,7 @@ import 'package:scds_client/app/console_app.dart';
 import 'package:scds_client/features/connection/connection_page.dart';
 import 'package:scds_client/features/console/account_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
+import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
 import 'package:scds_client/shared/api/api_client.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
@@ -18,6 +19,7 @@ import 'package:scds_client/shared/api/situation_models.dart';
 import 'package:scds_client/shared/auth/session_store.dart';
 import 'package:scds_client/shared/config/connection_config.dart';
 import 'package:scds_client/shared/config/connection_config_store.dart';
+import 'package:scds_client/shared/state/situation_socket.dart';
 
 /// M6 CLIENT-WINDOWS 段 5：指挥端外壳装配 + 连接配置页健康诊断 + 账号登录页 + 队伍汇总总览页。
 ///
@@ -195,6 +197,7 @@ void main() {
     Future<List<TeamSummary>> Function() fetch, {
     Duration interval = const Duration(milliseconds: 200),
     VoidCallback? onOpenAccount,
+    VoidCallback? onOpenSituation,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -203,7 +206,40 @@ void main() {
           fetch: fetch,
           interval: interval,
           onOpenAccount: onOpenAccount,
+          onOpenSituation: onOpenSituation,
         ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 D 后半：造一条契约形状的态势信封（默认全量）。
+  SituationEnvelope fullEnvelope({
+    required int revision,
+    List<UnitState> units = const <UnitState>[],
+  }) =>
+      SituationEnvelope(
+        epoch: 'e-1',
+        revision: revision,
+        full: true,
+        running: true,
+        serverTime: DateTime.utc(2026, 10, 28, 12),
+        exerciseId: 'ex-1',
+        units: units,
+      );
+
+  UnitState unitOf(int vestNum, {VestStatus status = VestStatus.live, int? hp}) =>
+      UnitState(vestNum: vestNum, status: status, revision: 1, hp: hp);
+
+  /// 把「全体态势」页直接挂在树上（注入假 fetch / 假连接器，**不建真实连接**）。
+  Future<void> pumpOverall(
+    WidgetTester tester, {
+    required Future<SituationEnvelope> Function({int? sinceRevision}) fetch,
+    required Future<SituationSocket> Function({int? sinceRevision}) connect,
+  }) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OverallSituationPage(session: accountSession(), fetch: fetch, connect: connect),
       ),
     );
     await tester.pump();
@@ -675,6 +711,32 @@ void main() {
 
       await unmount(tester);
     });
+
+    testWidgets('提供全体态势入口时点击触发回调', (WidgetTester tester) async {
+      bool opened = false;
+      await pumpSummary(
+        tester,
+        () async => const <TeamSummary>[],
+        onOpenSituation: () => opened = true,
+      );
+
+      expect(find.byKey(kTeamSummarySituationEntryKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kTeamSummarySituationEntryKey));
+      await tester.pump();
+
+      expect(opened, isTrue);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入全体态势入口时不渲染该入口', (WidgetTester tester) async {
+      await pumpSummary(tester, () async => const <TeamSummary>[]);
+
+      expect(find.byKey(kTeamSummarySituationEntryKey), findsNothing);
+
+      await unmount(tester);
+    });
   });
 
   group('指挥端账号与会话页', () {
@@ -1142,6 +1204,189 @@ void main() {
       expect(find.byType(ConsoleLoginPage), findsOneWidget);
     });
   });
+
+  /// 段 D 后半：指挥端「全体态势」页接 `SituationFeed`（WS + 10s 兜底 Poll 双通道）。
+  ///
+  /// 用例全部跑在 `testWidgets` 的**假时钟**上，注入假 `fetch` 与假连接器——**不建真实连接**。
+  /// 判据是三条：WS 不得替代 HTTP 兜底轮询、两条通道同源归并让旧帧不覆盖新状态、
+  /// 缓存随页面生灭（不跨会话泄漏）。
+  group('指挥端全体态势页（RES-D 后半）', () {
+    testWidgets('首帧前提示等待；首帧到达后展示账号、通道状态与各单元', (WidgetTester tester) async {
+      final Completer<SituationEnvelope> pending = Completer<SituationEnvelope>();
+      final TestSituationConnector connector = TestSituationConnector(silent: true);
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) => pending.future,
+        connect: connector.call,
+      );
+
+      expect(
+        tester.widget<Text>(find.byKey(kOverallSituationAccountKey)).data,
+        'admin（OPERATOR）',
+      );
+      expect(find.byKey(kOverallSituationWaitingKey), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(kOverallSituationChannelKey)).data,
+        contains('WS 未连'),
+      );
+
+      pending.complete(fullEnvelope(
+        revision: 10,
+        units: <UnitState>[
+          unitOf(14, hp: 88),
+          unitOf(21, status: VestStatus.die, hp: 0),
+        ],
+      ));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        tester.widget<Text>(find.byKey(overallSituationUnitRowKey(14))).data,
+        '#14 LIVE｜HP 88',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(overallSituationUnitRowKey(21))).data,
+        '#21 DIE｜HP 0',
+      );
+      expect(find.byKey(kOverallSituationWaitingKey), findsNothing);
+      expect(
+        tester.widget<Text>(find.byKey(kOverallSituationCountsKey)).data,
+        contains('单元 2'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('WS 连上：通道切为实时，且收到的 WS 帧同源归并进单元列表', (WidgetTester tester) async {
+      final TestSituationConnector connector = TestSituationConnector();
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) async =>
+            fullEnvelope(revision: 10, units: <UnitState>[unitOf(14)]),
+        connect: connector.call,
+      );
+
+      expect(
+        tester.widget<Text>(find.byKey(kOverallSituationChannelKey)).data,
+        contains('WS 已连'),
+      );
+      expect(find.byKey(overallSituationUnitRowKey(14)), findsOneWidget);
+      // 首个连接未对齐 → 不带 sinceRevision 取全量。
+      expect(connector.sinceRevisions, <int?>[null]);
+
+      connector.last.emit(jsonEncode(<String, dynamic>{
+        'epoch': 'e-1',
+        'revision': 11,
+        'full': false,
+        'running': true,
+        'serverTime': '2026-10-28T12:00:00Z',
+        'changes': <dynamic>[
+          <String, dynamic>{'vestNum': 21, 'status': 'LIVE', 'revision': 11},
+        ],
+      }));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byKey(overallSituationUnitRowKey(21)), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(kOverallSituationCountsKey)).data,
+        contains('单元 2'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('重新同步按钮：WS 已连时上行 RESYNC 帧并带本地 revision', (WidgetTester tester) async {
+      final TestSituationConnector connector = TestSituationConnector();
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) async =>
+            fullEnvelope(revision: 10, units: <UnitState>[unitOf(14)]),
+        connect: connector.call,
+      );
+
+      await tester.tap(find.byKey(kOverallSituationResyncButtonKey));
+      await tester.pump();
+
+      expect(
+        connector.last.sent.single,
+        jsonEncode(const <String, Object?>{'action': 'RESYNC', 'sinceRevision': 10}),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('拉取失败：显示可读错误，保留陈旧单元数据', (WidgetTester tester) async {
+      int calls = 0;
+      final TestSituationConnector connector = TestSituationConnector(silent: true);
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) async {
+          calls++;
+          if (calls == 1) {
+            return fullEnvelope(revision: 10, units: <UnitState>[unitOf(14, hp: 77)]);
+          }
+          throw StateError('connection refused');
+        },
+        connect: connector.call,
+      );
+
+      expect(
+        tester.widget<Text>(find.byKey(overallSituationUnitRowKey(14))).data,
+        contains('77'),
+      );
+
+      // WS 未连 → 按 2s 档轮询；下一拍失败。
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      expect(find.byKey(kOverallSituationErrorKey), findsOneWidget);
+      expect(find.textContaining('拉取失败'), findsOneWidget);
+      // 失败不得抹掉上一次成功的数据（保陈旧，不空屏）。
+      expect(
+        tester.widget<Text>(find.byKey(overallSituationUnitRowKey(14))).data,
+        contains('77'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('缓存隔离：重开页面为新会话，首拉仍取全量且不残留上一会话的单元', (WidgetTester tester) async {
+      final List<int?> sinceRevisions = <int?>[];
+      final TestSituationConnector connector = TestSituationConnector(silent: true);
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) async {
+          sinceRevisions.add(sinceRevision);
+          return fullEnvelope(revision: 10, units: <UnitState>[unitOf(14)]);
+        },
+        connect: connector.call,
+      );
+
+      expect(sinceRevisions, <int?>[null]);
+      expect(find.byKey(overallSituationUnitRowKey(14)), findsOneWidget);
+
+      await unmount(tester);
+
+      // 重开一页：页面自建新的 feed / 缓存——不得残留上一会话的单元，首个请求仍为全量。
+      sinceRevisions.clear();
+      final Completer<SituationEnvelope> pending = Completer<SituationEnvelope>();
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) {
+          sinceRevisions.add(sinceRevision);
+          return pending.future;
+        },
+        connect: connector.call,
+      );
+
+      expect(sinceRevisions, <int?>[null]);
+      expect(find.byKey(overallSituationUnitRowKey(14)), findsNothing);
+      expect(find.byKey(kOverallSituationWaitingKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
 }
 
 /// RES-D：脚本化传输桩——按请求回预置响应，并把**真实收到的请求**记下来。
@@ -1250,3 +1495,65 @@ ApiResponse jsonResponse(Object body, {int statusCode = 200}) => ApiResponse(
       contentType: 'application/json',
       body: utf8.encode(jsonEncode(body)),
     );
+
+/// 段 D 后半：假态势 WS 连接——手动投喂下行帧、记录上行帧，**不建真实连接**。
+class TestSituationSocket implements SituationSocket {
+  // 单订阅控制器（与 `situation_feed_test.dart` 一致）：仅 `SituationFeed` 一个监听者。
+  final StreamController<String> _controller = StreamController<String>();
+
+  /// 客户端上行的文本帧。
+  final List<String> sent = <String>[];
+
+  int closeCallCount = 0;
+
+  @override
+  Stream<String> get messages => _controller.stream;
+
+  @override
+  void send(String text) => sent.add(text);
+
+  @override
+  int? get closeCode => null;
+
+  @override
+  String? get closeReason => null;
+
+  @override
+  Future<void> close([int? code, String? reason]) async {
+    closeCallCount++;
+    if (!_controller.isClosed) {
+      await _controller.close();
+    }
+  }
+
+  /// 投喂一帧下行文本。
+  void emit(String raw) {
+    if (!_controller.isClosed) {
+      _controller.add(raw);
+    }
+  }
+}
+
+/// 假连接器：`silent=true` 时返回一个**永不落地**的 future（把用例按在「WS 未连」档）。
+class TestSituationConnector {
+  TestSituationConnector({this.silent = false});
+
+  final bool silent;
+
+  /// 每次连接携带的 `sinceRevision`（`null` = 取全量）。
+  final List<int?> sinceRevisions = <int?>[];
+
+  final List<TestSituationSocket> opened = <TestSituationSocket>[];
+
+  TestSituationSocket get last => opened.last;
+
+  Future<SituationSocket> call({int? sinceRevision}) {
+    sinceRevisions.add(sinceRevision);
+    if (silent) {
+      return Completer<SituationSocket>().future;
+    }
+    final TestSituationSocket socket = TestSituationSocket();
+    opened.add(socket);
+    return Future<SituationSocket>.value(socket);
+  }
+}

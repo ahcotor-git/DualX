@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../features/connection/connection_page.dart';
 import '../features/console/account_page.dart';
 import '../features/console/console_login_page.dart';
+import '../features/console/overall_situation_page.dart';
 import '../features/console/team_summary_page.dart';
 import '../shared/api/api_client.dart';
 import '../shared/api/auth_api.dart';
@@ -13,6 +14,7 @@ import '../shared/auth/refreshing_api_transport.dart';
 import '../shared/auth/session_store.dart';
 import '../shared/config/connection_config.dart';
 import '../shared/config/connection_config_store.dart';
+import '../shared/state/situation_socket.dart';
 import 'client_factory.dart';
 
 /// 指挥端登录路由名：会话终结（[RefreshingApiTransport.onLost]）时据此**弹回登录页**。
@@ -147,6 +149,8 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                       _account = session;
                       // 登录成功即把会话接进装饰器：后续域请求的 401 才有令牌可续。
                       transport.adopt(session);
+                      // WS 基址取自本实例的传输端口（`http://host:port` → `ws://host:port`）。
+                      final Uri baseUri = client.baseUri;
                       navigator.push(
                         MaterialPageRoute<void>(
                           builder: (BuildContext pageContext) => TeamSummaryPage(
@@ -158,6 +162,11 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                               navigator: navigator,
                               transport: transport,
                               auth: auth,
+                            ),
+                            onOpenSituation: () => _openOverallSituation(
+                              navigator: navigator,
+                              baseUri: baseUri,
+                              situations: situations,
                             ),
                           ),
                         ),
@@ -214,6 +223,39 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
               navigator.pop();
             }
           },
+        ),
+      ),
+    );
+  }
+
+  /// RES-D 后半：打开「全体态势」页，把 `SituationFeed` 的两个端口接到当前账号令牌上。
+  ///
+  /// - `fetch` → `GET /api/v1/situation`（HTTP 兜底轮询，走已认证的 [SituationApi]）；
+  /// - `connect` → `ws(s)://{host}:11001/ws/v1/situation`（WS 主通道）。
+  ///
+  /// 两者**每次取用时读 [_account]** 的当前 `accessToken`（续期换令牌后自动生效）。
+  /// 页面自建 `SituationFeed` 并在其 `dispose` 时释放——缓存随页面生灭，不跨会话泄漏。
+  ///
+  /// 注：契约（`docs/design/03-auth.md` Q7 / §4.7）规定 WS 握手**只认账号令牌**且
+  /// 令牌走 `Authorization: Bearer` 头，故此处只能由指挥端（账号令牌）接线。
+  void _openOverallSituation({
+    required NavigatorState navigator,
+    required Uri baseUri,
+    required SituationApi situations,
+  }) {
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => OverallSituationPage(
+          session: _account!,
+          fetch: ({int? sinceRevision}) => situations.getSituation(
+            token: _account!.accessToken,
+            sinceRevision: sinceRevision,
+          ),
+          connect: ({int? sinceRevision}) => connectSituationSocket(
+            baseUri: baseUri,
+            accessToken: _account!.accessToken,
+            sinceRevision: sinceRevision,
+          ),
         ),
       ),
     );

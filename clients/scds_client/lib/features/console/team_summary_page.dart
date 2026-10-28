@@ -13,6 +13,9 @@ const Key kTeamSummaryEmptyKey = Key('teamSummary.empty');
 /// 段 6 新增：进入「账号与会话」页的入口（未注入回调时整块不渲染）。
 const Key kTeamSummaryAccountEntryKey = Key('teamSummary.accountEntry');
 
+/// RES-D 后半新增：进入「全体态势」页的入口（未注入回调时整块不渲染）。
+const Key kTeamSummarySituationEntryKey = Key('teamSummary.situationEntry');
+
 /// 按队伍取行键（`TeamSummary` 每队一行）。
 Key teamSummaryRowKey(Team team) => Key('teamSummary.row.${team.wire}');
 
@@ -37,6 +40,7 @@ class TeamSummaryPage extends StatefulWidget {
     required this.fetch,
     this.interval = kTeamSummaryPollInterval,
     this.onOpenAccount,
+    this.onOpenSituation,
   });
 
   /// 已登录的账号会话（提供 `accessToken` 与身份快照）。
@@ -50,6 +54,9 @@ class TeamSummaryPage extends StatefulWidget {
 
   /// 段 6 新增：打开「账号与会话」页；为 `null` 时不渲染入口。
   final VoidCallback? onOpenAccount;
+
+  /// RES-D 后半新增：打开「全体态势」页（接 `SituationFeed` 双通道）；为 `null` 时不渲染入口。
+  final VoidCallback? onOpenSituation;
 
   @override
   State<TeamSummaryPage> createState() => _TeamSummaryPageState();
@@ -79,6 +86,12 @@ class _TeamSummaryPageState extends State<TeamSummaryPage> {
       appBar: AppBar(
         title: const Text('队伍汇总'),
         actions: <Widget>[
+          if (widget.onOpenSituation != null)
+            TextButton(
+              key: kTeamSummarySituationEntryKey,
+              onPressed: widget.onOpenSituation,
+              child: const Text('全体态势'),
+            ),
           if (widget.onOpenAccount != null)
             TextButton(
               key: kTeamSummaryAccountEntryKey,
