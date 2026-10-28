@@ -4,4 +4,9 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- 段 4d：仅 debug 构建挂上「只放行回环明文」的网络配置，
+         供模拟器 + `adb reverse tcp:11001` 自测 `http://127.0.0.1:11001`。
+         release 构建不合并本覆盖层，明文照旧全禁。 -->
+    <application android:networkSecurityConfig="@xml/network_security_config"/>
 </manifest>
