@@ -93,6 +93,7 @@ class DeviceSelfHttpIT {
         bind(vestB, BIND_B);
 
         seedPlanAndRoster();
+        openSerial();
         startExercise();
     }
 
@@ -217,6 +218,13 @@ class DeviceSelfHttpIT {
         String exerciseId = mapper.readTree(response.body()).path("exerciseId").asText();
         createdExercises.add(exerciseId);
         return exerciseId;
+    }
+
+    /** 开马甲串口（仿真）——契约 {@code startExercise} 的硬前置就是它已 {@code OPEN}。 */
+    private static void openSerial() throws Exception {
+        HttpResponse<String> opened = app.post("/api/v1/devices/links/serial",
+                mapper.createObjectNode().put("portName", "COM7"), app.admin);
+        assertThat(opened.statusCode()).isEqualTo(200);
     }
 
     private static void stopIfRunning() throws Exception {

@@ -160,6 +160,8 @@ class PushCrashRecoveryIT {
                         .isEqualTo(idleRevision);
 
                 // 取证三：自愈的价值在于场次能接着开——唯一索引没被僵尸占住，且 revision 只增不减。
+                // 换代后是新进程、新链路：开演前必须重新开串口（409 `DEVICE_LINK_NOT_OPEN` 的硬前置）。
+                next.openSerialLink();
                 String newExerciseId = next.startExercise();
                 JsonNode started = collector.awaitFrame(
                         node -> node.path("full").asBoolean() && node.path("running").asBoolean(),

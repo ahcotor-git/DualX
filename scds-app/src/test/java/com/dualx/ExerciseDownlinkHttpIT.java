@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 开演/停演<b>硬件下行</b>的端到端 HTTP 验收（契约 {@code startExercise} 步骤 ③④、
  * {@code stopExercise} 步骤 ③）。
  *
- * <p>服务层（何时发、发什么字节、顺序、失败留痕、链路未开跳过）由 {@code scds-core} 的
+ * <p>服务层（何时发、发什么字节、顺序、失败留痕）由 {@code scds-core} 的
  * {@code ExerciseLifecycleServiceDownlinkTest} 覆盖；本类补的是「真装配下这条路真的通」：
  * 走完整生产入口——真 MySQL、真安全链、真 HTTP、{@code scds.gateway.mode=simulator}——
  * 确认控制器 → {@code ExerciseLifecycleService} → {@code DownlinkCommands} 组帧 →
@@ -198,24 +198,45 @@ class ExerciseDownlinkHttpIT {
     }
 
     @Test
-    @DisplayName("链路未开：开演与停演都不发字节、不写日志（只 WARN），响应码照常 201/200")
-    void downlinkIsSkippedWithoutBytesOrLogsWhenVestLinkIsClosed() throws Exception {
+    @DisplayName("链路未开：开演被 409 DEVICE_LINK_NOT_OPEN 拒下——不发字节、不写日志、不留半场次")
+    void startIsRejectedAs409WithoutBytesOrLogsWhenVestLinkIsClosed() throws Exception {
         int vest = register("无链路甲", "RED");
         String planId = createPlan("downlink-closed-" + UUID.randomUUID(),
                 mapper.createArrayNode().add(rosterEntry(vest, "RED", 100, 30, 30, "AUTO")));
         // 刻意不开串口链路：{@code @BeforeEach} 的 closeSerial() 已保证它是关的
 
         HttpResponse<byte[]> started = postExercise(mapper.createObjectNode().put("planId", planId));
+
+        // 开演的硬前置（设计 05 §4.7 / 决策 D06）：链路未开就 409，而不是「开演成功但配置帧静默丢弃」
+        assertThat(started.statusCode()).isEqualTo(409);
+        assertThat(json(started).path("code").asText()).isEqualTo("DEVICE_LINK_NOT_OPEN");
+
+        // 一条都不发：链路未开时下发只会进到无人消费的队列并回报成功（假成功）
+        assertThat(links.sentCommands()).isEmpty();
+        // 判据排在插库之前：既无半场次，也就不会产生任何以场次为键的日志行
+        assertThat(exerciseCountOf(planId)).isZero();
+        assertThat(json(get("/api/v1/exercise/current")).path("running").asBoolean()).isFalse();
+    }
+
+    @Test
+    @DisplayName("停演时链路已关：只 WARN 不发结束帧，停演照常 200 且不留存证")
+    void stopDownlinkIsSkippedWithoutBytesOrLogsWhenVestLinkWasClosedMeanwhile() throws Exception {
+        int vest = register("半途关链路甲", "RED");
+        String planId = createPlan("downlink-stop-closed-" + UUID.randomUUID(),
+                mapper.createArrayNode().add(rosterEntry(vest, "RED", 100, 30, 30, "AUTO")));
+        openSerial();
+        HttpResponse<byte[]> started = postExercise(mapper.createObjectNode().put("planId", planId));
         assertThat(started.statusCode()).isEqualTo(201);
         String exerciseId = json(started).path("exerciseId").asText();
         createdExercises.add(exerciseId);
 
-        // 链路未开时下发只会进到无人消费的队列并回报成功（假成功），故一条都不能发；也不写日志
-        assertThat(links.sentCommands()).isEmpty();
-        assertThat(totalLogCount(exerciseId)).isZero();
+        // 开演后链路被关掉（现场拔线 / 串口被占用）：停演不设链路门禁，仍须停得掉
+        closeSerial();
+        links.clearSentCommands();
 
         HttpResponse<byte[]> stopped = delete("/api/v1/exercise/current");
         assertThat(stopped.statusCode()).isEqualTo(200);
+        // 下发只会进到无人消费的队列并回报成功（假成功），故一条都不发；也不写存证噪声
         assertThat(links.sentCommands()).isEmpty();
         assertThat(totalLogCount(exerciseId)).isZero();
     }
@@ -275,6 +296,12 @@ class ExerciseDownlinkHttpIT {
     private static long totalLogCount(String exerciseId) {
         return jdbc.sql("SELECT COUNT(*) FROM t_exercise_log WHERE exercise_id = :id")
                 .param("id", exerciseId).query(Long.class).single();
+    }
+
+    /** 某想定名下落了几个演习行——用来证明「被 409 拒下的开演不留半场次」。 */
+    private static long exerciseCountOf(String planId) {
+        return jdbc.sql("SELECT COUNT(*) FROM t_exercise WHERE plan_id = :planId")
+                .param("planId", planId).query(Long.class).single();
     }
 
     /** 取发往某马甲的下行帧十六进制原文；找不到即该马甲没收到帧（断言失败）。 */

@@ -11,6 +11,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.MapPropertySource;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.net.URI;
@@ -22,6 +24,7 @@ import java.security.KeyPair;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +43,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code ApplicationRunner}，启动完成即已放行门禁，503 在 HTTP 上走不到。那一段由
  * {@code ExerciseLifecycleServiceReadinessTest}（手建未置位实例 + 断言先于查库）与
  * {@code ApiExceptionHandlerBusinessTest}（503 映射）证明。</p>
+ *
+ * <p><b>链路就绪（409 {@code DEVICE_LINK_NOT_OPEN}）由本类覆盖</b>：开演的硬前置是马甲串口链路已
+ * {@code OPEN}。用仿真适配器启停链路即可摆出「已开」与「未开」两条路径；判据顺序也被顺带钉住——
+ * {@link #rejectedStartsLeaveNothingBehind()} 全程不开链路却要拿到 404/400，即「请求内容问题先报，
+ * 链路前置条件后报」。</p>
  *
  * <p>不写成 {@code @Transactional}——请求走的是应用自己的线程与连接，测试事务帮不上忙。
  * 写入用随机想定名与专属马甲编号段，并在 {@link #cleanUp()} 里按 id / 编号精确回收。</p>
@@ -64,7 +72,12 @@ class ExerciseLifecycleHttpIT {
     @BeforeAll
     static void bootFullApplication() throws Exception {
         KeyPair key = ApplicationStartupSupport.newKeyPair();
-        context = ApplicationStartupSupport.start(ApplicationStartupSupport.environment(true, key));
+        ConfigurableEnvironment environment = ApplicationStartupSupport.environment(true, key);
+        // 开演要求马甲串口链路已开（契约 409 `DEVICE_LINK_NOT_OPEN`），而测试机没有 COM 口：
+        // 与 DeviceSelfHttpIT 同策，改用仿真适配器，链路开关才由本类自己摆布。
+        environment.getPropertySources().addFirst(new MapPropertySource(
+                "exercise-lifecycle-http-it", Map.of("scds.gateway.mode", "simulator")));
+        context = ApplicationStartupSupport.start(environment);
         base = "http://127.0.0.1:"
                 + ((ServletWebServerApplicationContext) context).getWebServer().getPort();
         mapper = context.getBean(ObjectMapper.class);
@@ -106,6 +119,7 @@ class ExerciseLifecycleHttpIT {
     @Test
     @DisplayName("开停演走真实 HTTP：请求里的 battleMode 覆盖想定、开演即在线数为 0、重复开演与无场次停演都是 409")
     void startAndStopExerciseOverRealHttp() throws Exception {
+        openSerial();
         int redVest = register("开演甲", "RED");
         int blueVest = register("开演乙", "BLUE");
         String planName = "http-lifecycle-" + UUID.randomUUID();
@@ -188,8 +202,27 @@ class ExerciseLifecycleHttpIT {
     }
 
     @Test
+    @DisplayName("链路未开：开演被 409 DEVICE_LINK_NOT_OPEN 拒下，不留半场次")
+    void startWithVestLinkClosedIsRejectedAs409() throws Exception {
+        // 显式置为「未开」，与本类其他用例的链路状态解耦（用例间无顺序依赖）
+        closeSerial();
+        int vestNum = register("无链路甲", "RED");
+        String planId = createPlan("http-lifecycle-nolink-" + UUID.randomUUID(), vestNum);
+
+        // 想定与编成都合法，唯独链路没开：这是开演的硬前置（设计 05 §4.7 / 决策 D06）
+        assertProblem(postExercise(mapper.createObjectNode().put("planId", planId)),
+                409, "DEVICE_LINK_NOT_OPEN", "/api/v1/exercise/current");
+
+        // 判据排在插库之前：唯一索引没被占住，读侧仍是「没有演习」——被拒的开演不留半启动态
+        assertThat(json(get("/api/v1/exercise/current")).path("running").asBoolean()).isFalse();
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM t_exercise WHERE plan_id = :planId AND ended_at IS NULL")
+                .param("planId", planId).query(Long.class).single()).isZero();
+    }
+
+    @Test
     @DisplayName("当前演习日志流水：无场次是空页、sinceSeq 游标增量推进、latestSeq 取本批末条")
     void currentLogsFollowTheSeqCursor() throws Exception {
+        openSerial();
         // 无演习进行中：契约没有 404，是 200 + 空页
         JsonNode idle = json(get("/api/v1/exercise/current/logs"));
         assertThat(idle.path("items")).isEmpty();
@@ -291,6 +324,23 @@ class ExerciseLifecycleHttpIT {
 
     private static HttpResponse<byte[]> postExercise(ObjectNode body) throws Exception {
         return post("/api/v1/exercise/current", body);
+    }
+
+    /**
+     * 开马甲串口（仿真）——契约 {@code startExercise} 的硬前置就是它已 {@code OPEN}。
+     *
+     * <p>先关后开：开链路端点对「已开」是 409（不是幂等），而本类用例间无顺序依赖——
+     * 上一个用例可能把链路留在 {@code OPEN}，故这里先归零再开，任何入口都拿到 200。
+     */
+    private static void openSerial() throws Exception {
+        closeSerial();
+        assertThat(post("/api/v1/devices/links/serial",
+                mapper.createObjectNode().put("portName", "COM7")).statusCode()).isEqualTo(200);
+    }
+
+    /** 关马甲串口；已关时端点幂等返回 200，故无需判断当前态。 */
+    private static void closeSerial() throws Exception {
+        delete("/api/v1/devices/links/serial");
     }
 
     // ── 传输 ─────────────────────────────────────────────────────────────────

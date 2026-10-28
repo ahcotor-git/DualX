@@ -44,6 +44,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code ExportTaskServiceIT} 覆盖，本类补的是**接口层形状**：状态码、Problem 的 code、
  * 两种下载通道的 {@code Content-Type} 差异，以及只有跨接口才看得见的约定。</p>
  *
+ * <p>唯一与本机环境有关的替换是网关走仿真（{@code scds.gateway.mode=simulator}）：开演要求马甲串口
+ * 链路已开（409 {@code DEVICE_LINK_NOT_OPEN}），而本机没有 COM 口。本类不验链路语义，仿真不影响
+ * 上述任何断言；仿真通过<b>不</b>得写成现场通过。</p>
+ *
  * <p><b>两条下载通道的内容类型刻意不同</b>：{@code ReplayController.downloadExport} 按**文件名后缀**
  * 回 xlsx / text/csv；签名 URL 走 {@code FileController}，它按**真实字节**嗅探，
  * 非图片一律 {@code application/octet-stream}。两者都正确，但不可互相冒充——本类同时断言。</p>
@@ -80,9 +84,12 @@ class ReplayExportHttpIT {
     static void bootFullApplication() throws Exception {
         KeyPair key = ApplicationStartupSupport.newKeyPair();
         var environment = ApplicationStartupSupport.environment(true, key);
-        // 只加文件存储一项，不动 .env.test 与其它已有配置。
+        // 只加文件存储与网关模式两项，不动 .env.test 与其它已有配置。
+        // 网关走仿真：开演要求马甲串口链路已开（409 `DEVICE_LINK_NOT_OPEN`），而本机没有 COM 口——
+        // 与 DeviceSelfHttpIT / CommandHttpIT 同策。本类只验导出，不验链路。
         environment.getPropertySources().addFirst(new MapPropertySource("replay-export-http-files",
-                Map.of("scds.files.root", FILES_ROOT)));
+                Map.of("scds.files.root", FILES_ROOT,
+                        "scds.gateway.mode", "simulator")));
         context = ApplicationStartupSupport.start(environment);
         base = "http://127.0.0.1:"
                 + ((ServletWebServerApplicationContext) context).getWebServer().getPort();
@@ -134,6 +141,7 @@ class ReplayExportHttpIT {
         int blueVest = register("导出乙", "BLUE");
         String planId = createPlan("http-export-xlsx-" + UUID.randomUUID(), redVest, blueVest);
 
+        openSerial();
         HttpResponse<byte[]> started = post("/api/v1/exercise/current",
                 mapper.createObjectNode().put("planId", planId), admin);
         assertThat(started.statusCode()).isEqualTo(201);
@@ -275,6 +283,7 @@ class ReplayExportHttpIT {
     /** 开演再停演，返回复盘 id（复盘与演习是同一行，`replayId == exerciseId`）。 */
     private static String startAndStop(String planNamePrefix) throws Exception {
         String planId = createPlan(planNamePrefix + UUID.randomUUID(), register("导出丙", "RED"));
+        openSerial();
         HttpResponse<byte[]> started = post("/api/v1/exercise/current",
                 mapper.createObjectNode().put("planId", planId), admin);
         assertThat(started.statusCode()).isEqualTo(201);
@@ -282,6 +291,18 @@ class ReplayExportHttpIT {
         createdExercises.add(exerciseId);
         assertThat(delete("/api/v1/exercise/current", admin).statusCode()).isEqualTo(200);
         return exerciseId;
+    }
+
+    /**
+     * 开马甲串口（仿真）——契约 {@code startExercise} 的硬前置就是它已 {@code OPEN}。
+     *
+     * <p>先关后开：开链路端点对「已开」是 409（不是幂等），而一个用例里可能开演两次，
+     * 故先归零再开，任何入口都拿到 200。</p>
+     */
+    private static void openSerial() throws Exception {
+        delete("/api/v1/devices/links/serial", admin);
+        assertThat(post("/api/v1/devices/links/serial",
+                mapper.createObjectNode().put("portName", "COM7"), admin).statusCode()).isEqualTo(200);
     }
 
     /** 受理一次导出并返回 taskId；断言 202，受理语义本身由上面的用例细验。 */

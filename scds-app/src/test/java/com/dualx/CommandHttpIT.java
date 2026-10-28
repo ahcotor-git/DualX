@@ -153,7 +153,6 @@ class CommandHttpIT {
     void commandDownlinkReachesSimulatedLinkAndPersistsSentRowWithAudit() throws Exception {
         int[] vests = startRunningExercise("happy", 2);
         int target = vests[0];
-        openSerial();
 
         // 判死：8B 帧 {00 09 FF <num:2BE> <sum> AF FA}
         String dieHex = Hex.encode(DownlinkCommands.die(target));
@@ -209,6 +208,8 @@ class CommandHttpIT {
 
         int[] vests = startRunningExercise("reject", 1);
         int target = vests[0];
+        // 开演本身要求链路已开；本用例验的是**链路未开**时的受理回执，故开演后立刻关掉。
+        closeSerial();
 
         // 不在编成：编成内没有这个编号 → 404（不存在的编号就够了，不必真的建马甲）
         String absentPath = "/api/v1/command/vests/" + LAST_VEST_NUM + "/kill";
@@ -237,7 +238,6 @@ class CommandHttpIT {
                 400, "VALIDATION_FAILED", path);
 
         int[] vests = startRunningExercise("reload-all", 2);
-        openSerial();
 
         String hex = Hex.encode(DownlinkCommands.reloadAll(30, DownlinkCommands.WEAPON_SECONDARY));
         // 回执 vestNum 为 0：广播帧不指向具体马甲（真实编号下界为 1，0 不会与之混淆）
@@ -280,7 +280,6 @@ class CommandHttpIT {
                 .put("hp", 200).put("ammo1", 12).put("ammo2", 7).put("mode", "MANUAL");
         int[] vests = startRunningExercise("config", 2, rosterExtra);
         int target = vests[0];
-        openSerial();
 
         String exerciseId = createdExercises.getLast();
         long logsBefore = totalLogCount(exerciseId);
@@ -327,8 +326,8 @@ class CommandHttpIT {
         String mapId = createIndoorMapWithPoint(3, 7, 0.25, 0.75);
         int[] vests = startRunningExerciseOnMap("move", 2, mapId, null);
         int target = vests[0];
-        openSerial();
 
+        // 手动置位只动内存态势，不改队列与审计
         String exerciseId = createdExercises.getLast();
         long commandsBefore = commandCount(exerciseId);
         long logsBefore = totalLogCount(exerciseId);
@@ -412,10 +411,15 @@ class CommandHttpIT {
             vests[i] = register("cmd-" + tag + "-" + i, i == 0 ? "RED" : "BLUE");
         }
         String planId = createPlan("cmd-" + tag + "-" + UUID.randomUUID(), rosterExtra, vests);
+        // 开演硬前置：马甲串口必须已 OPEN（409 `DEVICE_LINK_NOT_OPEN`），故先开链路再开演。
+        openSerial();
         HttpResponse<byte[]> started = post("/api/v1/exercise/current",
                 mapper.createObjectNode().put("planId", planId));
         assertThat(started.statusCode()).isEqualTo(201);
         createdExercises.add(json(started).path("exerciseId").asText());
+        // 开演本身会下发 14B 轮询配置帧 + 7B 开始帧（见 ExerciseDownlinkHttpIT）：本类只数「指令下行」，
+        // 故清掉开演产生的字节，后面每处 sentCommands() 的计数才只反映用例自己发的指令。
+        links.clearSentCommands();
         return vests;
     }
 
@@ -495,14 +499,25 @@ class CommandHttpIT {
         }
         assertThat(put("/api/v1/plans/" + planId, binding).statusCode()).isEqualTo(200);
 
+        // 开演硬前置：马甲串口必须已 OPEN（409 `DEVICE_LINK_NOT_OPEN`）。
+        openSerial();
         HttpResponse<byte[]> started = post("/api/v1/exercise/current",
                 mapper.createObjectNode().put("planId", planId));
         assertThat(started.statusCode()).isEqualTo(201);
         createdExercises.add(json(started).path("exerciseId").asText());
+        // 同 startRunningExercise：清掉开演自身的下行字节，计数只反映用例发出的指令。
+        links.clearSentCommands();
         return vests;
     }
 
+    /**
+     * 开马甲串口（仿真）——契约 {@code startExercise} 的硬前置就是它已 {@code OPEN}。
+     *
+     * <p>先关后开：开链路端点对「已开」是 409（不是幂等），而一个用例里可能开演两次，
+     * 故先归零再开，任何入口都拿到 200。</p>
+     */
     private static void openSerial() throws Exception {
+        closeSerial();
         assertThat(post("/api/v1/devices/links/serial",
                 mapper.createObjectNode().put("portName", "COM7")).statusCode()).isEqualTo(200);
     }
