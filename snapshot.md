@@ -3,8 +3,7 @@
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
 > 当前任务：**`getVestLink`（每马甲链路状态）已去 501**（testing 第 22 节）——
 > 连同此前的 **PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验**（testing 第 21 节），
-> 改动仍在工作树、**未提交**（等当次授权）；本地 HEAD `398495b` = 远端 `origin/main`
-> （CAL-2c 四笔、`moveVest` 与读侧日志流水三笔均已推送）。
+> 已按 4 笔语义提交并入远端；代码四笔末端为 `0df5909`（本笔文档同步随之推送）。
 > 最新全量 `mvn test` **1097 项，失败/错误/跳过均 0**（见 testing 第 15~22 节）。
 > 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~22 节冲突处，以该处为准。
 
@@ -30,19 +29,19 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 下一原子任务的候选（详见 testing 第 3 节矩阵）：`ReplayController` 全 7 条仍 501（replay 读侧 4 + 导出 3，
 属 M5）；CAL-2 的**现场验收**（`calibrated_at` 可读性、50mm 静止阈值是否适配现场噪声）；
 Flutter 客户端（Android 单兵端 / Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段 PLAN 范围校验与 `getVestLink` 改动仍在工作树、
-未提交，网络失败时不得写成已入远端。
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段 PLAN 范围校验与 `getVestLink` 改动已按 4 笔
+语义提交并入远端（见 §2），网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | `398495b`（docs: 回写 moveVest 与读侧日志流水的证据、口径与快照） |
-| 实际远端main | `398495b`——与本机一致（`## main...origin/main`，无 ahead） |
-| 已推送 | `07ce6cc`（feat 标定三端点接线）、`c503a06`、`88377be`、`ceb2698`、`71bb579`（CAL-2c 四笔），以及本轮三笔 `865a0b9`（feat `moveVest` 手动置位）、`c1198db`（feat 当前演习日志流水端点）、`398495b`（docs）；更早的 CAL-1 系列与 MR-1~MR-3 亦已在远端 |
-| 未推送（仅本机） | 无（工作树改动尚未提交，故本机没有未推送的提交） |
-| 本轮继续成果 | 两条读侧/校验成果**仍在工作树、未提交**：①**PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验**（`PlanService.validate` 新增范围校验 + `PlanServiceIT` 3 例 + 契约 `RosterEntry` 补 `minimum`/`maximum`）；②**`getVestLink` 去 501**（A1 core：`SituationStateService` 每马甲 `framesTotal`/`lastFrameType`/`droppedTotal` + `SituationQuery.vestLink`；A2 api：`DeviceController` 4 参接线 + `ApiSkeletonSmokeIT`/`HwLinkHttpIT` 同步）。代码+契约 9 文件（`PlanService.java`、`PlanServiceIT.java`、`domain.yaml`、`SituationStateService.java`、`SituationQuery.java`、`SituationStateServiceTest.java`、`DeviceController.java`、`ApiSkeletonSmokeIT.java`、`HwLinkHttpIT.java`），文档 3 文件（`testing.md`/`decision-register.md`/`snapshot.md`，与代码分开提交）；全量 `mvn test` **1097 项**全绿；等提交/推送授权 |
+| 源码本地HEAD | 本轮代码四笔末端 `0df5909`（docs: 回写 getVestLink 与 PLAN 范围校验的证据、口径与快照）＋本笔快照同步提交 |
+| 实际远端main | 与本机一致：本轮已推送 `e0c8192` / `8c0f02e` / `b460716` / `0df5909` 四笔，本笔文档同步随之 `push`（`## main...origin/main` 无 ahead） |
+| 已推送 | 本轮 `e0c8192`（feat plan 范围校验）、`8c0f02e`（feat state 每马甲链路计数）、`b460716`（feat device `getVestLink` 接线）、`0df5909`（docs）；更早的 CAL-2c 四笔、`865a0b9`（feat `moveVest`）、`c1198db`（feat 当前演习日志流水）、`398495b`（docs）与 CAL-1/MR-1~MR-3 亦已在远端 |
+| 未推送（仅本机） | 无（本笔快照同步提交即为收尾，提交后同差 `origin/main`） |
+| 本轮继续成果 | 两条成果已按 4 笔语义提交并入远端：①**PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验**（`PlanService.validate` 范围校验 + `PlanServiceIT` 3 例 + 契约 `RosterEntry` 补 `minimum`/`maximum`，`e0c8192`）；②**`getVestLink` 去 501**（`8c0f02e` core 每马甲计数与读原语 + `b460716` api 接线与端到端）。全量 `mvn test` **1097 项**全绿 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
