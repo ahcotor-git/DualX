@@ -13,6 +13,7 @@
 > R2 轨迹分片（`getReplayTimeline`）与1112项全量结果见第24节；
 > R3 统计（`getReplayStatistics`）与1120项全量结果见第25节；
 > R4 导出与下载（`exportReplay` / `getExportTask` / `downloadExport`）与1138项全量结果见第26节。
+> M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性）与1140项最新全量结果见第27节。
 
 ## 1. 本次自动化结果
 
@@ -1079,7 +1080,7 @@ V11 只加列不加表。
 
 **在线态不受影响**：本段不引入新的在线判定，仍只由心跳驱动（5000ms）。
 
-本段为**代码验收**，不是生产发布批准。现场待验收项（连同本段一起挂起）：
+本段为**代码验收**，不是生产发布批准。现场待验收项（连同本段一起挂起，**已在第 27 节收口**）：
 `calibrated_at` 的可读性、UWB 盒子经 12001 的静止一致性阈值（50mm）是否适配现场噪声，
 以及**底图四角编号须按 `bs1` 左下 → `bs2` 右下 → `bs3` 右上 → `bs4` 左上录入**，
 即 `bs4` 必须与 `bs1` 构成宽度基准（`bs1→bs4`）、`bs2` 与 `bs1` 构成长度基准（`bs1→bs2`），
@@ -1807,4 +1808,88 @@ app（`ReplayExportHttpIT`，新增 2 条，全走真 Boot + 真安全链 + 真 
 签名窗口到期的处置动作与「篡改」同为 403 `FILE_URL_INVALID`，由 core 的 `HmacFileUrlSignerTest` 覆盖）。
 
 本段为**代码验收**，不是生产发布批准。
+
+## 27. M3 CAL-2 现场验收收口（`calibrated_at` 可读性）
+
+2026-10-28 对第 18 节 §18.3 挂起的三项现场待验收项收口。CAL-2 交付时 `t_map.calibrated_at`
+（V11 校准列）只有写点、没有读点：现场无法从产品面确认「标定到底生效了没有、什么时候生效的」。
+本段给的正是这条读取路径，并把另两项判据（50mm 静止阈值、四角编号）固化进验收清单。
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 605 | 0/0/0 | 新增 `BaseMapRepositoryIT.findCalibratedAt_*` 2 条（603 → 605） |
+| api | 139 | 0/0/0 | 计数不变：`MapDetail` 加字段、`MapController.toDetail` 传值，无新增用例 |
+| app | 328 | 0/0/0 | 计数不变：`MapBaseHttpIT.floorPointsAndUwbMetaOverRealHttp` 扩断言 |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1140** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径同第 20~26 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值，
+> 按 `target/surefire-reports/TEST-*.xml` 累加会漏掉 `@Nested` 内部类。
+> 第 26 节的计数表漏列了 `scds-protocol`（19 条），本节的表把它补齐，
+> 故「1140」不是「1138 + 2」——1138 里本就含这 19 条，两项相抵后只多 2 条（core 603 → 605）。
+
+### 27.1 落地范围与口径
+
+**契约先行**：`docs/api/schemas/domain.yaml` 的 `MapDetail` 新增可空 `calibratedAt`
+（`type: [string, 'null']`、`format: date-time`），位置紧随 `calibrated`。纯新增、向后兼容：
+不读该字段的客户端不受影响。**未新增错误码、未改任何既有字段的语义与必填性**。
+
+**读取分三层，各自只动一处**：
+
+1. `BaseMapRepository.findCalibratedAt(Collection<UUID>)`——一条 `IN` 查询回答整页，
+   返回 `mapId → 时刻`，未标定的行被 `calibrated_at IS NOT NULL` 滤掉（键缺失即「从未标定」）。
+2. `MapLedgerService.MapView` 加第 4 个分量 `calibratedAt`；`list` 整页一次取回，`get` 单件取回。
+3. `MapDetail` 加字段，`MapController.toDetail` 传 `view.calibratedAt()`。
+
+**为什么不把 `calibrated_at` 并进读取投影**：并进 `COLUMNS` 就得给领域记录 `BaseMap` 加第 11 个
+分量，全仓二十多处 `new BaseMap(...)` 都要跟着改；而在列表页逐行补一次查询又是 N+1——正是
+`MapView` 当初「一次读完三个值」要避免的那件事。两条都不取，改走「行投影不动 + 额外固定一条 SQL」。
+
+**写点未动**：`calibrated_at` 仍然只由 `MapLedgerService.saveUwbMeta` 一处写入
+（手工 `putUwbMeta` 与中心基准校准都汇到这里），本段只加了读，没有第二个写点。
+
+### 27.2 用例判据
+
+**core（`BaseMapRepositoryIT`，13 条，603 → 605 中新增 2 条）**：
+`markCalibrated`（只前进不回头、未知 id 零影响）等原 11 条不动，新增：
+
+12. `findCalibratedAt_returnsOnlyStampedRows`——建「已标定 / 未标定 / 不存在」三个 id，
+    只给第一个 `markCalibrated`；断言结果 `containsOnlyKeys(已标定)` 且时刻等于写入值。
+    即：未标定的与不存在的**同样缺席**，调用方补 `null` 时不必区分「没这行」与「没标过」。
+13. `findCalibratedAt_emptyIdsReturnEmptyMap`——空入参直接回空表、不发 SQL（空 `IN ()` 是语法错误）。
+
+**app（`MapBaseHttpIT.floorPointsAndUwbMetaOverRealHttp`，计数不变，扩断言）**：
+真 Boot + 真 MySQL + 真安全链，走真实 TCP：
+
+- `PUT uwb-meta` **之前**：`GET /maps/{id}` 的 `calibrated=false` 且 `calibratedAt` 为 `null`
+  ——两个字段同源，不该出现「一个有一个没有」；
+- `PUT uwb-meta` **之后**：`calibrated=true`，`calibratedAt` 可解析为 `Instant` 且落在
+  「刚刚」的窗口内（`Instant.now()-5s .. +5s`，服务端时钟，故只断量级）；
+- **列表页**（`GET /maps?size=200`，走整页批量读）里同一行的 `calibratedAt` 与详情**逐字相等**
+  ——两处口径若分叉，现场在列表上看到「已标定」却拿不到时刻。
+
+### 27.3 边界与不变式
+
+**两个字段同源但不等价**：`calibratedAt` 非空 ⇒ `calibrated=true`（`saveUwbMeta` 先校验齐备再写）；
+反之**不成立**——V11 之前就已标定的存量行是「`uwb_meta` 齐备但时刻为 `null`」，那是「当时没记」，
+不是「没标过」。该列**不随改名、换图型刷新**（`updated_at` 走 `ON UPDATE`，表达不了这件事）。
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移（**不补 V8**）、不开启 out-of-order、**未新增依赖**。
+
+本段为**代码验收**，不是生产发布批准。
+
+### 27.4 现场验收清单（三项挂起项的处置）
+
+| 挂起项 | 处置 | 现场判据 |
+|---|---|---|
+| `calibrated_at` 可读性 | **本段收口**：`GET /maps/{id}` 与列表都回 `calibratedAt` | 标定后取详情：`calibrated=true` 且 `calibratedAt` 非空；重启服务再取，时刻**仍在**（进程内标定会话那时已丢，这是唯一残留的证据） |
+| 50mm 静止阈值是否适配现场噪声 | **无需改码**：阈值取自配置键 `scds.uwb.calib-static-max-diff-cm`（默认 5.0 → 50mm） | 开标定时看服务端日志的「静止阈值=…mm」；若现场噪声导致误判 FAILED，读 `UwbCalibrationStatus.message`——它回的是「bs* 测距偏离中位数 X mm，超过阈值 Y mm」，按 X 的实际量级调这个配置键，不要改代码 |
+| 底图四角编号 | **按裁定不动代码**，只入本清单 | 必须按 `bs1` 左下 → `bs2` 右下 → `bs3` 右上 → `bs4` 左上录入，即 `bs1↔bs2` 是**长度**基准、`bs1↔bs4` 是**宽度**基准，两基准近似正交。编号错时四角仍能通过保存校验（只拦缺角 / 越界 / 三点共线 / 长宽非正整数），但长宽会落到错边——保存后用 `GET /maps/{id}/uwb-meta` 核对 `realLengthCm` 是否确实对应 `bs1↔bs2` 那条边 |
 

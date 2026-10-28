@@ -32,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -178,7 +179,7 @@ class MapBaseHttpIT {
     }
 
     @Test
-    @DisplayName("楼层点位与 UWB 标定走真实 HTTP：单楼层替换、未标定 404、越界 400")
+    @DisplayName("楼层点位与 UWB 标定走真实 HTTP：单楼层替换、未标定 404、越界 400、标定时刻可读")
     void floorPointsAndUwbMetaOverRealHttp() throws Exception {
         String token = adminToken();
         String mapId = createMap(token, "楼层点位验收");
@@ -207,11 +208,28 @@ class MapBaseHttpIT {
         // 图在、只是还没标定 → MAP_NOT_CALIBRATED，与「id 打错了」的 MAP_NOT_FOUND 分码
         assertProblem(get(metaPath, token), 404, "MAP_NOT_CALIBRATED", metaPath);
 
+        // 未标定：齐备标志与标定时刻必须一起为空——两个字段同源，不该出现「一个有一个没有」
+        JsonNode beforeCalibration = json(get("/api/v1/maps/" + mapId, token));
+        assertThat(beforeCalibration.path("calibrated").asBoolean()).isFalse();
+        assertThat(beforeCalibration.path("calibratedAt").isNull()).isTrue();
+
+        Instant beforeStamp = Instant.now().minusSeconds(5);
         assertThat(put(metaPath, uwbMeta(398, 298), token).statusCode()).isEqualTo(200);
         JsonNode detail = json(get("/api/v1/maps/" + mapId, token));
         assertThat(detail.path("calibrated").asBoolean()).isTrue();
         assertThat(detail.path("floorCount").asInt()).isEqualTo(1);
+        // 标定时刻由 saveUwbMeta 顺带落库（V11 校准列）：这是重启后唯一还在的「标定生效过」的证据，
+        // 进程内的标定会话状态那时已经没了。时刻取的是服务端时钟，故只断言「就在刚才」这个量级。
+        Instant stampedAt = Instant.parse(detail.path("calibratedAt").asText());
+        assertThat(stampedAt).isBetween(beforeStamp, Instant.now().plusSeconds(5));
         assertThat(json(get(metaPath, token)).path("realLengthCm").asDouble()).isEqualTo(3000.0);
+
+        // 列表页走的是整页批量读（一条 SQL 回答一页），必须与详情给出同一个时刻——
+        // 两处口径若分叉，现场在列表上看到的「已标定」就没有时刻可对。
+        JsonNode listed = listItem(token, mapId);
+        assertThat(listed.path("calibrated").asBoolean()).isTrue();
+        assertThat(listed.path("calibratedAt").asText())
+                .isEqualTo(detail.path("calibratedAt").asText());
 
         // 基站坐标越出底图宽高（400×300）→ 400 MAP_UWB_META_INCOMPLETE
         ObjectNode outOfBounds = uwbMeta(398, 298);
@@ -279,6 +297,23 @@ class MapBaseHttpIT {
         String mapId = json(created).path("mapId").asText();
         createdMaps.add(mapId);
         return mapId;
+    }
+
+    /**
+     * 从底图列表里取出指定 id 的那一项。
+     *
+     * <p>不按下标取：列表按新建时间倒序，其它用例残留的行会把目标挤走；本类要断的是
+     * 「这一行在列表里长什么样」，不是排序本身（排序由仓储 IT 覆盖）。</p>
+     */
+    private static JsonNode listItem(String token, String mapId) throws Exception {
+        HttpResponse<byte[]> listed = get("/api/v1/maps?size=200", token);
+        assertThat(listed.statusCode()).isEqualTo(200);
+        for (JsonNode item : json(listed).path("items")) {
+            if (mapId.equals(item.path("mapId").asText())) {
+                return item;
+            }
+        }
+        throw new AssertionError("底图列表里没有 " + mapId);
     }
 
     /**

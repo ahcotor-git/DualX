@@ -1,11 +1,14 @@
 # scds-next 交接快照
 
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M5 REPLAY 四段全部落地，`ReplayController` 七条方法全部去 501**（testing 第 23~26 节）——
-> R1 复盘读侧、R2 轨迹分片、R3 统计、R4 导出与下载（`exportReplay` / `getExportTask` / `downloadExport`）
-> 均已接 core `ReplayService` / `ExportTaskService`；**全仓「仍抛 501 的方法」计数已降为 0**。
-> 最新全量 `mvn test` **1138 项，失败/错误/跳过均 0**（见 testing 第 15~26 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~26 节冲突处，以该处为准。
+> 当前任务：**M3 CAL-2 现场验收收口（testing 第 27 节）**——`calibrated_at` 由「有写无读」补成
+> **`MapDetail.calibratedAt` 可读**（core 批量读 + 契约加可空字段 + api 接线，纯新增、向后兼容）；
+> 50mm 静止阈值确认**已可配**（`scds.uwb.calib-static-max-diff-cm`，无需改码）；
+> 四角编号仍**只有文档约定、无代码校验**，按裁定**不动代码**、只入验收清单。
+> 本段紧接 **M5 REPLAY 四段全部落地**（R1 复盘读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
+> `ReplayController` 七条全去 501、**全仓「仍抛 501 的方法」计数为 0**，已在远端）。
+> 最新全量 `mvn test` **1140 项，失败/错误/跳过均 0**（见 testing 第 15~27 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~27 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -28,9 +31,8 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 **M5 REPLAY R3（统计去 501）**，以及**M5 REPLAY R4（导出与下载去 501，至此 `ReplayController` 七条全通）**。
 
 下一原子任务的候选：**Flutter 客户端工程**（Android 单兵端 / Windows 指挥端均未开工）；
-**CAL-2 的现场验收**（`calibrated_at` 可读性、50mm 静止阈值是否适配现场噪声）；
 **网关下行接线**（14B/7B 帧）、**单实例保护 L6**、**T-PROD 部署**。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段 R4 的 HTTP 端到端补测**尚未提交**（见 §2），
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段 CAL-2 改动**尚未提交**（见 §2），
 网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
@@ -38,11 +40,11 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本轮沿用 R3 末端 `b430c12`（docs: 回写 M5 REPLAY R3 统计的证据、口径与快照）；R4 改动在工作树 |
-| 实际远端main | 以 `git status` 为准：**推送须当次授权**，未获授权前 R1/R2/R3 各三笔与 R4 改动仅在本机 |
-| 已推送 | 更早批次已在远端：`e0c8192`（feat plan 范围校验）、`8c0f02e`（feat state 每马甲链路计数）、`b460716`（feat device `getVestLink` 接线）、`0df5909`（docs）、`143d40a`（docs）；CAL-2c 四笔、`865a0b9`（feat `moveVest`）、`c1198db`（feat 当前演习日志流水）、`398495b`（docs）与 CAL-1/MR-1~MR-3 亦已在远端 |
-| 未推送（仅本机） | R1 三笔：`86b24b9`（feat replay core 读侧）、`011b0f3`（feat replay api 接线）、`65d1976`（docs）；R2 三笔：`8fdcadb`（feat replay core timeline）、`63949a1`（feat replay api 接线）、`9e3fb7e`（docs）；R3 三笔：`8e0aadf`（feat replay core 统计）、`7dc14d5`（feat replay api 接线）、`b430c12`（docs）；R4 改动尚未提交（core `SheetWriter`/`PlanRosterSheet`/`ExportTaskRepository`/`ReplayExportReport`/`ExportTaskService`/`ExportTaskServiceIT`；api `ReplayController`/`ApiSkeletonSmokeIT`/`ApiExceptionHandler`/`ApiExceptionHandlerBusinessTest`；app `RoleWritePermissionIT`/`MvcProblemIT`；docs `testing.md`/`snapshot.md`） |
-| 本轮继续成果 | **M5 REPLAY R4（导出与下载）去 501**——`ReplayController` 七条方法**全部去 501**（全仓 501 计数 → 0）：受理 202 合并、`@Scheduled` 2s 扫描渲染、签名下载 URL；新增 core `ExportTaskService` / `ReplayExportReport` / `SheetWriter` 与 16 例 `ExportTaskServiceIT`。全量 `mvn test` **1136 项**全绿（**尚未提交**） |
+| 源码本地HEAD | `5e641b2`（docs: 回写 R4 HTTP 端到端补测的计数与覆盖边界）；CAL-2 改动在工作树 |
+| 实际远端main | `5e641b2`（与本地一致）：R1/R2/R3 各三笔与 R4 全部改动（含 HTTP 端到端补测）**均已推送** |
+| 已推送 | `143d40a..5e641b2` 已入远端：R1 三笔 `86b24b9`/`011b0f3`/`65d1976`、R2 三笔 `8fdcadb`/`63949a1`/`9e3fb7e`、R3 三笔 `8e0aadf`/`7dc14d5`/`b430c12`、R4 三笔 `f856692`/`be06d6c`/`8466c85`，以及 R4 HTTP 端到端补测 `62d03c7`（test: app 三端点）与 `5e641b2`（docs）；更早批次（CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs、`e0c8192`/`8c0f02e`/`b460716`/`0df5909`/`143d40a` 与 CAL-1/MR-1~MR-3）亦已在远端 |
+| 未推送（仅本机） | CAL-2 改动尚未提交：core `BaseMapRepository`/`MapLedgerService`/`BaseMapRepositoryIT`；契约 `docs/api/schemas/domain.yaml`；api `MapDetail`/`MapController`；app `MapBaseHttpIT`；docs `testing.md`/`snapshot.md` |
+| 本轮继续成果 | **M3 CAL-2 现场验收收口**——`calibrated_at` 由「有写无读」补成 `MapDetail.calibratedAt` 可读（core 批量 `IN` 读、契约加可空字段、api 接线，纯新增向后兼容）；core `BaseMapRepositoryIT` +2（603 → 605）；全量 `mvn test` **1140 项**全绿（**尚未提交**） |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -158,11 +160,17 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn test`：2026-10-28，**1136项，失败/错误/跳过均0**：
-protocol19 + gateway49 + core603 + api139 + app326（solver/domain无测试）。
+**当前**全量`mvn test`：2026-10-28，**1140项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core605 + api139 + app328（solver/domain无测试）。
 计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）取值；按 `target/surefire-reports/TEST-*.xml`
 累加会少 core 的 21 项（`@Nested` 内部类如 `TrackSamplingTest$Sampler`/`$Writer` 不落在外层类 XML 里），
 口径说明见 testing 第 20 节。
+M3 CAL-2 现场验收收口新增证据：core `BaseMapRepositoryIT` **+2**（603 → 605，批量 `IN` 读
+`calibrated_at` 的「只回已标定行」与「空入参回空表」两条语义）；app `MapBaseHttpIT` 计数**不变**
+（在既有端到端用例内加 `calibratedAt` 的前后断言，并校验列表整页批量读与详情给出**同一时刻**）；
+全量 **1140 项**，详见 testing 第 27 节（含计数表，并订正 testing 第 26 节计数表**漏列 protocol 19 条**的口径）。
+R4 HTTP 端到端补测新增证据：app `ReplayExportHttpIT` **2 例**（326 → 328，真 Boot + 真库 + 真安全链
+端到端验三端点），详见 testing 第 26 节。
 M5 REPLAY R4 新增证据：core 新增 `ExportTaskServiceIT` **16 例**（587 → 603，全走真库真事务、
 落盘隔离覆写 `scds.files.root`），详见 testing 第 26 节；
 api 139 与 app 326 计数不变（`ApiSkeletonSmokeIT` 换替身/构造/路由值，
@@ -354,6 +362,19 @@ URL 组装在接口层（与 `MapController.imageUrl` 同形）；产物 TTL `sc
 **不新增清理任务**；**未改 openapi、未新增码**（`REPLAY_EXPORT_FAILED` 早已登记）、
 **未新增迁移**（复用 V5 的 `t_export_task`）、**未新增依赖**。
 
+2026-10-28新增已确认（M3 CAL-2 现场验收收口，见 testing 第 27 节）：
+标定时刻 `calibrated_at` 是**重启后唯一还在的证据**（标定会话状态本身只在内存里），故在契约
+`MapDetail` 加**可空** `calibratedAt`（纯新增、向后兼容）并接通读侧；
+它与 `calibrated` **同源但不等价**——`calibrated` 判「参数是否齐备」，本字段记「最近一次落库的时刻」，
+故**非空必然 `calibrated=true`，反之不成立**（改名/换图型不刷新它）；
+读取走 `BaseMapRepository.findCalibratedAt` 的**批量 `IN` 查询**（列表整页一次取回，避免 N+1），
+**不给 `BaseMap` 领域记录加第 11 个分量**（不扰动二十余处 `new BaseMap(...)`）；
+`saveUwbMeta` 仍是 `calibrated_at` 的**唯一写点**；
+50mm 静止阈值**已可配**（`scds.uwb.calib-static-max-diff-cm`，默认 5.0cm → 服务层 ×10 = 50mm），
+本段**不改码**、现场调参即可；四角编号（`bs1` 左下 → `bs2` 右下 → `bs3` 右上 → `bs4` 左上）
+**仍只有文档约定、无代码校验**，按裁定**不动代码**、只入现场验收清单（`validateUwbMeta` 只拦缺角/越界/
+三点共线/长宽非正整数）；**未改 openapi、未新增错误码、未新增迁移、未新增依赖**。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -388,7 +409,8 @@ URL 组装在接口层（与 `MapController.imageUrl` 同形）；产物 TTL `sc
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：M5 REPLAY R4（导出与下载去 501）详见 testing 第 26 节；
+最新证据：M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性）详见 testing 第 27 节；
+M5 REPLAY R4（导出与下载去 501）详见 testing 第 26 节；
 M5 REPLAY R3（统计去 501）详见 testing 第 25 节；
 M5 REPLAY R2（轨迹分片去 501）详见 testing 第 24 节；
 M5 REPLAY R1（复盘读侧去 501）详见 testing 第 23 节；
@@ -399,7 +421,8 @@ M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1136 项测试、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载）交付
-（代码与文档已就位、**待授权提交与推送**）与下一任务候选（Flutter 客户端 / CAL-2 现场验收 /
-R4 的 HTTP 端到端补测），
+本快照已同步 1140 项测试、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，含
+HTTP 端到端补测，**已推送**）与 M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性）交付
+（代码与文档已就位、**待授权提交与推送**）与下一任务候选（Flutter 客户端 /
+网关下行接线 / 单实例保护 L6 / T-PROD 部署），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。
