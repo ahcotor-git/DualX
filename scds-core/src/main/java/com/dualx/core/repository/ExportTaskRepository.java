@@ -11,6 +11,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -73,6 +74,23 @@ public class ExportTaskRepository {
                 .param("format", format.name())
                 .query(ExportTaskRepository::map)
                 .optional();
+    }
+
+    /**
+     * 待执行任务（{@code PENDING}），按创建序取一批。
+     *
+     * <p><b>为什么取旧不取新</b>：导出耗时主要在一场演习的编成规模上，先受理的先出结果；
+     * 若按新到旧取，一批批新任务会不断插到队首，把最早那条饿死——而它正是客户端等得最久的。
+     * 末位按 {@code id} 兜底：同一毫秒受理的两条（UUIDv7 时间有序）否则会在两拍之间换位，
+     * 导致某一条被反复跳过。</p>
+     */
+    public List<ExportTask> findPending(int limit) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM t_export_task WHERE state = :pending"
+                        + " ORDER BY created_at, id LIMIT :limit")
+                .param("pending", AsyncTaskState.PENDING.name())
+                .param("limit", limit)
+                .query(ExportTaskRepository::map)
+                .list();
     }
 
     /**

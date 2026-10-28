@@ -4,6 +4,7 @@ import com.dualx.core.domain.ExportFormat;
 import com.dualx.core.domain.PollMode;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.support.SheetWriter;
 import com.dualx.protocol.Team;
 
 import javax.xml.namespace.QName;
@@ -13,7 +14,6 @@ import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.events.StartElement;
 import javax.xml.stream.events.XMLEvent;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -25,21 +25,16 @@ import java.util.TreeMap;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
-import java.util.zip.ZipOutputStream;
 
 /**
  * 想定编成表（模板下载 / 文件导入）的编解码，XLSX 与 CSV 两条路径共用同一列序与同一套取值规则
  * （契约 {@code downloadPlanTemplate} / {@code importPlan}）。
  *
- * <p><b>为什么不引 POI / commons-csv</b>：这里要的只是「一张两列的纯文本表」——
- * 写出去是表头 + 示例行，读回来是若干行字符串。POI 会拖进一整棵 OOXML 依赖树，
- * 而模板文件本身用 JDK 自带的 {@code java.util.zip} + {@code javax.xml.stream} 就能读写
- * （XLSX 就是一个装着 XML 的 zip）。M5 复盘导出复用同一取向。</p>
- *
- * <p><b>写 XLSX 时用 inlineStr 而不是 sharedStrings</b>：共享字符串表要多写一个部件、
- * 多一条关系，只为省几 KB 重复文本——模板总共十几格，且 inlineStr 是合法 OOXML，
- * Excel、WPS、LibreOffice 都能打开。<b>读的时候两种都认</b>：操作员把模板用 Excel
- * 另存一次，字符串就会被改写成共享表形式。</p>
+ * <p><b>写出复用 {@link SheetWriter}</b>：XLSX/CSV 的字节生成已抽为通用写手
+ * （无 POI / commons-csv，用 JDK 自带的 {@code java.util.zip}），想定模板与 M5 复盘导出共用
+ * 同一份实现；本类只决定「写哪张表、叫什么名字」——列序与取值规则是 plan 域的。读回来仍是本类
+ * 自己的 {@code javax.xml.stream} 解析。<b>读侧 inlineStr 与 sharedStrings 两种都认</b>：
+ * 操作员把模板用 Excel 另存一次，字符串就会被改写成共享表形式。</p>
  *
  * <p><b>取值规则</b>（模板与导入同一套，避免「导出的模板自己导不回来」）：
  * 必需列 {@code 马甲编号} / {@code 队伍}；其余列可整列缺席，缺席即取契约默认
@@ -56,6 +51,9 @@ public final class PlanRosterSheet {
     /** 模板表头。列序即 XLSX 与 CSV 的写入顺序，也是解析时的定位依据。 */
     private static final List<String> HEADERS =
             List.of("马甲编号", "姓名", "队伍", "血量", "弹夹1", "弹夹2", "轮询模式");
+
+    /** XLSX 标签页名（CSV 无标签页概念，写出时忽略）。 */
+    private static final String SHEET_NAME = "编成";
 
     private static final String VEST_NUM = "马甲编号";
 
@@ -334,34 +332,7 @@ public final class PlanRosterSheet {
 
     // ── CSV ─────────────────────────────────────────────────────────────────
 
-    /**
-     * 最小 CSV 读写（RFC 4180 子集：逗号分隔、双引号包裹、{@code ""} 转义一个引号、CR/LF 换行）。
-     *
-     * <p>写出时带 UTF-8 BOM：不带 BOM 的 UTF-8 CSV 被 Windows 版 Excel 按 GBK 打开，
-     * 中文表头会变乱码——模板恰恰是给 Excel 填的。读入时把 BOM 当透明字符丢掉。
-     */
-    static byte[] csv(List<List<String>> rows) {
-        StringBuilder text = new StringBuilder("\uFEFF");
-        for (List<String> row : rows) {
-            for (int index = 0; index < row.size(); index++) {
-                if (index > 0) {
-                    text.append(',');
-                }
-                text.append(quote(row.get(index)));
-            }
-            text.append("\r\n");
-        }
-        return text.toString().getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static String quote(String value) {
-        if (value.indexOf(',') < 0 && value.indexOf('"') < 0
-                && value.indexOf('\n') < 0 && value.indexOf('\r') < 0) {
-            return value;
-        }
-        return '"' + value.replace("\"", "\"\"") + '"';
-    }
-
+    /** 读 CSV：把 BOM 当透明字符丢掉（带 BOM 的写出在 {@link SheetWriter#csv}）。 */
     private static List<List<String>> gridOfCsv(byte[] content) {
         String text = new String(content, StandardCharsets.UTF_8);
         if (!text.isEmpty() && text.charAt(0) == '\uFEFF') {
@@ -408,64 +379,14 @@ public final class PlanRosterSheet {
 
     // ── XLSX ────────────────────────────────────────────────────────────────
 
-    static byte[] xlsx(List<List<String>> rows) {
-        try (ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-             ZipOutputStream zip = new ZipOutputStream(bytes, StandardCharsets.UTF_8)) {
-            part(zip, "[Content_Types].xml", CONTENT_TYPES);
-            part(zip, "_rels/.rels", ROOT_RELS);
-            part(zip, "xl/workbook.xml", WORKBOOK);
-            part(zip, "xl/_rels/workbook.xml.rels", WORKBOOK_RELS);
-            part(zip, "xl/worksheets/sheet1.xml", sheetXml(rows));
-            zip.finish();
-            return bytes.toByteArray();
-        } catch (IOException ex) {
-            // 全在内存里读写，走到这里只可能是 JVM 级别的意外
-            throw new IllegalStateException("生成 XLSX 模板失败", ex);
-        }
-    }
-
+    /**
+     * 模板字节。写出实体在 {@link SheetWriter}（想定模板与复盘导出共用同一份 XLSX/CSV 写法），
+     * 本类只决定「写哪张表、叫什么名字」——列序与取值规则是 plan 域的，不该下沉到通用写手。
+     */
     static byte[] write(List<List<String>> rows, ExportFormat format) {
-        return format == ExportFormat.CSV ? csv(rows) : xlsx(rows);
-    }
-
-    private static void part(ZipOutputStream zip, String name, String content) throws IOException {
-        zip.putNextEntry(new ZipEntry(name));
-        zip.write(content.getBytes(StandardCharsets.UTF_8));
-        zip.closeEntry();
-    }
-
-    private static String sheetXml(List<List<String>> rows) {
-        StringBuilder xml = new StringBuilder(XML_DECLARATION)
-                .append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
-                .append("<sheetData>");
-        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
-            int line = rowIndex + 1;
-            xml.append("<row r=\"").append(line).append("\">");
-            List<String> row = rows.get(rowIndex);
-            for (int column = 0; column < row.size(); column++) {
-                xml.append("<c r=\"").append(columnName(column)).append(line)
-                        .append("\" t=\"inlineStr\"><is><t xml:space=\"preserve\">")
-                        .append(escape(row.get(column)))
-                        .append("</t></is></c>");
-            }
-            xml.append("</row>");
-        }
-        return xml.append("</sheetData></worksheet>").toString();
-    }
-
-    /** 列下标 → 列名（0→A、25→Z、26→AA）。 */
-    private static String columnName(int index) {
-        StringBuilder name = new StringBuilder();
-        int value = index;
-        do {
-            name.insert(0, (char) ('A' + value % 26));
-            value = value / 26 - 1;
-        } while (value >= 0);
-        return name.toString();
-    }
-
-    private static String escape(String text) {
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return format == ExportFormat.CSV
+                ? SheetWriter.csv(rows)
+                : SheetWriter.xlsx(List.of(new SheetWriter.Sheet(SHEET_NAME, rows)));
     }
 
     private static List<List<String>> gridOfXlsx(byte[] content) {
@@ -654,30 +575,4 @@ public final class PlanRosterSheet {
         return new BusinessException(ApiErrorCode.VALIDATION_FAILED,
                 "模板文件无法解析：XLSX 内容不是合法 XML（" + ex.getMessage() + "）");
     }
-
-    private static final String XML_DECLARATION =
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
-
-    private static final String CONTENT_TYPES = XML_DECLARATION + """
-            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-              <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-              <Default Extension="xml" ContentType="application/xml"/>
-              <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-              <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-            </Types>""";
-
-    private static final String ROOT_RELS = XML_DECLARATION + """
-            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-            </Relationships>""";
-
-    private static final String WORKBOOK = XML_DECLARATION + """
-            <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-              <sheets><sheet name="编成" sheetId="1" r:id="rId1"/></sheets>
-            </workbook>""";
-
-    private static final String WORKBOOK_RELS = XML_DECLARATION + """
-            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-            </Relationships>""";
 }
