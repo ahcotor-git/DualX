@@ -49,19 +49,19 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 段 5 Windows 指挥端骨架（本机缺 Visual Studio，**不能原生构建**，安装需另授权）。
 另有一条单列后续：**T-PROD 部署**；以及一条**观察项**——硬件 ACK 解析（「已发送」≠「已确认」仍无人写入
 `ACKED`，且协议无回执帧）。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮 M6 CLIENT-BASE 段 0 的脚手架**已提交 1 笔并推送**
-（`b16c348`，见 §2），docs 回写笔待提交。
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮 M6 CLIENT-BASE 段 0 的**两笔**（脚手架 `b16c348` + docs `f4c9f15`）
+**均已提交并推送**（见 §2）。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本轮 M6 CLIENT-BASE 段 0 的**脚手架一笔已入远端**（`b16c348`），工作树在提交本 docs 笔前仅有本笔 3 个文档改动（`docs/decision-register.md`/`docs/testing.md`/`snapshot.md`）；HEAD 随 docs 回写前移，故不钉死具体 hash |
-| 实际远端main | 本轮已入远端的是 **`b16c348 chore(clients): 生成 Flutter 工程脚手架（D13 一次性例外）`**（其前为 `1950b4e` 快照订正）；更早为本轮 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
-| 已推送 | `1950b4e..b16c348` 已入远端：**M6 CLIENT-BASE 段 0 脚手架一笔**（`clients/scds_client`，45 文件）；更早 `4b76f2b..068d706` 为 R4 遗留收口三笔（`eb755f0` `test(app)` + `4f2d546` `docs` + `068d706` 快照订正）、`ac9353a..4b76f2b` 为 L6 口径收口三笔；再往前（链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3）亦均在远端 |
-| 未推送（仅本机） | 本笔 **docs 回写**——`docs/decision-register.md`（待确认表 D12/D13 裁定行 + 文末「D12 / D13 裁定与 M6 CLIENT-BASE 段 0」节）、`docs/testing.md`（新增第 32 节）、`snapshot.md`（本快照）；提交并推送后此格即为**无** |
-| 本轮继续成果 | **M6 CLIENT-BASE 段 0：Flutter 工程脚手架**——按 D12（单工程 + 共享包 + 双入口）/D13（一次性脚手架例外）生成 `clients/scds_client`（`flutter create --org com.dualx --project-name scds_client --platforms=android,windows`；磁盘 50 文件 / **git 跟踪 45 文件**），`flutter analyze` 无问题、`flutter test` 通过（模板默认 Counter）。**只做脚手架，不含业务**：未新增依赖、未安装 Visual Studio（Windows 本机不能原生构建）、后端与协议冻结项一字未动，**Maven 全量计数仍 1151**。脚手架笔 `b16c348` **已推送**；本 docs 笔待提交 |
+| 源码本地HEAD | 本轮 M6 CLIENT-BASE 段 0 的**两笔均已入远端**（脚手架 `b16c348` + docs `f4c9f15`），工作树**干净**、与 `origin/main` 同步；HEAD 随后续回写前移，故不钉死具体 hash |
+| 实际远端main | 本轮已入远端的是 **`b16c348 chore(clients): 生成 Flutter 工程脚手架（D13 一次性例外）`** 与 **`f4c9f15 docs: 登记 D12/D13 裁定与 M6 CLIENT-BASE 段 0 脚手架`**（其前为 `1950b4e` 快照订正）；更早为本轮 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
+| 已推送 | `b16c348..f4c9f15` 已入远端：**M6 CLIENT-BASE 段 0 两笔**（`b16c348` 脚手架 `clients/scds_client` 45 文件 + `f4c9f15` docs 回写 3 文件）；更早 `4b76f2b..068d706` 为 R4 遗留收口三笔（`eb755f0` `test(app)` + `4f2d546` `docs` + `068d706` 快照订正）、`ac9353a..4b76f2b` 为 L6 口径收口三笔；再往前（链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3）亦均在远端 |
+| 未推送（仅本机） | **无**。本轮 M6 CLIENT-BASE 段 0 的脚手架笔（`b16c348`）与 docs 笔（`f4c9f15`：`docs/decision-register.md` + `docs/testing.md` 第 32 节 + `snapshot.md`）**均已提交并推送**（`b16c348..f4c9f15 main -> main`） |
+| 本轮继续成果 | **M6 CLIENT-BASE 段 0：Flutter 工程脚手架**——按 D12（单工程 + 共享包 + 双入口）/D13（一次性脚手架例外）生成 `clients/scds_client`（`flutter create --org com.dualx --project-name scds_client --platforms=android,windows`；磁盘 50 文件 / **git 跟踪 45 文件**），`flutter analyze` 无问题、`flutter test` 通过（模板默认 Counter）。**只做脚手架，不含业务**：未新增依赖、未安装 Visual Studio（Windows 本机不能原生构建）、后端与协议冻结项一字未动，**Maven 全量计数仍 1151**。本段两笔（脚手架 `b16c348` + docs `f4c9f15`）**均已推送** |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
