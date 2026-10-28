@@ -14,19 +14,25 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +58,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 回 xlsx / text/csv；签名 URL 走 {@code FileController}，它按**真实字节**嗅探，
  * 非图片一律 {@code application/octet-stream}。两者都正确，但不可互相冒充——本类同时断言。</p>
  *
+ * <p><b>签名窗口过期也在本类验</b>：签名器持有 {@code Clock.systemUTC()}，HTTP 测试推不动时钟，
+ * 故构造「签名本身正确、仅 {@code exp} 已过」的样本要靠**测试侧按契约独立重算**一份签名
+ * （固定测试密钥 + {@code 相对路径 + '\n' + exp} 的 HMAC-SHA256）。同一算法先用「未过期」正例
+ * 自证与服务端一致，过期样本的 403 才确实是**过期**所致，而不是「签错」。</p>
+ *
  * <p>不写成 {@code @Transactional}——请求走的是应用自己的线程与连接，测试事务帮不上忙；
  * 渲染还发生在 {@code @Scheduled} 的线程上。写入用随机编号段与 UUID，并在 {@link #cleanUp()}
  * 里按场次 / 想定 / 编号精确回收。</p>
@@ -64,6 +75,14 @@ class ReplayExportHttpIT {
 
     private static final String XLSX_MIME =
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    /**
+     * 固定签名密钥：显式配置后才能由测试按契约独立重算签名，构造「已过期」样本（见 {@link #resignWithExp}）。
+     *
+     * <p>留空时应用会为本次启动随机生成密钥并打 WARN，测试就拿不到它、只能靠等 15 分钟过 TTL。
+     * 显式值需 ≥32 字符，否则应用直接启动失败（{@code FileStorageProperties}）。</p>
+     */
+    private static final String SIGN_SECRET = "replay-export-http-it-sign-secret-0001";
 
     /** 产物落盘根的一次性隔离目录；理由同 {@code MapBaseHttpIT.FILES_ROOT}（事务回滚不删已落盘文件）。 */
     private static final String FILES_ROOT =
@@ -84,11 +103,12 @@ class ReplayExportHttpIT {
     static void bootFullApplication() throws Exception {
         KeyPair key = ApplicationStartupSupport.newKeyPair();
         var environment = ApplicationStartupSupport.environment(true, key);
-        // 只加文件存储与网关模式两项，不动 .env.test 与其它已有配置。
+        // 只加文件存储（根 + 固定签名密钥）与网关模式三项，不动 .env.test 与其它已有配置。
         // 网关走仿真：开演要求马甲串口链路已开（409 `DEVICE_LINK_NOT_OPEN`），而本机没有 COM 口——
         // 与 DeviceSelfHttpIT / CommandHttpIT 同策。本类只验导出，不验链路。
         environment.getPropertySources().addFirst(new MapPropertySource("replay-export-http-files",
                 Map.of("scds.files.root", FILES_ROOT,
+                        "scds.files.sign-secret", SIGN_SECRET,
                         "scds.gateway.mode", "simulator")));
         context = ApplicationStartupSupport.start(environment);
         base = "http://127.0.0.1:"
@@ -216,6 +236,16 @@ class ReplayExportHttpIT {
         // 签名被篡改 → 403 FILE_URL_INVALID：免 Bearer 不等于免验签
         assertProblem(get(downloadUrl + "A", null), 403, "FILE_URL_INVALID", "/api/v1/files");
 
+        // 签名窗口过期：先自证重算算法与服务端一致（未过期样本仍 200，取回同一份字节），
+        // 再把 exp 拨到过去 —— 签名本身没错，只是过期，落到同一个 403 FILE_URL_INVALID
+        // （契约刻意不拆分「签名错」与「已过期」：客户端处置动作相同，区分只会泄露路径是否存在）。
+        String notYetExpired = resignWithExp(downloadUrl, Instant.now().plusSeconds(300).getEpochSecond());
+        HttpResponse<byte[]> byResigned = get(notYetExpired, null);
+        assertThat(byResigned.statusCode()).isEqualTo(200);
+        assertThat(byResigned.body()).isEqualTo(downloaded.body());
+        String expired = resignWithExp(downloadUrl, Instant.now().minusSeconds(60).getEpochSecond());
+        assertProblem(get(expired, null), 403, "FILE_URL_INVALID", "/api/v1/files");
+
         // 两条导出下载路由都在安全链内：不带 Bearer 一律 401，签名 URL 才是唯一的免鉴权入口
         assertThat(get(downloadPath, null).statusCode()).isEqualTo(401);
         assertThat(get("/api/v1/replays/" + replayId + "/exports/" + taskId, null).statusCode()).isEqualTo(401);
@@ -303,6 +333,47 @@ class ReplayExportHttpIT {
         delete("/api/v1/devices/links/serial", admin);
         assertThat(post("/api/v1/devices/links/serial",
                 mapper.createObjectNode().put("portName", "COM7"), admin).statusCode()).isEqualTo(200);
+    }
+
+    /**
+     * 用固定测试密钥重签同一条文件 URL，只把 {@code exp} 换成给定值（见 {@link #SIGN_SECRET}）。
+     *
+     * <p>不靠推进时钟：HTTP 用例共用真实应用上下文，签名器持有 {@code Clock.systemUTC()}，测试改不动它。
+     * 这里按契约在测试侧独立重算——{@code 相对路径 + '\n' + exp} 的 HMAC-SHA256、Base64URL 无填充
+     * （见 {@code HmacFileUrlSigner}），既能精确落在过去/未来，又是一份**独立于实现**的判据。
+     * 调用方须先用「未过期」样本自证这份重算与服务端一致，过期样本的 403 才说明是过期所致。</p>
+     *
+     * <p>路径参数**原样沿用**原 URL 里已编码的片段，避免自己编解码出错；参与签名的仍是解码后的相对路径。</p>
+     */
+    private static String resignWithExp(String signedUrl, long exp) {
+        int query = signedUrl.indexOf('?');
+        String pathParam = null;
+        for (String pair : signedUrl.substring(query + 1).split("&")) {
+            if (pair.startsWith("path=")) {
+                pathParam = pair;
+            }
+        }
+        if (pathParam == null) {
+            throw new IllegalArgumentException("签名 URL 里没有 path 参数：" + signedUrl);
+        }
+        String rawPath = URLDecoder.decode(pathParam.substring("path=".length()), StandardCharsets.UTF_8);
+        String expValue = Long.toString(exp);
+        return signedUrl.substring(0, query + 1) + pathParam + "&exp=" + expValue
+                + "&signature=" + URLEncoder.encode(hmac(rawPath, expValue), StandardCharsets.UTF_8);
+    }
+
+    /** 契约签名：{@code 相对路径 + '\n' + exp} 的 HMAC-SHA256，Base64URL 无填充。 */
+    private static String hmac(String relativePath, String exp) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(SIGN_SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            mac.update(relativePath.getBytes(StandardCharsets.UTF_8));
+            mac.update((byte) '\n');
+            mac.update(exp.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal());
+        } catch (GeneralSecurityException failure) {
+            throw new IllegalStateException("测试侧重算文件 URL 签名失败", failure);
+        }
     }
 
     /** 受理一次导出并返回 taskId；断言 202，受理语义本身由上面的用例细验。 */
