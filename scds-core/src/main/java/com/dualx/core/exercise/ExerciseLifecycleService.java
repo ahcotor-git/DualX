@@ -71,7 +71,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * D06）。链路未开时下发只会进到无人消费的队列并回报成功（假成功），早拒好过留下一场「配置根本没发出去」
  * 的演习。停演**不设**此门禁——卡死的场次必须随时停得掉。
  *
- * <p><b>仍未落地</b>：同库单实例保护（L6）——它会牵动既有集成测试，单列后续任务。
+ * <p><b>同库单实例保护（L6）不在本类，属进程管理层</b>：应用侧该有的三件已就位——开演
+ * {@code claim(owner_instance)}、2000ms 心跳（守卫带 owner）、{@code uk_exercise_running} 唯一索引
+ * （V4 生成列 {@code running_flag}）。它们保证「一场之内」不自相矛盾，却挡不住「第二个进程启动时把
+ * 在跑场次一律收尾」——{@link ExerciseLivenessRecover} 的收尾**不区分 owner**。该前提只能由进程管理层
+ * 保证，部署规范见 {@code docs/environments.md} §6.4；按 D05 不引分布式中间件、不带库级会话锁或
+ * {@code GET_LOCK}、不做租约，故本类**无相关代码改动**。
  */
 @Service
 public class ExerciseLifecycleService {
