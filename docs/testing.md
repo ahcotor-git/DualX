@@ -603,7 +603,8 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 
 现存 Flyway MySQL 8.4 支持警告和 Mockito 动态 agent 提示未修改，与本段无关。
 本段为**代码验收**，不是生产发布批准；不提交、不推送，工作树成果保留。
-`getVestLink`/`getLinks`/`listSerialPorts` 与串口/UWB 开关仍为 501——`scds-gateway` 无主源码。
+`getVestLink`/`getLinks`/`listSerialPorts` 与串口/UWB 开关当时仍为 501——`scds-gateway` 无主源码
+（链路端点已由 HW-LINK 收口，`getVestLink` 已由第 22 节收口）。
 `t_anchor` 与 `t_map.uwb_meta` 的双源问题按设计缺口登记，本段不写 `uwb_meta`。
 
 ## 13. M4 DEVICE-SELF 单兵自身视角
@@ -632,7 +633,8 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
   - 设备令牌读自身实时状态 200、读他人马甲 403 `AUTH_FORBIDDEN`（决策 04 D04「仅自身」的可执行形式）；
   - 重登顶掉旧会话后，旧设备令牌在 `device/me` 上 401 `AUTH_TOKEN_INVALID`。
 - `RoleWritePermissionIT`（app，65）：矩阵新增三条——设备令牌读自身放行、读他人 403、指挥台读任意马甲放行。
-- `ApiSkeletonSmokeIT`（api，71）：`device/me` 不再是占位，501 形状改用仍为占位的 `devices/vests/{n}/link`。
+- `ApiSkeletonSmokeIT`（api，71）：`device/me` 不再是占位，501 形状改用仍为占位的 `devices/vests/{n}/link`
+  （该端点已由第 22 节接线，501 示例现改用真占位的 `GET /api/v1/replays`）。
 
 ### 13.2 两处只在方法级鉴权上才看得见的约定
 
@@ -654,7 +656,8 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 ### 13.4 边界
 
 现存 Flyway MySQL 8.4 支持警告与 Mockito 动态 agent 提示未修改，与本段无关。
-`getVestLink` 仍为 501（`lastFrameType`/`framesTotal`/`droppedTotal` 在 `UnitState` 无数据源，单列任务）。
+`getVestLink` 当时仍为 501（`lastFrameType`/`framesTotal`/`droppedTotal` 在 `UnitState` 无数据源，单列任务）
+——已由第 22 节收口（每马甲三计数补在 `SituationStateService`）。
 `docs/api/openapi.yaml` 中 `deviceToken` 的注释已从「自身 + 所属队伍」更正为「仅自身」（与 D04 对齐）。
 本段为**代码验收**，不是生产发布批准。
 
@@ -717,7 +720,7 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 
 本段只覆盖**优雅停机**这一条路径（`context.close()`）。现场强杀 / 断电不在本段，属 T-RECOVERY。
 WS 判据的口径是「会话被服务端断开」，不是「收到关闭帧」——后者与设计 02 §4.8 的裁定相反。
-`getVestLink` 与 COMMAND / CALIBRATION 仍未落地，与本段无关。
+`getVestLink` 与 COMMAND / CALIBRATION 仍未落地，与本段无关（`getVestLink` 当时仍 501，已由第 22 节收口）。
 本段为**代码验收**，不是生产发布批准。
 
 ## 15. M3 COMMAND 指令下发（MR-1 + MR-2）
@@ -794,14 +797,16 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 ### 15.3 边界
 
 `ApiSkeletonSmokeIT` 的 70 条契约路由按「非 404」判定；已落地的指令端点在建线前即按令牌/参数失败
-（401 / 400），不会被该判据放过。它的 501 断言用例仍用真占位端点 `GET /devices/vests/1/link`。
-`getVestLink` 仍 501，与本段无关（`move` 当时仍 501，已由第 19 节收口）。`CommandService` 刻意不加 `@Transactional`：
+（401 / 400），不会被该判据放过。它的 501 断言用例当时仍用真占位端点 `GET /devices/vests/1/link`
+（该端点已由第 22 节接线，501 示例现改用真占位的 `GET /api/v1/replays`）。
+`getVestLink` 当时仍 501，已由第 22 节收口（`move` 当时仍 501，已由第 19 节收口）。`CommandService` 刻意不加 `@Transactional`：
 物理下发已不可回滚，只把两个库写包成事务会给出一种并不存在的「整体回滚」错觉。
 
-**已知缺口（本次不拦，单列任务）**：`t_plan_roster` 的 `hp` / `ammo1` / `ammo2` 在库层与 PLAN 写入侧
-都没有范围校验（`ck_plan_roster` 只覆盖 `team` / `mode` / `vest_num`），而请求体侧的 `@Max` 又会被
-「未传时取编成原值」这条路绕过；越界原值（如 hp=300）会在 14B 组帧时静默截断。`CONFIG` 也不写审计，
-故这类覆盖没有留痕。
+**已知缺口（已在 PLAN 写入侧收口，见第 21 节）**：`t_plan_roster` 的 `hp` / `ammo1` / `ammo2`
+在**库层**仍无范围校验（`ck_plan_roster` 只覆盖 `team` / `mode` / `vest_num`，V3 是已应用的历史迁移、
+不改），而请求体侧的 `@Min` / `@Max` 又会被「未传时取编成原值」这条路绕过；越界原值（如 hp=300）
+会在 14B 组帧时静默截断。故 PLAN 的两条写路径（`replaceRoster` / `importPlan`）在
+`PlanService.validate` 里统一拦下越界值。`CONFIG` 也不写审计，故这类覆盖没有留痕。
 
 本段为**代码验收**，不是生产发布批准。
 
@@ -884,7 +889,8 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 **队列卫生**语义，不是「真的在等某个 ACK」。现场若要解释「指令为什么变成 EXPIRED」，答案应当是
 「发出去后没有回音，按 TTL 收口」，而不是「确认超时」。
 
-`getVestLink`、M3 CALIBRATION、M5 EXPORT 仍 501，与本段无关（`move` 当时仍 501，已由第 19 节收口）。
+`getVestLink`、M3 CALIBRATION、M5 EXPORT 当时仍 501，与本段无关（`move` 当时仍 501，已由第 19 节收口；
+`getVestLink` 已由第 22 节收口）。
 
 本段为**代码验收**，不是生产发布批准。
 
@@ -966,8 +972,8 @@ app（`SituationStateIT`，2）：
 `lastHeartbeatAt`；因此「只有 UWB、没有心跳」的马甲不会被判在线——这是既有口径，非本轮回归。
 
 **CAL-2 已收口**：三个标定端点去 501、进程内标定状态机、`V11` 校准列、现场实测长宽覆盖
-写回 `uwb_meta` 均已交付，证据见第 18 节。`getVestLink`、M5 EXPORT 仍 501，
-与本段无关（`move` 当时仍 501，已由第 19 节收口）。
+写回 `uwb_meta` 均已交付，证据见第 18 节。`getVestLink`、M5 EXPORT 当时仍 501，
+与本段无关（`move` 当时仍 501，已由第 19 节收口；`getVestLink` 已由第 22 节收口）。
 
 本段为**代码验收**，不是生产发布批准；UWB 盒子经 12001 的连续坐标、容量与长稳属现场待验收。
 
@@ -1161,12 +1167,11 @@ app（`CommandHttpIT`，真生产入口 + 真 MySQL + 真安全链 + `scds.gatew
 在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
 不改历史迁移、不开启 out-of-order。
 
-**仍未交付**：全仓仍抛 501 的只剩 8 条——`DeviceController.getVestLink` 1 条，以及
-`ReplayController` 全部 7 条（`listReplays` / `getReplay` / `getReplayTimeline` /
-`getReplayStatistics` / `exportReplay` / `getExportTask` / `downloadExport`）；
-`ExerciseController.listCurrentExerciseLogs` 已由第 20 节收口（§19 当时记的「M5 EXPORT 三条」
-只是这 7 条中的一部分，漏记了 replay 读侧 4 条）。
-Flutter 两端未开工。`t_plan_roster` 的 `hp` / `ammo1` / `ammo2` 范围校验仍缺（见 15.3）。
+**仍未交付**：全仓仍抛 501 的只剩 7 条——`ReplayController` 全部 7 条（`listReplays` / `getReplay` /
+`getReplayTimeline` / `getReplayStatistics` / `exportReplay` / `getExportTask` / `downloadExport`）；
+`DeviceController.getVestLink` 已由第 22 节收口；`ExerciseController.listCurrentExerciseLogs` 已由第 20 节收口
+（§19 当时记的「M5 EXPORT 三条」只是这 7 条中的一部分，漏记了 replay 读侧 4 条）。
+Flutter 两端未开工。`t_plan_roster` 的 `hp` / `ammo1` / `ammo2` 范围校验已由第 21 节收口（见 15.3）。
 
 本段为**代码验收**，不是生产发布批准。
 
@@ -1245,6 +1250,157 @@ app（`ExerciseLifecycleHttpIT`，真生产入口 + 真 MySQL + 真安全链）�
 不改历史迁移、不开启 out-of-order。本段**未新增错误码**（复用既有 `VALIDATION_FAILED`）。
 
 **只读**：本端点不写 `t_exercise_log`、不写 `t_exercise_command`、不发字节。
+
+本段为**代码验收**，不是生产发布批准。
+
+## 21. PLAN 编成 `hp` / `ammo1` / `ammo2` 范围校验
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 558 | 0/0/0 | `PlanServiceIT` 新增 3（原 17 → 20） |
+| api | 139 | 0/0/0 | 未改动 |
+| app | 325 | 0/0/0 | 未改动 |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1090** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+### 21.1 落地范围与口径
+
+**补的是哪一处缺口**：`CommandService.setVestConfig` 的 javadoc 与第 15.3 节都记过——编成的
+`hp` / `ammo1` / `ammo2` 在库层与 PLAN 写入侧都没有范围校验，越界值会在 14B 轮询配置帧组帧时
+被静默截断（`DownlinkCommands.pollConfig` 的 `d[5] = (byte) hp`），现场表现为「设了参数没生效」。
+
+**边界来源**：`docs/PROTOCOL.md` 下行指令表的 14B 轮询配置帧——`hp` 占 **1 字节**、
+`ammo1` / `ammo2` 各占 **2 字节大端**，即 `hp ∈ [0, 255]`、`ammo ∈ [0, 65535]`。与契约
+`docs/api/schemas/domain.yaml` 的 `VestConfigRequest` 完全一致——两个模型是同一条帧的两个入口。
+
+**校验点**：`PlanService.validate`——它同时守着 `replaceRoster`（HTTP `PUT`）与 `importPlan`
+（模板导入）两条写路径，加在这里一处覆盖两条，脏值不落库。越界抛 400 `VALIDATION_FAILED`
+（复用既有错误码，不新增），文案带上马甲编号与字段名，避免操作员在一份几十条的编成里盲找。
+
+**为什么不在库层加 CHECK**：`t_plan_roster` 由 V3 建表，是**已应用的历史迁移**，不改；补 DDL
+只能新开一份迁移，而库层没有外键、一致性本来就由应用层保证（V3 注释明说）。本段未新增迁移。
+
+**契约同步**：`domain.yaml` 的 `RosterEntry` 补上 `hp` / `ammo1` / `ammo2` 的 `minimum` /
+`maximum`（此前只有 `default`），与 `VestConfigRequest` 对齐——服务端是真正的判据，契约写明边界。
+
+### 21.2 用例判据
+
+core（`PlanServiceIT`，真库真事务）新增 3 条：
+
+1. `replaceRoster_acceptsTheProtocolBounds`——`0/0/0` 与 `255/65535/65535` 都落库成功，
+   读回值逐字段等于传入值（读回顺序按「队伍 → 马甲编号」，`BLUE` 在 `RED` 前）。
+2. `replaceRoster_withAnHpPastOneByteOrAmmoPastTwoBytes_isRejectedWithoutTouchingTheStoredRoster`——
+   `hp=256` 与 `ammo1=65536` 各报一次 400 `VALIDATION_FAILED`；两次拒绝之后库里仍是上一次那份
+   （「不产生部分写入」）。
+3. `replaceRoster_withANegativeHp_isRejected`——`hp=-1` 报 400；库中编成为空。
+
+### 21.3 边界与不变式
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不开启 out-of-order。本段**未新增错误码**（复用既有 `VALIDATION_FAILED`）、
+**未新增迁移**。
+
+**校验顺序**：先查重（纯内存、不落库）→ 再查台账 → 最后查范围。查重在前的理由与原来一致：
+重号必然伴随同一条 `uk_plan_roster` 冲突，先报重号才能给出「哪一号重复」这种可处置的信息。
+
+本段为**代码验收**，不是生产发布批准。
+
+## 22. `getVestLink` 每马甲链路状态（`GET /api/v1/devices/vests/{vestNum}/link`）
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动（本端点不经过下行链路，也不发字节） |
+| core | 564 | 0/0/0 | `SituationStateServiceTest` 新增 6（原 36 → 42） |
+| api | 139 | 0/0/0 | `ApiSkeletonSmokeIT` 换 4 参构造并把 501 示例改为 `/api/v1/replays`，计数不变 |
+| app | 326 | 0/0/0 | `HwLinkHttpIT` 新增 1（原 5 → 6） |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1097** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径同第 20/21 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值，
+> 按 `target/surefire-reports/TEST-*.xml` 累加会漏掉 `@Nested` 内部类。
+
+### 22.1 落地范围与口径
+
+**补的是哪一处缺口**：`DeviceController.getVestLink` 是全仓最后一条「属 STATE、却被硬件工作包
+有意暂缓」的端点——[设计 05](design/05-hw-link.md) §5 的 H6 明示它**不接线**，理由是它返回的是
+**每马甲**在线态，权威来源是 core 状态机（[设计 06](design/06-state.md) §S7）而非链路级状态。
+
+**六字段来源（契约 [device.yaml](api/paths/device.yaml) L313-356）**：`vestNum`/`online`/`lastHeartbeatAt` 与
+每马甲的 `lastFrameType`/`framesTotal`/`droppedTotal` 全部取自 `SituationStateService` 里该马甲的内部账，
+经 `SituationQuery.vestLink(int)` 透出，控制器只做映射。**不复用**链路级 `LinkStatus.framesTotal/droppedTotal`
+（链路累计合法/坏帧），两者不是同一口径，不得互相冒充（设计 05 §5）。
+
+**每马甲计数的口径**（本轮定稿，写进 `SituationStateService` 的 javadoc）：
+
+- **`framesTotal` + `droppedTotal` = 本场被本服务看到的该马甲全部上行帧**，两者互斥：
+  「收到」计入 `framesTotal`（并刷新 `lastFrameType`），「丢弃」计入 `droppedTotal`。
+- **`lastFrameType` 只取五类白名单** `ff03`/`ff04`/`ff05`/`ff07`/`ff0a`——`ff06` 是协议 §1.4④
+  要求的「UWB 生效时丢弃的旧室内定位帧」，网关保持哑管道照常上报，由 STATE 侧按业务开关判丢；
+  **被丢弃的帧不算「收到」**，故不进 `framesTotal`、也不刷新 `lastFrameType`（`ff06` 恒只增 `droppedTotal`）。
+- **命中帧的属主是被击中者**：`ff05` 由**被击中**的马甲上报，故计数记在 `hitVestNum` 上，不是开枪者。
+- **阵亡冻结期内到达的帧算丢弃**：记账点放在「帧到了」之后、阵亡（`DIE`）早退**之前**，
+  冻结期到达的帧只增 `droppedTotal`、不刷新 `lastFrameType`（设计 06 的冻结口径不被本端点绕开）。
+- **每马甲计数随 `beginExercise` 重置**：开演装载时归零，与「本场」同生命周期。
+- **UWB 41B 帧不进本组计数**：`ff06` 之外，41B 室内解算帧走 UWB 链路，不参与 serial 计数。
+
+**`online` 的判据是纯窗口**：`lastHeartbeatAt != null && now <= lastHeartbeatAt + 5000ms`——逐字对齐契约
+描述「距最后一次心跳 <= 5000ms 为在线」，**不**用 `status == LIVE` 兜底：离线扫描（`scanOffline`）是周期触发
+（默认 1000ms）的，状态位可能比窗口落后一拍；按窗口现算不受扫描节拍影响。
+
+**404 与「在台账但未编成」是两个问题**（本轮裁定 D-2）：404 判据是**设备台账**（`VestLedgerService.get`，
+与 `getVest` 同口径），即「**能不能查这个马甲**」；台账有、但当前不在本场编成内（未开演 / 非本场）时回
+`200` + `online=false` + 零计数，而非 404——「它**此刻在不在上报**」由态势决定。两个问题不合并成同一个状态码。
+
+### 22.2 用例判据
+
+core（`SituationStateServiceTest`）新增 6 条：
+
+1. `vestLinkCountsEveryUplinkFrameTypeAndTracksLastFrameType`——连发 `heartbeat`/`gps`/`hit`/`mortar`/`simNo`
+   五类帧后 `framesTotal=5`、`lastFrameType="ff0a"`、`droppedTotal=0`、`online=true`；并断言**另一只马甲**
+   `framesTotal=0`（计数不串号）。
+2. `indoorLocationFrameIsCountedAsDroppedNotReceived`——只发 `ff06` 时 `framesTotal=0`、`lastFrameType=null`、
+   `droppedTotal=1`、`online=false`（`ff06` 恒丢口径）。
+3. `framesArrivingWhileDeadCountAsDroppedNotReceived`——先心跳再 `hp=0` 阵亡，隔 10s 再发心跳与 GPS：
+   `framesTotal=2`（阵亡前那两次）、`lastFrameType="ff03"`（阵亡后不刷新）、`droppedTotal=2`、
+   `lastHeartbeatAt` 停在最后一次**收到**的心跳、`online=false`（冻结期帧算丢弃）。
+4. `vestLinkOnlineTracksTheHeartbeatWindow`——心跳后 `online=true`；恰好 `+5000ms` 仍 true（判据是 `>` 5000）；
+   再 `+1ms` 转 false（窗口边界逐毫秒）。
+5. `vestLinkIsEmptyForVestsOutsideTheRoster`——编成外马甲 `state.vestLink(7)` 为空 `Optional`（由控制器降级成
+   200 零计数，见 §22.1 的 D-2）。
+6. `beginExerciseResetsPerVestCounters`——有计数后 `beginExercise(OTHER_EXERCISE_ID, ...)`，三项归零、
+   `lastHeartbeatAt=null`、`online=false`。
+
+api（`ApiSkeletonSmokeIT`，139，计数不变）：`DeviceController` 构造从 3 参扩到 4 参（新增 `SituationQuery`），
+`notImplementedIsReportedAsProblem` 的 501 示例由 `getVestLink` 改用真占位的 `GET /api/v1/replays`。
+
+app（`HwLinkHttpIT`，新增 1）`vestLinkAnswersFromTheStateMachineInsteadOfLinkCounters`——走完整生产入口
+（真 MySQL + 真安全链 + `scds.gateway.mode=simulator`）：①编号**从未登记**过 → `404` `DEVICE_VEST_NOT_FOUND`
+（404 判据 = 设备台账）；②登记该编号后（未编入任何演习）→ `200` + `online=false` + `lastHeartbeatAt=null`
++ `lastFrameType=null` + 两计数为 0（D-2 的落地）。马甲按专属编号段 `62500` 登记，
+`@AfterAll` 按编号精确回收（与 `DeviceLedgerHttpIT` 同一口径）。
+
+### 22.3 边界与不变式
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不开启 out-of-order。本段**未新增错误码**（复用既有 `DEVICE_VEST_NOT_FOUND`）、
+**未新增迁移**。
+
+**只读**：本端点不写库、不写日志、不发字节；它是纯内存态（本场编成的每马甲账）的读侧。
+
+**不得与链路级计数互相冒充**：设计 05 §5 与设计 06 §S7 都就此留下红线——链路级 `framesTotal`/`droppedTotal`
+数的是「这条串口/UWB 链路收了多少合法/坏帧」，本端点数的是「本场这只马甲收到了多少帧、最近一帧是什么、
+丢了多少」。两者不可互相顶替。
 
 本段为**代码验收**，不是生产发布批准。
 

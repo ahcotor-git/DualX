@@ -1137,5 +1137,43 @@ CAL-1（解算链路）交付后开工的**标定本体**，把 MAP-BASE 分段 
 - **新错误码按纪律三层登记**：先写进 openapi 的 `Problem.code` 描述（`common.yaml`），
   再回 `ApiErrorCode` 补枚举，最后由 `ApiExceptionHandler.statusOf` 登记状态（403 / 404）。
 
+### `getVestLink` 口径（2026-10-28，每马甲链路状态去 501）
+
+`DeviceController.getVestLink`（`GET /api/v1/devices/vests/{vestNum}/link`）是 HW-LINK 段**有意留下**的
+最后一条 501——设计 05 §5 的 H6 明示「在 STATE 就绪前不得用链路计数冒充每马甲计数」。STATE 的
+`SituationQuery` 落地后本条可接线，按 A1（core）/A2（api + 端到端）/A3（docs）三段实施。
+
+**用户逐项裁定（2 项，均取推荐口径）**
+
+| 项 | 裁定 |
+|---|---|
+| **D-1** `lastFrameType` 与丢弃帧的口径 | `lastFrameType` **只取五类白名单** `ff03`/`ff04`/`ff05`/`ff07`/`ff0a`；`ff06`（UWB 生效时应丢弃的旧室内定位帧）**恒只进 `droppedTotal`**、不刷新 `lastFrameType`、不进 `framesTotal` |
+| **D-2** 404 判据 | 404 = **设备台账**（`VestLedgerService.get`，与 `getVest` 同口径）；台账有但当前不在本场编成内（未开演 / 非本场）→ **200 + `online=false` + 零计数**，而非 404 |
+
+落地口径：
+
+- **六字段全取自 core 状态机**：`vestNum`/`online`/`lastHeartbeatAt` 与每马甲 `lastFrameType`/`framesTotal`/
+  `droppedTotal` 都来自 `SituationStateService` 里该马甲的内部账，经 `SituationQuery.vestLink(int)` 透出；
+  控制器只映射。**不复用**链路级 `LinkStatus.framesTotal/droppedTotal`（链路累计合法/坏帧）——
+  两者口径不同，不得互相冒充（设计 05 §5、设计 06 §S7）。
+- **`framesTotal` + `droppedTotal` 互斥且穷尽**：本场被本服务看到的该马甲全部上行帧，非「收到」即「丢弃」。
+  收到 → `framesTotal++` 且刷新 `lastFrameType`；丢弃 → 只 `droppedTotal++`。
+- **命中帧的属主是被击中者**：`ff05` 由**被击中**的马甲上报，计数记在 `hitVestNum` 上，不是开枪者。
+- **阵亡冻结期内的帧算丢弃**：记账点「帧到了」之后、`DIE` 早退**之前**——冻结期到达的帧不进 `framesTotal`、
+  不刷新 `lastFrameType`（设计 06 的冻结口径不被本端点绕开）。
+- **`online` 是纯窗口判定**：`lastHeartbeatAt != null && now <= lastHeartbeatAt + 5000ms`，逐字对齐契约描述；
+  **不**用 `status == LIVE` 兜底（离线扫描是周期触发的，状态位可能比窗口落后一拍，窗口现算不受节拍影响）。
+- **每马甲计数随 `beginExercise` 重置**：与「本场」同生命周期。
+- **未新增错误码（复用 `DEVICE_VEST_NOT_FOUND`）、未新增迁移**；本端点为**只读**（不写库、不写日志、不发字节）。
+
+**本节取代此前「`getVestLink` 保持 501」的判断**（HW-LINK 段「方案里三处必须记明的判断」第 1 条、
+本文件「STATE 分段（一）执行边界」末的未闭合项之一）：那句在 STATE 就绪前成立，现 `SituationQuery`
+已就绪，本条已按上表口径接线。STATE 段其余未闭合项（`SituationEnvelope`/`TeamSummary`/`HitEvent`
+线载荷下沉、WS 通道与背压）**不变**——那条红线仍在，只是 `getVestLink` 不再是它的例子。
+
+**验证**：整仓 `mvn test` 全绿，**1097 项**（protocol 19 / gateway 49 / core 564 / api 139 / app 326，
+`solver`/`domain` 无测试；较上一轮 1090 增 `SituationStateServiceTest` 6 + `HwLinkHttpIT` 1）。
+证据与用例判据见 [testing](testing.md) 第 22 节。
+
 
 

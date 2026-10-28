@@ -1,11 +1,12 @@
 # scds-next 交接快照
 
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M4 读侧「当前演习日志流水」`GET /api/v1/exercise/current/logs` 已交付**
-> （testing 第 20 节）——连同此前的 `moveVest` 三段，改动仍在工作树、**未提交**（等当次授权）；
-> 本地 HEAD `71bb579`（CAL-2c 四笔本地提交仍未入远端）。
-> 最新全量 `mvn test` **1087 项，失败/错误/跳过均 0**（见 testing 第 15~20 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~20 节冲突处，以该处为准。
+> 当前任务：**`getVestLink`（每马甲链路状态）已去 501**（testing 第 22 节）——
+> 连同此前的 **PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验**（testing 第 21 节），
+> 改动仍在工作树、**未提交**（等当次授权）；本地 HEAD `398495b` = 远端 `origin/main`
+> （CAL-2c 四笔、`moveVest` 与读侧日志流水三笔均已推送）。
+> 最新全量 `mvn test` **1097 项，失败/错误/跳过均 0**（见 testing 第 15~22 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~22 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -21,14 +22,15 @@ M2 PLAN（想定与编成、导入导出）、M2 MAP-BASE（底图 CRUD / 图片
 M3 LIFE（开停演与恢复门禁、单实例保护）、M3 STATE（态势状态机与读侧）、
 M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停机释放链路）、
 **M3 COMMAND MR-1 + MR-2 + MR-3 + 第 8 条 `moveVest`**、**M3 CAL-1（UWB 室内解算链路）**，
-**M3 CAL-2（UWB 中心基准校准：CAL-2a 状态机 / CAL-2b 端点接线 / CAL-2c V11 + 端到端）**，以及
-**M4 读侧「当前演习日志流水」`GET /api/v1/exercise/current/logs`**。
+**M3 CAL-2（UWB 中心基准校准：CAL-2a 状态机 / CAL-2b 端点接线 / CAL-2c V11 + 端到端）**、
+**M4 读侧「当前演习日志流水」`GET /api/v1/exercise/current/logs`**、
+**PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验**，以及
+**`getVestLink`（每马甲链路状态去 501：A1 core 计数 + A2 端点接线与端到端）**。
 
-下一原子任务的候选（详见 testing 第 19、20 节与第 3 节矩阵）：`getVestLink` 1 条仍 501
-（需先补 STATE 侧每马甲计数，多段改动）；`ReplayController` 全 7 条仍 501（replay 读侧 4 + 导出 3，
+下一原子任务的候选（详见 testing 第 3 节矩阵）：`ReplayController` 全 7 条仍 501（replay 读侧 4 + 导出 3，
 属 M5）；CAL-2 的**现场验收**（`calibrated_at` 可读性、50mm 静止阈值是否适配现场噪声）；
 Flutter 客户端（Android 单兵端 / Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；`moveVest` 三段与本节读侧改动仍在工作树、
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段 PLAN 范围校验与 `getVestLink` 改动仍在工作树、
 未提交，网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
@@ -36,11 +38,11 @@ Flutter 客户端（Android 单兵端 / Windows 指挥端）尚无工程。启�
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | `71bb579`（CAL-2c 第四笔，docs 如实记录推送失败）**仅在本机** |
-| 实际远端main | 仍是 `07ce6cc`（CAL-2b 第二笔）；本轮四笔提交推送失败：连续 3 次 `git -c http.version=HTTP/1.1 push` 均在 ~21s 后 `Failed to connect to github.com:443`（连接超时，非认证问题），已停止重试 |
-| 已推送 | `880ae1b`（feat 标定状态机）、`15334f1`（feat 采样接入写手线程）、`6a3da21`（feat 链路未开拒绝码）、`07ce6cc`（feat 标定三端点接线），以及更早的 CAL-1 系列与 MR-1~MR-3 |
-| 未推送（仅本机） | `c503a06`（feat V11 校准列 + saveUwbMeta 落库）、`88377be`（test CAL-2 端到端 + 两处迁移清单守卫）、`ceb2698`（docs CAL-2 口径/证据/快照）、`71bb579`（docs 推送失败记录）；四笔按功能分开，可原样推送 |
-| 本轮继续成果 | `moveVest` 三段（core 写入口 + 楼层点位读取 + 端点接线与端到端）与 **M4 读侧「当前演习日志流水」**（core 读原语 `currentLogs` + `ExerciseController` 接线 + app 端到端）**仍在工作树、未提交**：共 19 个改动文件（`moveVest` 16 + 读侧 3，其中 `testing.md`/`snapshot.md` 各含两部分改动）；全量 `mvn test` **1087 项**全绿；等提交/推送授权 |
+| 源码本地HEAD | `398495b`（docs: 回写 moveVest 与读侧日志流水的证据、口径与快照） |
+| 实际远端main | `398495b`——与本机一致（`## main...origin/main`，无 ahead） |
+| 已推送 | `07ce6cc`（feat 标定三端点接线）、`c503a06`、`88377be`、`ceb2698`、`71bb579`（CAL-2c 四笔），以及本轮三笔 `865a0b9`（feat `moveVest` 手动置位）、`c1198db`（feat 当前演习日志流水端点）、`398495b`（docs）；更早的 CAL-1 系列与 MR-1~MR-3 亦已在远端 |
+| 未推送（仅本机） | 无（工作树改动尚未提交，故本机没有未推送的提交） |
+| 本轮继续成果 | 两条读侧/校验成果**仍在工作树、未提交**：①**PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验**（`PlanService.validate` 新增范围校验 + `PlanServiceIT` 3 例 + 契约 `RosterEntry` 补 `minimum`/`maximum`）；②**`getVestLink` 去 501**（A1 core：`SituationStateService` 每马甲 `framesTotal`/`lastFrameType`/`droppedTotal` + `SituationQuery.vestLink`；A2 api：`DeviceController` 4 参接线 + `ApiSkeletonSmokeIT`/`HwLinkHttpIT` 同步）。代码+契约 9 文件（`PlanService.java`、`PlanServiceIT.java`、`domain.yaml`、`SituationStateService.java`、`SituationQuery.java`、`SituationStateServiceTest.java`、`DeviceController.java`、`ApiSkeletonSmokeIT.java`、`HwLinkHttpIT.java`），文档 3 文件（`testing.md`/`decision-register.md`/`snapshot.md`，与代码分开提交）；全量 `mvn test` **1097 项**全绿；等提交/推送授权 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -93,9 +95,15 @@ CAL-1c 在 `scds-app` 的 `SituationStateIT` 以真 Spring 装配 + 真库底图
 `ExerciseController.listCurrentExerciseLogs` 去 501 并新增 `toLogEntry` 映射（两侧
 `ExerciseLogEntry` 同名不同形状）、`ExerciseLifecycleHttpIT` +1 端到端；**无演习进行中返回
 200 + 空页**（契约此端点无 404），`limit` 按契约 1..500 拦在参数校验层。详见 testing 第 20 节。
-未完成：全仓仍抛 501 的只剩 8 条——`DeviceController.getVestLink` 1 条，与 `ReplayController`
-全 7 条（`listReplays` / `getReplay` / `getReplayTimeline` / `getReplayStatistics` / `exportReplay` /
-`getExportTask` / `downloadExport`）；
+新增已完成（**`getVestLink` 每马甲链路状态去 501**，分三段：A1 core / A2 api 与端到端 / A3 docs）：
+`SituationStateService.Unit` 补每马甲 `framesTotal`/`lastFrameType`/`droppedTotal`（写手线程在
+heartbeat/gps/hit/mortar/simNo 分支记账；`ff06` 恒丢只增 `droppedTotal`；阵亡冻结期帧算丢弃且不刷新
+`lastFrameType`；命中帧记在**被击中者**上）、新增读原语 `vestLink(int)` 与 `SituationQuery.vestLink`；
+`DeviceController.getVestLink` 构造扩为 4 参（注入 `SituationQuery`）去 501——六字段全取自 core 状态机
+（**不复用**链路级计数），`online` 为**纯 5000ms 窗口**判定，**404 判据 = 设备台账**（台账有但不在本场编成
+→ 200 + `online=false` + 零计数）；**未新增错误码、未新增迁移、只读**。详见 testing 第 22 节。
+未完成：全仓仍抛 501 的只剩 7 条——`ReplayController` 全 7 条（`listReplays` / `getReplay` /
+`getReplayTimeline` / `getReplayStatistics` / `exportReplay` / `getExportTask` / `downloadExport`，属 M5）；
 file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
 
@@ -106,11 +114,14 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn test`：2026-10-28，**1087项，失败/错误/跳过均0**：
-protocol19 + gateway49 + core555 + api139 + app325（solver/domain无测试）。
+**当前**全量`mvn test`：2026-10-28，**1097项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core564 + api139 + app326（solver/domain无测试）。
 计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）取值；按 `target/surefire-reports/TEST-*.xml`
 累加会少 core 的 21 项（`@Nested` 内部类如 `TrackSamplingTest$Sampler`/`$Writer` 不落在外层类 XML 里），
 口径说明见 testing 第 20 节。
+`getVestLink` 新增证据：core `SituationStateServiceTest` +6（原 36 → 42，详见 testing 第 22 节）、
+app `HwLinkHttpIT` +1（原 5 → 6，端到端 404 与「在台账未编成 200 离线零计数」两分支）；
+PLAN 编成范围校验新增证据：core `PlanServiceIT` +3（原 17 → 20），详见 testing 第 21 节；
 M4 读侧「当前演习日志流水」新增证据：app `ExerciseLifecycleHttpIT` +1（原 2 → 3），详见 testing 第 20 节；
 本段新增证据为 `moveVest`（手动置位）三段：core `SituationStateServiceTest` +4、
 `MapLedgerServiceIT` +3，app `CommandHttpIT` +2（原 4 → 6），详见 testing 第 19 节；
@@ -142,7 +153,7 @@ API骨架使用standalone且只断言非404，不能证明真实Security或业�
 | R05 | signing=false时无token账号login返回401，目标404 |
 | R06 | 设备登录已按 D02 接线为**边缘本地签发**；只验签实例上该端点仍注册并抛500，是否改为条件注册属独立决策 |
 | R07 | **已闭合**：DeviceAuthService、SID单端在线与换绑清SID已实现；`device/me` 已接线，见 testing 第 13 节 |
-| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线（UWB 标定三端点已于 CAL-2 接线，COMMAND 第 8 条 `move` 与本轮「当前演习日志流水」均已接线）；仅 `getVestLink` 与 `ReplayController` 全 7 条仍 501 |
+| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线（UWB 标定三端点已于 CAL-2 接线，COMMAND 第 8 条 `move` 与本轮「当前演习日志流水」均已接线，`DeviceController.getVestLink` 已于本轮接线，见 testing 第 22 节）；仅 `ReplayController` 全 7 条仍 501（属 M5） |
 
 R05 仍未修复；R06 的只验签分支待决策。R23数据库隔离子任务已完成；
 R18-R28其他风险仍待对应工作包验证。
@@ -192,7 +203,7 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 指令 `accepted=false` 只表示**未入队**（链路未开 / 串口队列满），两种成因都不落库不写日志；
 顺序为**先发字节、成功后一次性落 `state=SENT`**；全体充弹回执与队列行 `vest_num=0`、审计 `vest_num` 记 NULL；
 覆盖配置未传字段取**本场想定编成**原值、不写审计（协议 LogType 无 CONFIG）；
-`t_plan_roster` 的 hp/ammo 范围校验**单列任务**，本次不拦。
+`t_plan_roster` 的 hp/ammo 范围校验**单列任务**（已由 2026-10-28 的 PLAN 任务收口，见 testing 第 21 节）。
 
 2026-10-27新增已确认（M3 COMMAND MR-3 队列过期扫描，见 testing 第 16 节）：
 超时窗 `scds.command.sent-ttl` 默认 **30s**、扫描周期 **5s**；只扫 `state='SENT'`（`PENDING` 在本实现下
@@ -219,6 +230,23 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 坐标由唯一写手线程写入（`PositionSource.MANUAL`），阵亡不绕冻结；
 **不发字节、不落队列、不写审计**（回执 `downlinkHex` 恒 null，协议 `LogType` 无 `MOVE`）；
 `accepted=false` 仅当态势侧已停止接收；`CommandService.moveVest` 不记操作员审计（控制器不加 `Jwt` 入参）。
+
+2026-10-28新增已确认（PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验，见 testing 第 21 节）：
+范围取 `hp ∈ [0, 255]`、`ammo1`/`ammo2 ∈ [0, 65535]`（来源是 14B 轮询配置帧的字节宽度，
+与契约 `VestConfigRequest` 一致）；校验点只有 `PlanService.validate` 一处，同时覆盖
+`replaceRoster` 与 `importPlan` 两条写路径，越界 400 `VALIDATION_FAILED`（**未新增错误码**）；
+**不在库层加 CHECK**（V3 是已应用历史迁移，且库层一致性本就由应用层保证，故**未新增迁移**）；
+契约 `RosterEntry` 补 `minimum`/`maximum` 与 `VestConfigRequest` 对齐。
+
+2026-10-28新增已确认（`getVestLink` 去 501，见 testing 第 22 节）：
+六字段（`vestNum`/`online`/`lastHeartbeatAt`/`lastFrameType`/`framesTotal`/`droppedTotal`）**全取自 core 状态机**，
+**不复用**链路级 `LinkStatus` 计数（设计 05 §5 / 设计 06 §S7 的红线）；
+`lastFrameType` 只取五类白名单 `ff03`/`ff04`/`ff05`/`ff07`/`ff0a`，`ff06`（UWB 生效时应丢弃的旧室内定位帧）
+**恒只进 `droppedTotal`**；`framesTotal` + `droppedTotal` 互斥且穷尽（非「收到」即「丢弃」）；
+命中帧 `ff05` 计在**被击中者**上；阵亡冻结期到达的帧算丢弃且不刷新 `lastFrameType`；
+`online` 是**纯 5000ms 窗口**判定（不用 `status == LIVE` 兜底）；
+**404 判据 = 设备台账**（`VestLedgerService.get`），台账有但当前不在本场编成内 → **200 + `online=false` + 零计数**；
+每马甲计数随 `beginExercise` 重置；**未新增错误码（复用 `DEVICE_VEST_NOT_FOUND`）、未新增迁移、只读**。
 
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
@@ -254,11 +282,13 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：M4 读侧「当前演习日志流水」（`listCurrentExerciseLogs`）详见 testing 第 20 节；
+最新证据：`getVestLink`（每马甲链路状态去 501）详见 testing 第 22 节；
+PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验详见 testing 第 21 节；
+M4 读侧「当前演习日志流水」（`listCurrentExerciseLogs`）详见 testing 第 20 节；
 M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1087 项测试、`moveVest` 与 M4 读侧日志流水交付（代码与文档已就位、**待授权提交**）
-与下一任务候选（`getVestLink` / REPLAY 全 7 条 / Flutter），
+本快照已同步 1097 项测试、`getVestLink` 与 PLAN 编成范围校验交付（代码与文档已就位、**待授权提交**）
+与下一任务候选（REPLAY 全 7 条 / Flutter / CAL-2 现场验收），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。
