@@ -1770,7 +1770,8 @@ app（`RoleWritePermissionIT`，65 条，计数不变）：`ReplayController` �
 测试上下文补一个 `stub(ExportTaskService.class)` Bean。
 
 app（`ReplayExportHttpIT`，新增 2 条，全走真 Boot + 真安全链 + 真 MySQL + 真落盘，
-落盘隔离用 `MapPropertySource` 覆写 `scds.files.root` 到 `target/replay-export-http-files/{uuid}`；
+落盘隔离用 `MapPropertySource` 覆写 `scds.files.root` 到 `target/replay-export-http-files/{uuid}`，
+并**显式给 `scds.files.sign-secret` 一个固定测试密钥**（见 17 条的签名窗口过期断言）；
 **不**直接调 `tick()`，靠应用自己的 `@Scheduled` 执行器推进以证明端到端）：
 
 17. `xlsxExportOverRealHttp`——开演 → 停演（得到复盘）→ 进行中受理/详情都是 404 `REPLAY_NOT_FOUND`
@@ -1781,7 +1782,10 @@ app（`ReplayExportHttpIT`，新增 2 条，全走真 Boot + 真安全链 + 真 
     正文以 `PK\x03\x04` 开头；同一 `expireAt` 在两次查询间**定值**
     → 用 `downloadUrl` **免 Bearer** 取回**同一份字节**且 `Content-Type` 为 `application/octet-stream`
     （两条通道按不同口径判型：按域路由看后缀、签名路由嗅真实字节）
-    → 签名篡改 403 `FILE_URL_INVALID`、两条导出路由不带 Bearer 都是 401。
+    → 签名篡改 403 `FILE_URL_INVALID`、两条导出路由不带 Bearer 都是 401
+    → **签名窗口过期**：用固定测试密钥按契约（`路径 + '\n' + exp` 的 HMAC-SHA256）重签同一 URL，
+    先以「未过期」（`exp=now+300s`）样本断言 200 且取回**同一份字节**（自证重算算法与服务端一致，
+    排除下一条 403 是「签错」而非「过期」），再以「已过期」（`exp=now-60s`）样本断言 403 `FILE_URL_INVALID`。
 18. `csvExpiryAndFailureOverRealHttp`——CSV 产物 `Content-Type` 为 `text/csv` 且以 UTF-8 BOM 开头；
     把 `expire_at` 拨到过去后下载 409 `REPLAY_EXPORT_FAILED`；
     受理后删掉复盘行 → 任务落 FAILED（`errorMessage` 含 `REPLAY_NOT_FOUND`），查询仍 200 而**下载**才 409；
@@ -1804,9 +1808,12 @@ app（`ReplayExportHttpIT`，新增 2 条，全走真 Boot + 真安全链 + 真 
 **未改 openapi、未新增码**。
 
 **端到端覆盖已补齐**：R4 的三端点既有 `ApiSkeletonSmokeIT`（路由注册）与 `ExportTaskServiceIT`（服务层），
-也有 `ReplayExportHttpIT`（真 Boot + 真安全链 + 真落盘 + 签名 URL 取回）。**仍未覆盖**的是
-`downloadUrl` 的**签名本身过期**（本段只验了产物 TTL 过期与签名被篡改两条，
-签名窗口到期的处置动作与「篡改」同为 403 `FILE_URL_INVALID`，由 core 的 `HmacFileUrlSignerTest` 覆盖）。
+也有 `ReplayExportHttpIT`（真 Boot + 真安全链 + 真落盘 + 签名 URL 取回）。原先挂起的
+`downloadUrl` **签名本身过期**这条 HTTP 用例已在 `ReplayExportHttpIT.xlsxExportOverRealHttp` 补齐
+（2026-10-28）：签名窗口到期的处置动作与「签名被篡改」同为 403 `FILE_URL_INVALID`，
+构造方式见第 17 条。**构造口径**：签名器持 `Clock.systemUTC()`、HTTP 用例推不动时钟，故在
+**测试侧按契约独立重算**签名（固定测试密钥 + `路径 + '\n' + exp` 的 HMAC-SHA256、Base64URL 无填充），
+并用「未过期」正例自证重算与服务端一致；**未改验签逻辑、未引入可注入 Clock 到生产**。
 
 本段为**代码验收**，不是生产发布批准。
 
@@ -2211,4 +2218,40 @@ LIFE 分段（一）的 §L6 已裁定：同库单实例保护落在**进程管�
 **未新增依赖、未新增迁移、未新增错误码**。
 
 本段为**口径订正与部署前提确认**，不是生产发布批准；第二进程拒启属进程管理层的现场行为，仍待现场验收。
+
+## 31. R4 遗留收口：`downloadUrl` 签名窗口过期的 HTTP 用例
+
+第 26 节 §26.3 挂起过一条未覆盖项：`downloadUrl` 的**签名本身过期**（R4 只验了产物 TTL 过期与签名被篡改
+两条，签名窗口过期只在 core 的 `HmacFileUrlSignerTest` 里用 `MutableClock` 覆盖）。2026-10-28 补上 HTTP 层用例。
+
+### 31.1 构造口径（为什么不推时钟）
+
+签名器 `HmacFileUrlSigner` 持 `Clock.systemUTC()`，HTTP IT 共用真实应用上下文，**测试推不动时钟**，
+而真实 TTL 是 15 分钟（`scds.files.sign-ttl`），等不起、也不该靠 sleep。故在**测试侧按契约独立重算**一份签名：
+固定测试密钥（`@BeforeAll` 显式给 `scds.files.sign-secret`，≥32 字符，否则应用启动即失败）
+＋ 被签串 `相对路径 + '\n' + exp` 的 HMAC-SHA256、Base64URL 无填充——与 `HmacFileUrlSigner` 同口径，
+但**不由被测代码产出**，因此是一份独立判据。
+
+**先正例自证再验过期**：重算算法必须先用「未过期」样本证明与服务端一致，否则过期样本的 403 可能只是
+「签错了」。故断言顺序为：未过期样本 200（且取回同一份字节）→ 已过期样本 403 `FILE_URL_INVALID`。
+
+### 31.2 用例判据（在既有方法内扩断言，不新增用例）
+
+`ReplayExportHttpIT.xlsxExportOverRealHttp`（第 26 节第 17 条）在「签名被篡改 403」之后新增两段：
+
+1. 用测试侧重算的签名构造 `exp = now + 300s` 的 URL → **200**，正文与按域下载通道**同一份字节**
+   （自证重算与服务端一致）。
+2. 同法构造 `exp = now - 60s` 的 URL → **403 `FILE_URL_INVALID`**——签名正确、仅过期，
+   与「签名被篡改」共码（契约刻意不拆分：客户端处置动作相同，区分只会泄露路径是否存在）。
+
+新增测试侧辅助：`resignWithExp(String signedUrl, long exp)`（只换 `exp` 与 `signature`，`path` 参数原样沿用原 URL 已编码片段）
+与 `hmac(String relativePath, String exp)`。**计数不变**：在既有方法内扩断言，全量仍 **1151** 项（0/0/0）。
+
+### 31.3 未改动
+
+验签逻辑（`HmacFileUrlSigner.verify`）、`FileController`、`ApiErrorCode`（复用既有 `FILE_URL_INVALID`）、
+`ApiExceptionHandler.statusOf`、openapi、迁移、依赖**均一字未动**；**未引入可注入 `Clock` 到生产**
+（仅测试侧重算）；协议冻结字节、端口号、轮询周期、在线窗口、校验算法、`scds-solver` 亦未动。
+
+本段为**代码验收**，不是生产发布批准。
 
