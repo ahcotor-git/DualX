@@ -24,7 +24,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -114,12 +116,16 @@ public class MapLedgerService {
     public Page<MapView> list(MapType type, PageRequest request) {
         List<BaseMap> rows = type == null ? maps.findAll(request) : maps.findByType(type, request);
         long total = type == null ? maps.count() : maps.countByType(type);
-        return Page.of(rows.stream().map(this::view).toList(), total, request);
+        // 标定时刻整页一次取回：逐行查就是 N+1（见 BaseMapRepository.findCalibratedAt）。
+        Map<UUID, Instant> calibratedAt = maps.findCalibratedAt(rows.stream().map(BaseMap::id).toList());
+        return Page.of(rows.stream().map(row -> view(row, calibratedAt.get(row.id()))).toList(),
+                total, request);
     }
 
     /** 单张底图；不存在即 404，不做「返回 null 让调用方自己判」。 */
     public MapView get(UUID mapId) {
-        return view(require(mapId));
+        BaseMap map = require(mapId);
+        return view(map, maps.findCalibratedAt(List.of(map.id())).get(map.id()));
     }
 
     /**
@@ -365,21 +371,26 @@ public class MapLedgerService {
     // ── 读取模型 ────────────────────────────────────────────────────────────
 
     /**
-     * {@code MapDetail} 组装所需的读取模型：底图本体 + 楼层数 + 标定齐备标志。
+     * {@code MapDetail} 组装所需的读取模型：底图本体 + 楼层数 + 标定齐备标志 + 标定时刻。
      *
-     * <p>三个值一次读完，是为了让控制器不必为同一行反复回库（列表页每行一次
-     * {@code count} 会变成 N+1）。</p>
+     * <p>四个值一次读完，是为了让控制器不必为同一行反复回库（列表页每行一次 {@code count}
+     * 会变成 N+1）；{@code calibratedAt} 同理，走 {@code BaseMapRepository.findCalibratedAt}
+     * 的整页批量读。</p>
      *
      * @param calibrated UWB 标定是否齐备。**只判「有没有」，不判「对不对」**：
      *                   {@code bs1~bs4} 与 {@code realLengthCm/realWidthCm} 全部有值即为齐备；
      *                   几何自洽的拒绝只发生在保存那一刻（{@link #saveUwbMeta}），
      *                   已经存进库的行不在读取时反悔——否则一次升级就会让既有底图突然读不出来
+     * @param calibratedAt 最近一次写入 {@code uwb_meta} 的时刻（UTC），从未写过时为 {@code null}。
+     *                     <b>与 {@code calibrated} 同源但不等价</b>：该列由 V11 引入，
+     *                     在此之前就已标定的存量行是「齐备但时刻为空」；反过来，时刻非空必然齐备
+     *                     （{@link #saveUwbMeta} 先校验再写）
      */
-    public record MapView(BaseMap map, long floorCount, boolean calibrated) {
+    public record MapView(BaseMap map, long floorCount, boolean calibrated, Instant calibratedAt) {
     }
 
-    private MapView view(BaseMap map) {
-        return new MapView(map, floors.countByMapId(map.id()), calibrated(map.uwbMeta()));
+    private MapView view(BaseMap map, Instant calibratedAt) {
+        return new MapView(map, floors.countByMapId(map.id()), calibrated(map.uwbMeta()), calibratedAt);
     }
 
     private BaseMap require(UUID mapId) {

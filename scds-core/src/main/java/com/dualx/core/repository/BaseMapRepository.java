@@ -11,18 +11,22 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 底图仓储（{@code t_map}）。列表按「新建时间倒序」返回，与前端底图列表一致。
  *
  * <p>{@code uwb_meta} 以原始 JSON 文本存取：结构由契约冻结，解析属 API 层职责。
  *
- * <p><b>{@code calibrated_at} 刻意不进 {@link #COLUMNS}</b>：它是「标定时刻」的证据列，
- * 只由 {@link #markCalibrated} 单向写入，当前没有任何读取方（契约的 {@code MapDetail}
- * 只有 {@code calibrated} 布尔），因此不进读取投影，也不落到 {@code BaseMap} 上。
+ * <p><b>{@code calibrated_at} 不进 {@link #COLUMNS}，改由 {@link #findCalibratedAt} 批量读</b>：
+ * 它是可空的「标定时刻」证据列，只在 {@code MapDetail.calibratedAt} 上露面。并进 {@code COLUMNS}
+ * 就得给领域记录 {@code BaseMap} 加第 11 个分量，全仓二十多处 {@code new BaseMap(...)} 都要跟着动；
+ * 而在列表页逐行补一次查询又是 N+1。故取第三条路：行投影保持不动，额外开销固定为一条 SQL。
  */
 @Repository
 public class BaseMapRepository {
@@ -140,6 +144,34 @@ public class BaseMapRepository {
                 .param("calibratedAt", SqlTime.toDb(calibratedAt))
                 .param("id", id.toString())
                 .update();
+    }
+
+    /**
+     * 一批底图的标定时刻（{@code calibrated_at}），供 {@code MapDetail.calibratedAt} 组装。
+     *
+     * <p><b>刻意成批</b>：列表页逐行单独回库就是 N+1，而每页最多 200 行（契约 {@code SizeParam}）。
+     * 入参为空时不发查询、直接回空表——空 {@code IN ()} 是语法错误。</p>
+     *
+     * <p><b>从未标定的行不出现在结果里</b>（{@code calibrated_at IS NULL} 被滤掉），
+     * 由调用方补 {@code null}，与 {@link PlanRosterRepository#countByPlanIds} 同一取向。
+     * 这也覆盖了 V11 之前就已标定的存量行：它们的 {@code uwb_meta} 齐备但时刻为空，
+     * 属于「当时没记」，不是「没标过」。</p>
+     *
+     * @param ids 底图 id；空集合返回空表
+     * @return mapId → 标定时刻（UTC）；键缺失即该行从未标定
+     */
+    public Map<UUID, Instant> findCalibratedAt(Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.sql("SELECT id, calibrated_at FROM t_map"
+                        + " WHERE id IN (:ids) AND calibrated_at IS NOT NULL")
+                .param("ids", ids.stream().map(UUID::toString).toList())
+                .query((rs, rowNum) -> Map.entry(UUID.fromString(rs.getString("id")),
+                        SqlTime.fromDb(rs.getObject("calibrated_at", LocalDateTime.class))))
+                .list()
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     public int deleteById(UUID id) {

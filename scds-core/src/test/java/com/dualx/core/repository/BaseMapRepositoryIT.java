@@ -29,8 +29,10 @@ class BaseMapRepositoryIT {
     private BaseMapRepository maps;
 
     /**
-     * 只为读 {@code calibrated_at}：该列刻意不进 {@link BaseMapRepository#COLUMNS}、
-     * 也不落到 {@code BaseMap} 上（见仓储类注释），所以验证「写进去了没」只能直查库。
+     * 只为读 {@code calibrated_at} 的**原始值**（含 {@code NULL}）：该列不进
+     * {@link BaseMapRepository#COLUMNS}、也不落到 {@code BaseMap} 上（见仓储类注释），
+     * 而 {@link BaseMapRepository#findCalibratedAt} 会把未标定的行整个滤掉，
+     * 所以「有行但时刻为空」只能直查库来区分。
      */
     @Autowired
     private JdbcClient jdbc;
@@ -162,6 +164,31 @@ class BaseMapRepositoryIT {
     @Test
     void markCalibrated_unknownIdAffectsNoRow() {
         assertThat(maps.markCalibrated(UuidV7.generate(), Instant.parse("2026-10-27T08:00:00Z"))).isZero();
+    }
+
+    /**
+     * 批量读标定时刻：只回「已标定」的行——未标定的与不存在的 id 一样缺席，
+     * 调用方据此补 {@code null}，不必再区分「没这行」与「没标过」。
+     */
+    @Test
+    void findCalibratedAt_returnsOnlyStampedRows() {
+        UUID stamped = UuidV7.generate();
+        UUID untouched = UuidV7.generate();
+        UUID absent = UuidV7.generate();
+        maps.insert(new BaseMap(stamped, "已标定图", MapType.INDOOR, null, null, null, null, null, null, null));
+        maps.insert(new BaseMap(untouched, "未标定图", MapType.INDOOR, null, null, null, null, null, null, null));
+        Instant expected = Instant.parse("2026-10-27T09:30:00Z");
+        assertThat(maps.markCalibrated(stamped, expected)).isEqualTo(1);
+
+        assertThat(maps.findCalibratedAt(List.of(stamped, untouched, absent)))
+                .containsOnlyKeys(stamped)
+                .containsEntry(stamped, expected);
+    }
+
+    /** 空入参不发查询：空 {@code IN ()} 是语法错误，故必须在拼接 SQL 之前就返回。 */
+    @Test
+    void findCalibratedAt_emptyIdsReturnEmptyMap() {
+        assertThat(maps.findCalibratedAt(List.of())).isEmpty();
     }
 
     /**
