@@ -1,14 +1,15 @@
 # scds-next 交接快照
 
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M3 CAL-2 现场验收收口（testing 第 27 节）**——`calibrated_at` 由「有写无读」补成
-> **`MapDetail.calibratedAt` 可读**（core 批量读 + 契约加可空字段 + api 接线，纯新增、向后兼容）；
-> 50mm 静止阈值确认**已可配**（`scds.uwb.calib-static-max-diff-cm`，无需改码）；
-> 四角编号仍**只有文档约定、无代码校验**，按裁定**不动代码**、只入验收清单。
+> 当前任务：**M3 LIFE 网关下行接线（testing 第 28 节）**——开演逐台 14B 轮询配置帧 + 7B 开始帧、
+> 停演 7B 结束帧由 `ExerciseLifecycleService` **同事务尾段**经 `DeviceLinkAdmin.sendVestCommand` 下发；
+> 发送失败**只留痕（`t_exercise_log(SYSTEM)`）、不回滚**；链路未开**静默跳过**；
+> 停演响应补 `replayId = exerciseId`。
 > 本段紧接 **M5 REPLAY 四段全部落地**（R1 复盘读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
-> `ReplayController` 七条全去 501、**全仓「仍抛 501 的方法」计数为 0**，已在远端）。
-> 最新全量 `mvn test` **1140 项，失败/错误/跳过均 0**（见 testing 第 15~27 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~27 节冲突处，以该处为准。
+> `ReplayController` 七条全去 501、**全仓「仍抛 501 的方法」计数为 0**）与 **M3 CAL-2 现场验收收口**，
+> 两者**均已在远端**。
+> 最新全量 `mvn test` **1148 项，失败/错误/跳过均 0**（见 testing 第 15~28 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~28 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -28,11 +29,13 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 **M4 读侧「当前演习日志流水」`GET /api/v1/exercise/current/logs`**、
 **PLAN 编成 `hp`/`ammo1`/`ammo2` 范围校验**、**`getVestLink`（每马甲链路状态去 501）**，
 **M5 REPLAY R1（复盘读侧去 501）**、**M5 REPLAY R2（轨迹分片去 501）**、
-**M5 REPLAY R3（统计去 501）**，以及**M5 REPLAY R4（导出与下载去 501，至此 `ReplayController` 七条全通）**。
+**M5 REPLAY R3（统计去 501）**，以及**M5 REPLAY R4（导出与下载去 501，至此 `ReplayController` 七条全通）**，
+以及**M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站）**。
 
-下一原子任务的候选：**Flutter 客户端工程**（Android 单兵端 / Windows 指挥端均未开工）；
-**网关下行接线**（14B/7B 帧）、**单实例保护 L6**、**T-PROD 部署**。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段 CAL-2 改动**尚未提交**（见 §2），
+下一原子任务的候选：**开演链路就绪硬前置（409 `DEVICE_LINK_NOT_OPEN`）与既有 IT「先开串口链路」的改造**
+（本段有意未纳入——它波及 ≥9 个既有 IT）；**Flutter 客户端工程**（Android 单兵端 / Windows 指挥端均未开工）；
+**单实例保护 L6**、**T-PROD 部署**。启动前须重新核查仓库与环境，
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本段网关下行改动**尚未提交**（见 §2），
 网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
@@ -40,11 +43,11 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | `5e641b2`（docs: 回写 R4 HTTP 端到端补测的计数与覆盖边界）；CAL-2 改动在工作树 |
-| 实际远端main | `5e641b2`（与本地一致）：R1/R2/R3 各三笔与 R4 全部改动（含 HTTP 端到端补测）**均已推送** |
-| 已推送 | `143d40a..5e641b2` 已入远端：R1 三笔 `86b24b9`/`011b0f3`/`65d1976`、R2 三笔 `8fdcadb`/`63949a1`/`9e3fb7e`、R3 三笔 `8e0aadf`/`7dc14d5`/`b430c12`、R4 三笔 `f856692`/`be06d6c`/`8466c85`，以及 R4 HTTP 端到端补测 `62d03c7`（test: app 三端点）与 `5e641b2`（docs）；更早批次（CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs、`e0c8192`/`8c0f02e`/`b460716`/`0df5909`/`143d40a` 与 CAL-1/MR-1~MR-3）亦已在远端 |
-| 未推送（仅本机） | CAL-2 改动尚未提交：core `BaseMapRepository`/`MapLedgerService`/`BaseMapRepositoryIT`；契约 `docs/api/schemas/domain.yaml`；api `MapDetail`/`MapController`；app `MapBaseHttpIT`；docs `testing.md`/`snapshot.md` |
-| 本轮继续成果 | **M3 CAL-2 现场验收收口**——`calibrated_at` 由「有写无读」补成 `MapDetail.calibratedAt` 可读（core 批量 `IN` 读、契约加可空字段、api 接线，纯新增向后兼容）；core `BaseMapRepositoryIT` +2（603 → 605）；全量 `mvn test` **1140 项**全绿（**尚未提交**） |
+| 源码本地HEAD | `0d8ef02`（test(map): 端到端校验标定时刻可读并回写文档）；网关下行改动在工作树 |
+| 实际远端main | `0d8ef02`（与本地一致，本轮未重新 fetch）：CAL-2 现场验收收口三笔已推送 |
+| 已推送 | `5e641b2..0d8ef02` 已入远端：CAL-2 现场验收收口三笔 `3b6b482`（读侧暴露 `calibrated_at`）/`1c8e5bd`（`MapDetail` 接线）/`0d8ef02`（端到端 + 文档）；更早批次（R1/R2/R3 各三笔与 R4 全部改动含 HTTP 端到端补测 `62d03c7`/`5e641b2`、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs，以及 CAL-1/MR-1~MR-3）亦已在远端 |
+| 未推送（仅本机） | 网关下行接线尚未提交：core `ExerciseLifecycleService`（14B/7B 接线）；core 测试 `TestCoreApplication`/`ExerciseLifecycleServiceReadinessTest` 与新测 `ExerciseLifecycleServiceDownlinkTest`；api `ExerciseController`（`replayId`）；契约 `docs/api/paths/exercise.yaml`；app `ExerciseLifecycleHttpIT` 与新测 `ExerciseDownlinkHttpIT`；docs `testing.md`/`decision-register.md`/`snapshot.md` |
+| 本轮继续成果 | **M3 LIFE 网关下行接线（A~D 四段）**——开演逐台 14B + 7B 开始帧、停演 7B 结束帧出站；发送失败只留痕不回滚；链路未开静默跳过；停演响应补 `replayId`。core +5、app +3；全量 `mvn -o test` **1148 项**全绿（**尚未提交**） |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -150,6 +153,19 @@ TTL `scds.export.expire-ttl` 默认 **24h**、**不新增清理任务**；
 **不引 POI / commons-csv**（JDK `java.util.zip` + `javax.xml.stream` 手写）；
 本段**只回 `ApiExceptionHandler.statusOf` 登记 `REPLAY_EXPORT_FAILED → 409`**（码早已在契约与 `ApiErrorCode`，
 **未改 openapi、未新增码、未新增迁移、未新增依赖**）。
+新增已完成（**M3 LIFE 网关下行接线**：开演/停演出站，分 A core 接线 / B api `replayId` + 契约 /
+C core 用例 / D app 端到端四段，见 testing 第 28 节）：
+`ExerciseLifecycleService.startExercise` / `stopExercise` 的**事务尾段**经注入的 `DeviceLinkAdmin`
+调用 `sendVestCommand` 下发——开演**先做完库写入与态势装载 → 再逐台发 14B 轮询配置帧 → 最后发 7B 开始帧**，
+停演**先冻结终局 → 再发 7B 结束帧**；组帧复用 `DownlinkCommands.pollConfig/startBattle/finishBattle`，
+**冻结常量一字未动**；全体下行用占位 `BROADCAST_VEST_NUM = 0`、写日志时该字段记 `NULL`；
+发送异常 **catch 后 WARN + 写 `t_exercise_log(SYSTEM)` 存证，方法照常返回、事务照常提交**
+（响应仍 201/200，**不发布半启动态**——这是 D11 的落地口径：物理副作用无法由 JDBC 撤回，故只留痕不回滚）；
+链路未开（`snapshot()` 无 `SERIAL_VEST` 且非 `OPEN`）**静默跳过**（只 WARN，不发字节、不写日志）；
+`ExerciseController.stopExercise` 响应补 `replayId = exerciseId`（停演即开一场可复盘的回放）。
+**未做**：开演链路就绪 **409 `DEVICE_LINK_NOT_OPEN` 硬前置**（波及 ≥9 个既有 IT，**单列下一原子任务**）、
+单实例保护 L6、硬件 ACK 解析（「已发送」≠「已确认」那条线仍在）。
+**未新增错误码、未新增迁移、未新增依赖**。
 file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
 
@@ -160,15 +176,20 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn test`：2026-10-28，**1140项，失败/错误/跳过均0**：
-protocol19 + gateway49 + core605 + api139 + app328（solver/domain无测试）。
+**当前**全量`mvn test`：2026-10-28，**1148项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core610 + api139 + app331（solver/domain无测试）。
 计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）取值；按 `target/surefire-reports/TEST-*.xml`
 累加会少 core 的 21 项（`@Nested` 内部类如 `TrackSamplingTest$Sampler`/`$Writer` 不落在外层类 XML 里），
 口径说明见 testing 第 20 节。
+M3 LIFE 网关下行接线新增证据：core 新增 `ExerciseLifecycleServiceDownlinkTest` **5 例**（605 → 610，
+`DeviceLinkAdmin` 桩 + `InOrder` 验「发了什么、按什么顺序、失败留不留痕」，逐帧与 `DownlinkCommands`
+现编码逐字节比对，不写死 hex 字面量）；app 新增 `ExerciseDownlinkHttpIT` **3 例**（328 → 331，
+真 Boot + 真 MySQL + 真安全链 + `scds.gateway.mode=simulator`，专属编号段 62500+）；
+全量 **1148 项**，详见 testing 第 28 节。
 M3 CAL-2 现场验收收口新增证据：core `BaseMapRepositoryIT` **+2**（603 → 605，批量 `IN` 读
 `calibrated_at` 的「只回已标定行」与「空入参回空表」两条语义）；app `MapBaseHttpIT` 计数**不变**
 （在既有端到端用例内加 `calibratedAt` 的前后断言，并校验列表整页批量读与详情给出**同一时刻**）；
-全量 **1140 项**，详见 testing 第 27 节（含计数表，并订正 testing 第 26 节计数表**漏列 protocol 19 条**的口径）。
+详见 testing 第 27 节（含计数表，并订正 testing 第 26 节计数表**漏列 protocol 19 条**的口径）。
 R4 HTTP 端到端补测新增证据：app `ReplayExportHttpIT` **2 例**（326 → 328，真 Boot + 真库 + 真安全链
 端到端验三端点），详见 testing 第 26 节。
 M5 REPLAY R4 新增证据：core 新增 `ExportTaskServiceIT` **16 例**（587 → 603，全走真库真事务、
@@ -375,6 +396,18 @@ URL 组装在接口层（与 `MapController.imageUrl` 同形）；产物 TTL `sc
 **仍只有文档约定、无代码校验**，按裁定**不动代码**、只入现场验收清单（`validateUwbMeta` 只拦缺角/越界/
 三点共线/长宽非正整数）；**未改 openapi、未新增错误码、未新增迁移、未新增依赖**。
 
+2026-10-28新增已确认（M3 LIFE 网关下行接线，见 testing 第 28 节）：
+开演/停演的下行落在 `ExerciseLifecycleService` 的**事务尾段**——先做完库写入与态势装载/冻结，**再发硬件**
+（开演：逐台 14B 轮询配置帧 → 最后 7B 开始帧；停演：先冻结终局 → 再 7B 结束帧）；
+发送失败**只留痕不回滚**（catch 后 WARN + 写 `t_exercise_log(SYSTEM)` 存证，方法照常返回、事务照常提交、
+响应仍 201/200，**不发布半启动态**）——这是 D11 的落地口径：物理副作用（已发字节）无法由 JDBC 撤回；
+链路未开（`snapshot()` 无 `SERIAL_VEST` 且非 `OPEN`）**静默跳过**（只 WARN，不发字节、不写日志）；
+全体下行的占位马甲编号 `BROADCAST_VEST_NUM = 0`，写日志时该字段记 **`NULL`**；
+停演响应补 `replayId = exerciseId`；
+**未做**：开演链路就绪 **409 `DEVICE_LINK_NOT_OPEN` 硬前置**（波及 ≥9 个既有 IT，**单列下一原子任务**）、
+单实例保护 L6、硬件 ACK 解析（「已发送」≠「已确认」那条线仍在）；
+**未新增错误码、未新增迁移、未新增依赖**，协议冻结字节一字未动。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -409,7 +442,8 @@ URL 组装在接口层（与 `MapController.imageUrl` 同形）；产物 TTL `sc
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性）详见 testing 第 27 节；
+最新证据：M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，含 D11 落地口径）详见 testing 第 28 节；
+M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性）详见 testing 第 27 节；
 M5 REPLAY R4（导出与下载去 501）详见 testing 第 26 节；
 M5 REPLAY R3（统计去 501）详见 testing 第 25 节；
 M5 REPLAY R2（轨迹分片去 501）详见 testing 第 24 节；
@@ -421,8 +455,8 @@ M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1140 项测试、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，含
-HTTP 端到端补测，**已推送**）与 M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性）交付
-（代码与文档已就位、**待授权提交与推送**）与下一任务候选（Flutter 客户端 /
-网关下行接线 / 单实例保护 L6 / T-PROD 部署），
+本快照已同步 1148 项测试、M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，D11 落地口径；
+代码与文档已就位、**待授权提交与推送**）、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
+含 HTTP 端到端补测）与 M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性，**均已推送**）
+与下一任务候选（开演链路就绪 409 硬前置 / Flutter 客户端 / 单实例保护 L6 / T-PROD 部署），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。

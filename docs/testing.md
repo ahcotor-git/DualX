@@ -14,6 +14,7 @@
 > R3 统计（`getReplayStatistics`）与1120项全量结果见第25节；
 > R4 导出与下载（`exportReplay` / `getExportTask` / `downloadExport`）与1138项全量结果见第26节。
 > M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性）与1140项最新全量结果见第27节。
+> M3 LIFE 网关下行接线（开演逐台 14B + 开始帧 / 停演结束帧）与1148项最新全量结果见第28节。
 
 ## 1. 本次自动化结果
 
@@ -1892,4 +1893,121 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 | `calibrated_at` 可读性 | **本段收口**：`GET /maps/{id}` 与列表都回 `calibratedAt` | 标定后取详情：`calibrated=true` 且 `calibratedAt` 非空；重启服务再取，时刻**仍在**（进程内标定会话那时已丢，这是唯一残留的证据） |
 | 50mm 静止阈值是否适配现场噪声 | **无需改码**：阈值取自配置键 `scds.uwb.calib-static-max-diff-cm`（默认 5.0 → 50mm） | 开标定时看服务端日志的「静止阈值=…mm」；若现场噪声导致误判 FAILED，读 `UwbCalibrationStatus.message`——它回的是「bs* 测距偏离中位数 X mm，超过阈值 Y mm」，按 X 的实际量级调这个配置键，不要改代码 |
 | 底图四角编号 | **按裁定不动代码**，只入本清单 | 必须按 `bs1` 左下 → `bs2` 右下 → `bs3` 右上 → `bs4` 左上录入，即 `bs1↔bs2` 是**长度**基准、`bs1↔bs4` 是**宽度**基准，两基准近似正交。编号错时四角仍能通过保存校验（只拦缺角 / 越界 / 三点共线 / 长宽非正整数），但长宽会落到错边——保存后用 `GET /maps/{id}/uwb-meta` 核对 `realLengthCm` 是否确实对应 `bs1↔bs2` 那条边 |
+
+## 28. M3 LIFE 网关下行接线（开演逐台 14B + 开始帧 / 停演结束帧）
+
+2026-10-28 收口第 876 行起「LIFE 分段（二）执行边界」里**有意留下**的那条未闭合项
+（本文件第 972 行原文：「网关下行未接线」）。此前开演只做库写入与态势装载、停演只写终局，
+契约 `startExercise` 步骤 ③④（逐台 14B 轮询配置帧、7B 开始帧）与 `stopExercise` 步骤 ③（7B 结束帧）
+**一个字节都没发**——`scds-gateway` 的 `DeviceLinkAdmin.sendVestCommand` 早已就绪，缺的只是调用方。
+本段把这条链接上，并按用户裁定拆 A（core 接线）/ B（api `replayId` + 契约）/ C（core 用例）/ D（app 端到端）
+四段实施。
+
+命令（仓库根）：`mvn -o test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动（`DownlinkCommands` 的 14B/7B 冻结字节一字未动） |
+| gateway | 49 | 0/0/0 | 未改动（`sendVestCommand` 通路已由 HW-LINK 段交付） |
+| core | 610 | 0/0/0 | 新增 `ExerciseLifecycleServiceDownlinkTest` 5（605 → 610） |
+| api | 139 | 0/0/0 | 计数不变：`ExerciseController.stopExercise` 补 `replayId`，无新增用例 |
+| app | 331 | 0/0/0 | 新增 `ExerciseDownlinkHttpIT` 3（328 → 331） |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1148** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径同第 20~27 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值。
+> 较第 27 节基线 1140 净增 **8** = core `+5`（段 C）+ app `+3`（段 D），两处新增即本段全部新增。
+
+### 28.1 落地范围与口径
+
+**接线落点（`scds-core` 的 `ExerciseLifecycleService`）**：`startExercise` / `stopExercise` 的
+**事务尾段**各挂一个私有方法（`sendStartDownlink` / `sendFinishDownlink`），编排顺序固定为
+**先做完库写入与态势装载 → 再逐台发 14B → 最后发 7B 开始帧**（停演则是**先冻结终局 → 再发 7B 结束帧**）。
+`ExerciseLifecycleService` 是 `@Service`，构造器末两参注入 `DeviceLinkAdmin`（domain 端口）与
+`InstanceProperties`；core 仍需保持「无 main 的库」边界，故 `DeviceLinkAdmin` 的接线对象由 `scds-app` 装配。
+
+**四条口径（用户逐项裁定，均取推荐项）**
+
+| 项 | 裁定 |
+|---|---|
+| 下发时机 | **同事务尾段下发**——先落库、再发硬件。物理副作用（已发字节）无法由 JDBC 撤回，故**只留痕、不回滚**：发送抛异常时 `catch` 后 WARN + 写 `t_exercise_log(SYSTEM)` 存证，方法**照常返回**、事务**照常提交**（响应仍 201 / 200），也**不发布半启动态** |
+| 链路未开 | **静默跳过**：`DeviceLinkAdmin.snapshot()` 里没有 `SERIAL_VEST` 且 `state=OPEN` 时，只打 WARN，**不发字节、不写日志**（这是布场前的正常路径，不是失败） |
+| 广播马甲编号 | 全体下行的 7B 帧用占位编号 `BROADCAST_VEST_NUM = 0`（`ExerciseLifecycleService` 常量）；写日志时该字段记 **`NULL`**，不写 0——0 会被误读成「1 号马甲」 |
+| 停演响应 `replayId` | `stopExercise` 的响应补 `replayId = outcome.exerciseId()`：停演即开一场可复盘的回放，`replayId` 就是本场 `exerciseId`（**发结束帧 + 补 `replayId=exerciseId`** 一并落地）。契约 `StopExerciseResult.replayId` 的既有字段语义不变，构造器仍是 3 参 |
+
+**组帧复用现成编码，零新增字节逻辑**：14B 轮询配置帧走 `DownlinkCommands.pollConfig(vestNum, mode, hp, ammo1, ammo2, team)`、
+7B 开始帧走 `DownlinkCommands.startBattle(battleMode)`、7B 结束帧走 `DownlinkCommands.finishBattle()`。
+`PollMode` → `MODE_AUTO`/`MODE_MANUAL`、`BattleMode` → `BATTLE_MODE_TRAIN`/`BATTLE_MODE_BATTLE`
+各只有一个私有映射方法（`modeCode` / `battleModeCode`），**不新增枚举、不改 `DownlinkCommands` 的冻结常量**。
+
+**未新增错误码、未新增迁移、未接线权限**：本段是**出站**方向，不产生新的请求校验分支，
+故 `Problem.code`、`ApiErrorCode`、`ApiExceptionHandler.statusOf` 三层登记表**一字未动**。
+
+### 28.2 用例判据
+
+**core（`ExerciseLifecycleServiceDownlinkTest`，5 条，纯 Mockito 单测）**：
+以 `DeviceLinkAdmin` 桩 + `InOrder` 断言「发了什么、按什么顺序、失败时留不留痕」。
+逐帧与 `DownlinkCommands` 现编码**逐字节比对**（`Hex.encode` 后的字符串相等），不写死 hex 字面量。
+
+1. `startSendsPollConfigPerVestThenStartBattleInOrder`——开演后**逐台各一条 14B**、**最后一条 7B 开始帧**
+   且 `vestNum = 0`；末尾用计数断言 `verify(links, times(3)).sendVestCommand(anyInt(), any())` 证明
+   **别无他发**（顺序由上面的 `InOrder` 保证，不用 `verifyNoMoreInteractions` 与桩调用纠缠）。
+2. `startBattleFrameFollowsTheRequestedMode`——请求 `BattleMode` 变则开始帧字节跟着变（TRAIN/BATTLE 两种模式各验一次）。
+3. `startDownlinkFailureLeavesEvidenceAndStillStartsTheExercise`——桩令发送抛 `RuntimeException` 时，
+   `startExercise` **不抛异常**（用 `AtomicReference` 捕获返回行，断言非 null 且 `exercises.insert` 被调用），
+   并断言 `t_exercise_log(SYSTEM)` 里有一条含失败详情的存证。**这是 D11 的核心判据**：硬件失败不得把开演
+   变成异常——那会回滚一场事实上已经开始、字节也已经发出去的演习。
+4. `startDownlinkIsSkippedWithoutSendingOrLoggingWhenVestLinkIsClosed`——`snapshot()` 三条链路全非 OPEN 时，
+   零 `sendVestCommand`、零日志，开演照常成功。
+5. `stopSendsFinishBattleAfterFreezing`——停演先冻结终局，再发**唯一一条** 7B 结束帧。
+
+**app（`ExerciseDownlinkHttpIT`，3 条，真装配）**：真 Boot + 真 MySQL + 真安全链 + 真 HTTP，
+且把 `scds.gateway.mode` 置为 `simulator`（`SimulatedLinkAdapter` 不起线程、不碰物理串口，
+下行**同步记录**，`sentCommands()` 的先后即发送先后，故字节断言是确定性的、不与时间赛跑）。
+专属马甲编号段 `62500~62599`（与 DeviceLedger 62100+ / Plan 62200+ / ExerciseLifecycle 62300+ / Command 62400+ 错开）。
+
+1. `startDownlinkSendsPollConfigPerVestThenStartBattle`——开演后共 **3 条**：`sent.get(2)` 是 `vestNum=0`
+   的开始帧，前两条**按马甲编号取帧**比对（`containsExactlyInAnyOrder` 验两台、`hexTo(sent, vestNum)`
+   定位 14B）。**顺序无关**是刻意的：编成读取走 `PlanRosterRepository.findByPlanId` 的
+   `ORDER BY team, vest_num`，BLUE 先于 RED——**该排序不是契约**，用例不得依赖下标。
+2. `stopDownlinkSendsFinishBattleAfterFreeze`——清空已记录字节后停演，断言 1 条 `finishBattle()`、
+   `replayId == exerciseId`。
+3. `downlinkIsSkippedWithoutBytesOrLogsWhenVestLinkIsClosed`——不手动开串口链路时，
+   开演（201）与停演（200）**都成功**，`sentCommands()` 为空、`totalLogCount() == 0`。
+
+两条成功路径用例都断言 `totalLogCount(exerciseId) == 0`：**正常下发不写存证日志，只有失败才写**
+（站内日志是「事故留痕」，不是「操作流水」）。
+
+### 28.3 边界与不变式
+
+**本段有意未做（附理由）**
+
+- **开演链路的「就绪硬前置」未纳入**：契约 `startExercise` 的 409 分支里「马甲串口链路未开启导致无法下发配置」
+  （`DEVICE_LINK_NOT_OPEN`）**仍未实现**——它不是一条判据，而是一次波及面很大的改造：一旦前置，
+  所有既有的「未开链路直接开演」用例（≥9 个 IT）都要先手动开串口链路才能继续跑。
+  按裁定**单列为下一原子任务**，本段只把「链路未开」处理成**静默跳过**（见 28.1）。
+  故契约 409 描述里那句已就地标注「**未实现**：链路就绪 409 未交付」。
+- **单实例保护 L6 未做**（承 LIFE 分段（一）的未闭合项，与本段无关）。
+- **硬件确认（ACK）不在本段**：本段只保证「字节发出去了」，不等待、不解析设备执行结果——
+  「已发送」≠「已确认」，这正是 D11 要区分的那条线（详见 [decision-register](decision-register.md) D11）。
+
+**未改动的硬约束**：协议冻结字节（`DownlinkCommands` 全部编码一字未动）、端口号
+（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、在线窗口（5000ms）、校验算法、
+`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；不改历史迁移（**不补 V8**）、
+不开启 out-of-order、**未新增依赖**。
+
+**仿真通过不等于现场通过**：`SimulatedLinkAdapter` 只证明「控制器 → 服务 → 组帧 → 端口」这条链在装配上
+是通的、字节是对的；真实串口的时序、重发与设备响应仍属现场待验收。
+
+本段为**代码验收**，不是生产发布批准。
+
+### 28.4 现场验收清单（本段新增的待验收项）
+
+| 待验收项 | 现场判据 |
+|---|---|
+| 开演出站字节真的到了马甲 | 开演后看 `scds-gateway` 日志：逐台 14B 轮询配置帧 + 末尾一条 7B 开始帧；马甲端确认轮询按 200ms 起振、初始 `hp`/`ammo` 与编成一致 |
+| 停演出站字节真的到了马甲 | 停演后看 7B 结束帧；马甲端确认停止上报、进入结束态 |
+| 链路未开时的静默跳过 | 布场前（未开串口）直接开演：响应仍 201、**无任何下行字节**、服务端只有一条 WARN |
+| 硬件失败的留痕 | 制造一次发送失败（拔串口/关闭链路），开演仍 201；`GET /api/v1/exercise/current/logs` 里应有一条 `SYSTEM` 日志，`downlinkHex` 是原样组帧的十六进制 |
 

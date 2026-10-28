@@ -39,7 +39,7 @@ D01 推荐不是一揽子批准；具体 claims 清单和限流策略应在对�
 | D07 | 链路 Poll 是数组、WS 是对象，不满足同构，R12 | 两通道均为完整 List<LinkStatus> 快照，变更时广播列表；不增加链路 revision | 共同信封可加入 version/时间，但需要新增 schema 和客户端协议；两种都须先批准 OpenAPI 变更 | PUSH-MODEL、链路客户端 |
 | D08 | revision 跨进程碰撞、超窗握手/close、订阅间隙，R13 | epoch + revision 明确标识代际，HTTP/WS 同步扩展；握手前超窗沿用 409，连接内 RESYNC 超窗发送 full 快照 | 每次重连强制全量可避免新 epoch，但必须同时规定独立 Poll 在服务重启后的恢复，不能只修 WS。升级后 close=4000 需改契约，不默认采用 | PUSH-MODEL、PUSH-WS、CLIENT-RESILIENCE |
 | D10 | 容量、事件/发送队列、线程、心跳恢复参数及备份目标未给出，R17/R27 | 先确认现场人数/基站/客户端/帧率和 SLA，再定有界队列、优先级/溢出、虚拟线程验证、长稳和 RPO/RTO | 1024 revision、256 会话队列、30s SID 缓存等设计候选不是生产容量结论；不可把协议帧率或算法参数改小当优化 | STATE、PUSH-WS、EXPORT、RELEASE |
-| D11 | 开演契约“整体回滚”不能撤回已发给硬件的字节；指令 accepted=false 文案与未入队含义不一致 | 设计启动准备/发送/提交和失败补偿路径，不发布半启动态；明确“未入队”“已发送”“已确认”边界，按事实提示 | DB 事务只能回滚库，硬件失败补偿也可能失败，需明确告警和重试/人工处理。不得把 Accepted 当设备执行成功 | LIFE、COMMAND、指挥端提示 |
+| D11 | 开演契约“整体回滚”不能撤回已发给硬件的字节；指令 accepted=false 文案与未入队含义不一致 | 设计启动准备/发送/提交和失败补偿路径，不发布半启动态；明确“未入队”“已发送”“已确认”边界，按事实提示。**（2026-10-28 已裁定并落地：同事务尾段下发、只留痕不回滚，见文末「网关下行接线与 D11 口径」）** | DB 事务只能回滚库，硬件失败补偿也可能失败，需明确告警和重试/人工处理。不得把 Accepted 当设备执行成功 | LIFE、COMMAND、指挥端提示 |
 
 D05 的 SYSTEM 存证后删指令和同事务已确认，不再把保留原指令行作为选项。
 恢复门禁、单实例保护的具体实现需新任务方案，不默认引入分布式中间件或数据库会话级锁。
@@ -102,7 +102,8 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | D09 | 2026-10-21 用户裁定：本地受保护目录 + domain 存储端口；短时效可重复签名 + 原格式返回。见下“D09 / D15 执行边界”。**仅裁定口径，实现属 M2 MAP-BASE** |
 | D15 | 2026-10-21 用户裁定：保留 `xPx/yPx` 只修描述；无演习/离线/阵亡/危险物按统一口径。见下节。**仅裁定口径，实现后续分段** |
 | D06 / D10 | 2026-10-23 用户逐项裁定（4 项，见下「D06 / D10 执行边界」）：UWB SERIAL **首版一并交付**；已开重开**对齐契约返回 409**；**做**无硬件仿真适配器（profile 显式开启）；D10 **先落可配置项并标注未验证**。**仅裁定口径与分段方案，`scds-gateway` 尚无源码，实现未开始** |
-| D05、D07、D08、D11-D13 | 待确认 |
+| D11 | **2026-10-28 已裁定并落地**：同事务尾段下发（先落库、再发硬件）、发送失败**只留痕不回滚**（响应仍 201/200）、链路未开**静默跳过**。见文末「网关下行接线与 D11 口径」 |
+| D05、D07、D08、D12-D13 | 待确认 |
 | 业务批量实施 | 未授权 |
 | 创建隔离数据库 | 已批准在scds-local-mysql创建scds_next_test及scds_test；不创建新容器，不改开发.env |
 | 安装 VS | 未授权 |
@@ -123,6 +124,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | REVISION 语义冲突（设计 02 §4.4 ↔ 设计 06 §4.5） | **已裁定（2026-10-26，用户："采用 设计 02 §4.4"）并已实施**：进程内 revision 只增不减，开演/停演各 +1，并把增量窗口下界抬到切换点；设计 06 §4.5/§4.6 改口径让位。整仓 `mvn -o test` 全绿（**954 项**：protocol 19 / gateway 44 / core 486 / api 109 / app 296）。细节见下「REVISION 语义冲突」 |
 | 实施 REVISION 语义裁定 | 改动 7 个文件、按 ≤3 文件切 4 段（R1 窗口原语 + 状态机 + 窗口单测；R2 状态机单测；R3 读侧单测；R4 端到端 IT + 设计 06 文档）。**已落地 2 个语义提交并成功推送**（`c908587` 实现与断言、`61c95cd` 文档与决策回写），`git push` 输出 `a007434..61c95cd main -> main`；S8 三笔、LIFE 三笔、`29ef32b` 等累计 **9 笔积压一并入远端**，`main` 与 `origin/main` 无差异。期间 `scds-local-mysql` 容器曾处 `Exited (255)`，已 `docker start` 恢复后跑 IT；未清库、未删卷 |
 | M4 PUSH-MODEL 首段·载荷下沉（**白名单例外**） | 用户裁定「**声明一次白名单例外**」。把 `SituationEnvelope` / `TeamSummary` / `HitEvent` 从 `com.dualx.api.dto.situation` 下沉到 `scds-domain` 的 `com.dualx.core.push`（与既有 `UnitState` / `CombatRole` 同址），并新增端口 `com.dualx.core.port.SituationPushPort`；`domain.HitEvent`（库实体）与 `push.HitEvent`（线载荷）Javadoc **互指**，写明「不得顺手统一」。**共 11 个路径**（4 建 + 3 删 + 4 改，git 识别为 3 处 rename），确因「移动类会立刻打断引用方」而不可再分，超出「≤3 文件」系用户授权例外。整仓 `mvn -o test` 全绿（**954 项**，与改前同数：纯结构搬迁、无行为变更）。**未做**：`LinkStatusPushPort` 与链路同构（依赖 D07）、WS / Poll 消费方接线（属后续段） |
+| M3 LIFE 网关下行接线（A~D 四段） | 2026-10-28 用户逐项裁定（见下「网关下行接线与 D11 口径」）：**同事务尾段下发**（先落库、再发硬件）、发送失败**只留痕不回滚**；并承前裁定：链路未开**静默跳过**、停演响应补 `replayId = exerciseId`、链路就绪 **409 硬前置本轮不纳入**（单列后续）。**已落地四段**：A core 接线（`ExerciseLifecycleService` 发 14B/7B）、B api `replayId` + 契约订正、C core 单测 5、D app 端到端 3。整仓 `mvn -o test` 全绿（**1148 项**：protocol 19 / gateway 49 / core 610 / api 139 / app 331）。证据见 [testing](testing.md) 第 28 节 |
 
 保留已确认 token_hash 刷新、无请求体全账号 logout、device/me 当前留 501、
 SYSTEM 同事务存证后删指令、每客户独立实例、公开开发钥仅开发等决定。
@@ -969,7 +971,7 @@ L4b 让 `ExerciseController` 依赖 `ExerciseLifecycleService` + `SituationQuery
 **本段未做（附理由）**
 
 - **`listCurrentExerciseLogs` 仍 501**：游标口径（`sinceSeq` → `latestSeq` 的推进）归 M4 PUSH。
-- **网关下行未接线**：契约 `startExercise` 步骤 ②③（逐台 14B 轮询配置帧、7B 开始帧）与 `stopExercise` 的 7B
+- ~~**网关下行未接线**~~ **（2026-10-28 已接线，见文末「网关下行接线与 D11 口径」）**：契约 `startExercise` 步骤 ②③（逐台 14B 轮询配置帧、7B 开始帧）与 `stopExercise` 的 7B
   结束帧都属 gateway。故契约 409 描述里「马甲串口链路未开启导致无法下发配置」这一分支**当前不可能触发**，
   409 只来自 `EXERCISE_ALREADY_RUNNING`。
 - **门禁的拒绝路径在 HTTP 上不可达**：真上下文里 `ExerciseLivenessRecover` 是 `ApplicationRunner`，启动完成
@@ -1174,6 +1176,49 @@ CAL-1（解算链路）交付后开工的**标定本体**，把 MAP-BASE 分段 
 **验证**：整仓 `mvn test` 全绿，**1097 项**（protocol 19 / gateway 49 / core 564 / api 139 / app 326，
 `solver`/`domain` 无测试；较上一轮 1090 增 `SituationStateServiceTest` 6 + `HwLinkHttpIT` 1）。
 证据与用例判据见 [testing](testing.md) 第 22 节。
+
+---
+
+### 网关下行接线与 D11 口径（2026-10-28，M3 LIFE 开演/停演出站）
+
+收口「LIFE 分段（二）执行边界」里有意留下的那条未闭合项：**开演逐台 14B 轮询配置帧 + 7B 开始帧、
+停演 7B 结束帧**都只停留在契约描述，`scds-gateway` 的 `DeviceLinkAdmin.sendVestCommand` 早已就绪、
+**缺的只是调用方**。本段把链接上，并按 A（core 接线）/ B（api `replayId` + 契约）/ C（core 用例）/
+D（app 端到端）四段实施。这也正是 **D11**（「整体回滚」不能撤回已发给硬件的字节）的落地口径。
+
+**用户逐项裁定（2 项，均取推荐项）**
+
+| 项 | 裁定 |
+|---|---|
+| **① 下发时机** | **同事务尾段下发**：`startExercise` / `stopExercise` 里**先做完库写入**（含 `insert`/`markEnded` 与态势装载/冻结），**再逐台发 14B → 最后发 7B**（停演则是先冻结终局 → 再发 7B 结束帧） |
+| **② 失败处理** | **只留痕、不回滚**：发送抛异常时 `catch` 后 WARN + 写 `t_exercise_log(SYSTEM)` 存证，方法**照常返回**、事务**照常提交**，响应仍 201 / 200，**不发布半启动态** |
+
+**承前裁定（一并落地）**
+
+- **链路未开 → 静默跳过**：`DeviceLinkAdmin.snapshot()` 无 `SERIAL_VEST` 且 `state=OPEN` 时，
+  只打 WARN，**不发字节、不写日志**——布场前未开串口是正常路径，不是失败。
+- **停演响应补 `replayId = exerciseId`**：停演即开一场可复盘的回放，`replayId` 就是本场 `exerciseId`。
+- **链路就绪 409 硬前置本轮不纳入**：契约 `startExercise` 的 `DEVICE_LINK_NOT_OPEN` 分支**仍未实现**
+  ——它不是一条判据，而是一次波及 ≥9 个既有 IT 的改造；**单列为下一原子任务**，契约描述已就地标注
+  「未实现」。
+
+**D11 的边界（本段只到哪一步）**：本段保证**字节发出去**，**不等待、不解析**设备执行结果。
+「已发送」≠「已确认」——`CommandAck.accepted=false` 的文案与「未入队」含义的那条不一致（D11 原问题）
+仍按既有口径保留，未在本段改动；硬件失败的重试 / 人工处理流程也**未实现**，只落地「失败必留痕、
+状态不半开」这一半。
+
+**落地要点**
+
+- 接线在 `scds-core` 的 `ExerciseLifecycleService`（`@Service`），构造器末两参注入 `DeviceLinkAdmin`
+  与 `InstanceProperties`；`DeviceLinkAdmin` 的实现对象仍由 `scds-app` 装配，core 保持「无 main 的库」。
+- 组帧**复用现成编码**：`DownlinkCommands.pollConfig(...)` / `startBattle(...)` / `finishBattle(...)`，
+  `PollMode` / `BattleMode` 各一个私有映射方法；**冻结常量一字未动**。
+- 全体下行用占位 `BROADCAST_VEST_NUM = 0`，写日志时该字段记 **`NULL`**（0 会被误读成 1 号马甲）。
+- **未新增错误码、未新增迁移**：本段是**出站**方向，不产生新的请求校验分支，三层登记表一字未动。
+
+**验证**：整仓 `mvn -o test` 全绿，**1148 项**（protocol 19 / gateway 49 / core 610 / api 139 / app 331；
+`solver`/`domain` 无测试；较上一轮 1140 增 `ExerciseLifecycleServiceDownlinkTest` 5 + `ExerciseDownlinkHttpIT` 3）。
+证据、用例判据与现场验收清单见 [testing](testing.md) 第 28 节。
 
 
 
