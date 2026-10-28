@@ -109,6 +109,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | 安装 VS | **仍未授权**（`flutter doctor`：Visual Studio 未安装）——Windows 端可写代码但**本机不能原生构建**；安装 Desktop development with C++ 需另授权并核验磁盘空间 |
 | D12 / D13 | **2026-10-28 用户裁定**：D12 取「单工程 + 共享 Dart 契约/通信包 + Android 单兵入口 / Windows 指挥入口」；D13 授权**仅一次** `flutter create` 脚手架例外。见文末「D12 / D13 裁定与 M6 CLIENT-BASE 段 0」 |
 | M6 CLIENT-BASE 段 0（脚手架） | 用户当次授权并选择「拆 2 笔（脚手架 + docs）并推送」。**已落地提交** `b16c348`（`clients/scds_client`，45 文件）；`flutter analyze` 无问题、默认 widget test 通过。细节见文末该节 |
+| M6 CLIENT-BASE 段 1（共享契约/通信基座） | 用户当次裁定：通信实现取「**`dart:io` HttpClient**」（零新增依赖、不动 `pubspec.yaml`）；文件范围取「**三文件实现，测试留段 1b**」。**已落地提交** `dbc5dd9`（`lib/shared/api/` 下 `api_contract.dart` / `api_problem.dart` / `api_client.dart`，共 313 行）；`flutter analyze` 无问题。细节见文末该节与 [testing](testing.md) 第 33 节 |
 | 提交/推送 M2 LEDGER 成果 | 用户本轮明确授权“提交 LEDGER 并尝试推送”。**已落地 5 个本地提交**（`86e9b71` 契约、`a95bcf3` 服务、`9c3ab09` 接线+权限、`74162ca` 测试、`e8258a0` 文档），叠加既有 4 个后 `main` 领先 `origin/main` **9 个提交**；推送**两次均因网络失败**（`Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。不推导后续自动提交授权 |
 | 提交/推送 M2 MAP-BASE A1/A2 与 B1-B3 | 用户当次选择“提交并尝试推送”与“B2 + B3 连做”。**已落地 5 个本地提交**（`c8c1d5d` 契约 A1/A2、`867bd4c` 裁定登记、`8e1adbd` B1 存储端口与实现、`55739f1` B2 签名 URL、`7846030` B3 单测与配置）。`867bd4c` 那次推送已成功入远端；B1-B3 三次推送**均因网络失败**（`Connection was reset` / 无法连接 github.com:443），`main` 领先 `origin/main` **3 个提交**，**远端未更新** |
 | 提交/推送 M2 MAP-BASE 分段 C 与“演习中删图”裁定 | 用户当次选择“提交并重试推送”与“一并拦截，复用 MAP_IN_USE”。**已落地 3 个本地提交**（`3787254` C1 错误码与契约登记、`e8006b6` C2 台账服务与想定/演习引用判据、`8b9de5c` C2 用例），叠加既有 4 个后 `main` 领先 `origin/main` **7 个提交**；本轮推送**两次均因网络失败**（`Recv failure: Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。`C` 段已跑通全量 `mvn -B verify`（716 项，protocol 19 / core 316 / api 100 / app 281） |
@@ -1334,7 +1335,20 @@ D（app 端到端）四段实施。这也正是 **D11**（「整体回滚」不�
 - 后端任何模块、协议冻结字节/端口（HTTP 11001 / UWB TCP 12001）/轮询周期/在线窗口/校验算法/
   四角编号口径/`scds-solver`/迁移/错误码**均一字未动**；本段不进 Maven reactor，全量计数仍 **1151** 项。
 
-**下一段**：段 1「共享契约/通信基座」（用户已选），仍守 ≤3 文件。证据见 [testing](testing.md) 第 32 节。
+**下一段（段 1）落地**：用户当次裁定「通信实现取 `dart:io` HttpClient（零新增依赖、不动 `pubspec.yaml`）」
+＋「三文件实现，测试留段 1b」。已在 `clients/scds_client/lib/shared/api/` 落下三个文件——`api_contract.dart`
+（`kHttpPort = 11001` / `kApiPrefix = /api/v1` / `kWsPrefix = /ws/v1` / `kProblemMediaType` + `ApiErrorCode`
+常量族，与 `openapi.yaml` 的 `servers` 与 `schemas/common.yaml` 的 `Problem.code` 逐字对齐）、
+`api_problem.dart`（RFC 7807 `ApiProblem`/`FieldError` 与 `ApiException`；`tryParse` 对不合契约的正文返回 `null`，
+**不臆造缺省值**）、`api_client.dart`（`dart:io HttpClient` 封装：`get/post/put/delete/send`、
+`resolve`/`api`、`Bearer` 注入、**非 2xx 解析 Problem 后抛 `ApiException`**、`close`）；
+**只依赖 `dart:io`，未新增依赖、未动 `pubspec.yaml`**；本段**不含测试**（按裁定拆为段 1b：
+用本地 `HttpServer` 打桩验契约解析、`Bearer` 注入与非 2xx 映射），故只有静态门禁
+`flutter analyze` → `No issues found!`。提交 `dbc5dd9`。证据见 [testing](testing.md) **第 33 节**。
+
+**再下一段**：段 1b（客户端基座测试）→ 段 2 登录（对接 `AuthService` RS256）→ 段 3 连接配置 + 自身态势只读
+（Android 优先）→ 段 4 Android 入口装配 + 模拟器 `zaa_pixel6` 冒烟 → 段 5 Windows 指挥端骨架
+（本机缺 Visual Studio，**不能原生构建**，安装工作负载需另授权）。各段仍守「每原子任务 ≤3 文件」。
 
 
 

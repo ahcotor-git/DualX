@@ -2291,3 +2291,38 @@ flutter create --org com.dualx --project-name scds_client --platforms=android,wi
 
 本段为**代码验收（脚手架层）**，不是生产发布批准，也不代表客户端已联调。
 
+## 33. M6 CLIENT-BASE 段 1：共享契约 / 通信基座（Dart 侧，不含测试）
+
+段 0 脚手架就位后，段 1 落**共享契约与通信基座**——后端契约在客户端的唯一镜像点，
+后续段 2（登录）到段 5（指挥端骨架）都复用它。**本段只写实现，测试按裁定留给段 1b**。
+
+### 33.1 交付物（3 文件，`clients/scds_client/lib/shared/api/`）
+
+| 文件 | 内容 | 契约来源 |
+|---|---|---|
+| `api_contract.dart` | `kDefaultHost` / `kHttpPort = 11001` / `kApiPrefix = /api/v1` / `kWsPrefix = /ws/v1` / `kProblemMediaType`；`ApiErrorCode` 常量族（AUTH/EXERCISE/COMMAND/DEVICE/MAP/PLAN/REPLAY/SITUATION/FILE 与通用码） | `docs/api/openapi.yaml`（`servers`、前缀注释）+ `docs/api/schemas/common.yaml`（`Problem.code` 枚举说明） |
+| `api_problem.dart` | `ApiProblem`（`type`/`title`/`status`/`code`/`detail`/`instance`/`traceId`/`errors`）、`FieldError`、`ApiException` | `common.yaml` 的 `Problem` 组件（`required: [status, code, traceId]`） |
+| `api_client.dart` | `ApiResponse`（保留原始字节，供二进制产物下载）、`ApiClient`（`get/post/put/delete/send`、`resolve`/`api`、`Bearer` 注入、`close`） | openapi `servers` 的 `http://{host}:11001` |
+
+### 33.2 判据（实现口径）
+
+- **只依赖 `dart:io`**：目标平台为 Android / Windows，`HttpClient` 够用，**未新增第三方依赖、未动 `pubspec.yaml`**；
+- **不臆造缺省值**：`ApiProblem.tryParse` 对缺必填字段、非 JSON、非对象的正文一律返回 `null`；
+  客户端不把「不合契约的错误页」伪装成合法 Problem；
+- **非 2xx 不吞**：`send` 在非 2xx 时解析 Problem 并抛 `ApiException(statusCode, problem)`，
+  调用方据 `code` 分支（`problem == null` 时只能依据状态码处置，`code` 回落为 `HTTP_<status>`）；
+- **错误码常量只作镜像**：`ApiErrorCode` 是 `common.yaml` 的逐字复制，**不新增、不改名**；
+  语义边界的注释（如 `COMMAND_MOVE_FORBIDDEN` 与 `AUTH_FORBIDDEN`、`DEVICE_LINK_NOT_OPEN` 与
+  `DEVICE_LINK_ALREADY_OPEN`）随之带上，避免客户端误用；
+- **二进制安全**：`ApiResponse.body` 是 `List<int>`，`text`/`json` 只是便利视图，产物下载不走文本解码。
+
+### 33.3 未做与边界
+
+- **本段无测试**（按裁定拆为段 1b：用本地 `HttpServer` 打桩验契约解析、`Bearer` 注入与
+  非 2xx → `ApiException` 映射）；因此本段**只有静态门禁**：`flutter analyze` → `No issues found!`；
+- **未接后端、未做登录**（段 2）；`main.dart` / `widget_test.dart` 仍是模板原样（装配留段 4）；
+- **未改动**：后端任何模块、协议冻结字节、端口号、轮询周期、在线窗口、校验算法、四角编号口径、
+  `scds-solver`、迁移与错误码；本段是 Dart 侧资产、**不进 Maven reactor**，Maven 全量计数仍 **1151** 项。
+
+本段为**代码验收（客户端基座层）**，不是生产发布批准，也不代表客户端已联调。
+
