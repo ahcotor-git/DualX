@@ -3069,3 +3069,61 @@ CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水
 **未验项**：本段只做 `flutter analyze` + `flutter test`（`HttpServer` 打桩），**未对着真实后端实例**跑过真实指令下发
 （真实入队 / 离线 `accepted=false` / 队列满 / 真实 `downlinkHex` 字节核对未验证）；**UI 尚未接线**（指令按钮与状态反馈另开段）。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 47. M6 CLIENT-WINDOWS 续段（UI 接线）：command 域指挥指令页 + 全体充弹入口
+
+承段 46「UI 接线另开段」，本段把 command 域写操作**接进指挥端 UI**。经决策点确认：入口取
+「**态势页每行 → 单兵指令页（推荐）**」（从所选单元行进入，目标马甲编号**不手输**），范围取
+「**先做核心 7 端（不含 move）（推荐）**」——即 6 个单兵写端点（判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 覆盖配置）
++ 全体充弹（广播，入口在「全体态势」页 AppBar）。`moveVest`（契约 `x-internal` 联调专用）**本段不接 UI**。
+
+### 47.1 交付物（1 笔 = 4 文件，1 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/command_page.dart`(新) | **单兵指挥指令页** `CommandPage`：六端口（`kill`/`revive`/`injure`/`outOfRange`/`reload`/`setConfig`，闭包注入，页面**不自持令牌**）；`describeCommandAck` 统一受理回执文案（本页与态势页广播反馈共用）；控件键 17 个 |
+| `lib/features/console/overall_situation_page.dart`(改) | 增两处**可选**指令端口 `onCommand`（点单元行 → 进单兵指令页，`null` 时行不可点、只读渲染不变）与 `reloadAll`（`null` 时 AppBar 不渲染入口）；增 `_ReloadAllDialog`（弹量 + 武器槽位，校验 0..65535）；增 6 个对话框键 + `overallSituationUnitTapKey(int)` |
+| `lib/app/console_app.dart`(改) | 新增 `CommandApi`（挂在同一条 `RefreshingApiTransport` 下）；`_openOverallSituation` 增传 `onCommand`/`reloadAll`；新增 `_openCommand`（push `CommandPage`，六端口闭包**每次取用时读 `_account!.accessToken`**，续期换令牌后自动生效） |
+| `test/console_widget_test.dart`(改) | 增两组共 **10 例**：`指挥指令页（段 47）`（6 例）+ `指挥端全体态势页·指令入口（段 47）`（4 例）；`pumpCommand` 桩（放大测试视口以容纳长页） |
+
+### 47.2 用例与判据（10 例）
+
+| 用例 | 判据 |
+|---|---|
+| 目标来自所选单元行：判死下发后显示受理回执（含下发字节） | 目标行文案 `目标 #14｜admin（OPERATOR）`；点「判死」后回执恰 `DIE → #14｜已下发：0B01`、端口调用 1 次 |
+| `accepted=false`：提示「未下发」而非报错 | 回执 `contains('未下发')`；`kCommandErrorKey` **不渲染**（HTTP 200 只表示已受理） |
+| 契约错误码映射为现场文案（演习未运行） | 409 `EXERCISE_NOT_RUNNING` → 行内 `contains('当前没有进行中的演习')`；回执键不渲染 |
+| 单兵充弹：非法弹量不发请求，合法则带契约请求体 | 弹量 `abc` → 端口**零调用**、行内 `contains('0..65535')`；弹量 `60000` → 请求体 `ammo=60000`、`weapon=PRIMARY` |
+| 覆盖配置：全空不发请求；只填 HP 则请求体只含 `hp` 键 | 全空保存 → 端口**零调用**、行内 `contains('至少')`；只填 `hp=200` → `toJson()` 恰 `{"hp":200}`（**未填字段不发**） |
+| 下发期间单飞去重：连点只发一次请求 | 首点后 `_busy` 置位（按钮禁用），二点仍只调端口 **1 次**；完成后回执落地 |
+| 注入 `onCommand`：单元行可点，回调目标编号 | 点 `overallSituationUnitTapKey(21)` → 回调收到 `21`；行文本键 `overallSituationUnitRowKey(21)` 数据不变；未注入 `reloadAll` → AppBar 广播入口**不渲染** |
+| 未注入 `onCommand`：行仍为只读文本，无点击键 | `overallSituationUnitRowKey(14)` 存在、`overallSituationUnitTapKey(14)` **不存在**（回归固定） |
+| 注入 `reloadAll`：AppBar 入口 → 对话框 → 广播回执提示为「全体」 | 点入口开 `_ReloadAllDialog`；填弹量 `50` + 确认 → 端口收到 `ammo=50`/`weapon=PRIMARY`；SnackBar 文案恰 `RELOAD → 全体｜已下发：0B03`（广播 `vestNum=0` → 「全体」） |
+| 全体充弹对话框：非法弹量不关闭且不发请求 | 弹量 `x` + 确认 → 端口**零调用**、`kReloadAllErrorKey` 渲染、确认键**仍在**（对话框未关） |
+
+### 47.3 口径要点
+
+- **端口注入范式（页面不自持令牌）**：两页都只持闭包端口；生产接线在 `console_app.dart` 把闭包**每次取用时读
+  `_account!.accessToken`**——续期换令牌后自动生效，页面无需感知刷新。
+- **受理 ≠ 下发（贯穿 UI）**：`accepted=false` 一律提示「未下发（马甲离线或队列满）」，**不当错误**；
+  且 `accepted=true` **也不等于设备已确认**（协议无回执帧，观察项）。
+- **覆盖配置只发非空键**：`VestConfigRequest.toJson()` 只输出非 `null` 键，故**全空则不发请求**（行内提示至少填一项），
+  避免把「未填」误当成「置空」下发。
+- **写操作单飞去重**：指令是写操作，下发期间按钮禁用（`_busy`），重复点击**不重复下发字节**。
+- **可选端口不改变既有渲染**：`onCommand`/`reloadAll` 为 `null` 时，「全体态势」页与段 D 后半的只读用例**渲染与行为完全不变**
+  （既有 5 例回归保持绿）。
+- **`moveVest` 不接 UI**：契约标 `x-internal`（联调专用、正式演习 403），本段只保留段 46 的 API 层，不暴露按钮。
+
+### 47.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**225 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + **本段 10**）；
+  `flutter analyze` → `No issues found! (ran in 3.6s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（1 新 + 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩 / 假连接器），**未对着真实后端实例**跑过真实指令下发
+（真实入队 / 离线 `accepted=false` / 队列满 / 真实 `downlinkHex` 字节核对未验证），`console_app` 的 `onCommand`/`reloadAll`
+接线**未在真实实例上走通**（app 级用例仍只覆盖到「入口回调」层）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。

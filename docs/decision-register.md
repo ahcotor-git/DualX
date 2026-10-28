@@ -1669,8 +1669,32 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 **未验项**：**未对着真实后端实例**跑真实指令下发（真实入队 / 离线 `accepted=false` / 队列满 / 真实 `downlinkHex` 字节核对未验证）；
 **UI 尚未接线**。证据见 [testing](testing.md) **第 46 节**。
 
-**下一段（候选）**：command 域**UI 接线**（单兵指令按钮 + 受理反馈，含「未下发」提示与全体广播显示）；
-CLIENT-WINDOWS 其余子域（想定与生命周期、地图与标定、复盘与导出）；T-PROD 部署；
+**下一段（command 域 UI 接线）落地**：用户当次裁定「**继续**」，并在决策点选入口「**态势页每行 → 单兵指令页（推荐）**」
+（从所选单元行进入，目标马甲编号**不手输**）＋范围「**先做核心 7 端（不含 move）（推荐）**」。落**一笔** `2a42efb`
+（**4 文件 / 1 新 3 改 / 956 insertions / 10 deletions**）：
+- `lib/features/console/command_page.dart`（新）：`CommandPage` 六端口（`kill`/`revive`/`injure`/`outOfRange`/`reload`/`setConfig`）
+  ＋ `describeCommandAck`（本页与态势页广播反馈共用文案）；覆盖判死/判活/判伤/超范围/单兵充弹/覆盖配置；
+- `lib/features/console/overall_situation_page.dart`（改）：增**可选**端口 `onCommand`（点单元行 → 进单兵指令页）与
+  `reloadAll`（AppBar 全体充弹入口）；增 `_ReloadAllDialog`（弹量 + 武器槽位，校验 0..65535）；
+- `lib/app/console_app.dart`（改）：新增 `CommandApi`（挂同一 `RefreshingApiTransport`）；`_openOverallSituation` 增传两端口；
+  新增 `_openCommand`（六端口闭包**每次取用时读 `_account!.accessToken`**）；
+- `test/console_widget_test.dart`（改）：两组共 **10 例**（`指挥指令页（段 47）` 6 + `指挥端全体态势页·指令入口（段 47）` 4）。
+
+**口径要点**：**页面不自持令牌**（闭包端口由外壳装配，续期换令牌后自动生效）；**受理 ≠ 下发贯彻 UI**（`accepted=false` 只提示
+「未下发（马甲离线或队列满）」，不当错误）；**覆盖配置只发非空键**（全空则不发请求，避免「未填」被误当「置空」）；
+**写操作单飞去重**（下发期间按钮禁用，不重复下发字节）；**可选端口不改变既有渲染**（`onCommand`/`reloadAll` 为 `null` 时，
+「全体态势」页与段 D 后半只读用例渲染与行为完全不变）；**`moveVest` 不接 UI**（契约 `x-internal`，本段只保留段 46 的 API 层）。
+本原子任务 **4 文件**（1 新 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**。
+实现期修正一处布局缺陷：单兵充弹行的武器槽位 `InputDecorator` 直挂 `Row` → **宽度无界**（`performLayout` 断言），改包 `Expanded`。
+
+门禁：`flutter test` → `All tests passed!`（**225 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + **本段 10**）、
+`flutter analyze` → `No issues found! (ran in 3.6s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实指令下发（真实入队 / 离线 `accepted=false` / 队列满 / 真实 `downlinkHex` 字节核对未验证）；
+`console_app` 的 `onCommand`/`reloadAll` 接线**未在真实实例上走通**（app 级用例仍只覆盖到「入口回调」层）。证据见 [testing](testing.md) **第 47 节**。
+
+**下一段（候选）**：CLIENT-WINDOWS 其余子域（想定与生命周期 exercise 域写端点、地图与标定 map 域、复盘与导出 replay 域）；
+`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。各段守「每原子任务 ≤3 文件」。
 
