@@ -145,13 +145,13 @@ class ExerciseLifecycleHttpIT {
         assertProblem(postExercise(mapper.createObjectNode().put("planId", planId)),
                 409, "EXERCISE_ALREADY_RUNNING", "/api/v1/exercise/current");
 
-        // 停演：走本端点恒为 NORMAL；复盘落库归 M5，故 replayId 为 null
+        // 停演：走本端点恒为 NORMAL；replayId 即本场 exerciseId（t_exercise 一行两用）
         HttpResponse<byte[]> stopped = delete("/api/v1/exercise/current");
         assertThat(stopped.statusCode()).isEqualTo(200);
         JsonNode outcome = json(stopped);
         assertThat(outcome.path("exerciseId").asText()).isEqualTo(exerciseId);
         assertThat(outcome.path("endedAt").isNull()).isFalse();
-        assertThat(outcome.path("replayId").isNull()).isTrue();
+        assertThat(outcome.path("replayId").asText()).isEqualTo(exerciseId);
         assertThat(outcome.path("endReason").asText()).isEqualTo("NORMAL");
 
         // 停演后回到「无演习」，重复停演是 409 而不是 500

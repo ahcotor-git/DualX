@@ -322,8 +322,12 @@ exerciseCurrent:
     summary: 开始演习
     description: |
       以单例资源语义创建「进行中的演习」。服务端顺序执行：
-      ① 加载想定编成；② 逐台下发 14B 轮询配置帧；③ 下发 7B 演习开始帧；④ 进入态势推送。
-      任一步失败即整体回滚并返回 409/500，绝不留下半启动状态。
+      ① 加载想定编成；② 在**库与内存态整体写定**（想定校验、演习行、编成快照、态势装载，同一事务）；
+      ③ 逐台下发 14B 轮询配置帧；④ 下发 7B 演习开始帧。
+
+      步骤 ①② 的失败整体回滚并返回 400/404/409/503，绝不留下半启动的库状态。步骤 ③④ 是**物理副作用**，
+      事务无法撤回（决策 D11），故按「只留痕、不回滚」处理：下发失败（含马甲串口链路未开启）只记
+      WARN 与一条 `SYSTEM` 存证日志，演习仍为已开始，响应仍为 `201`。
     requestBody:
       required: true
       content:
@@ -350,7 +354,12 @@ exerciseCurrent:
       '404':
         $ref: '../schemas/common.yaml#/NotFound'
       '409':
-        description: 已有演习进行中（`EXERCISE_ALREADY_RUNNING`），或马甲串口链路未开启导致无法下发配置
+        description: |
+          已有演习进行中（`EXERCISE_ALREADY_RUNNING`）。
+
+          **尚未交付**：设计 05 §4.7 / 决策 D06 的「开演前检查马甲串口链路就绪，未开则返回
+          409 `DEVICE_LINK_NOT_OPEN`」目前**未实现**——链路未开时开演仍会成功（`201`），
+          只是不下发 14B/7B 并在服务端记 WARN。
         content:
           application/problem+json:
             schema:
@@ -371,8 +380,12 @@ exerciseCurrent:
     operationId: stopExercise
     summary: 结束演习
     description: |
-      下发 7B 演习结束帧，冻结态势，并把本场落库为一条 replay（含轨迹、命中、统计）。
-      落库失败不影响停演本身（返回 200 但 replayId 为 null，并记 WARN 日志）。
+      服务端顺序执行：① 冻结态势并写定本场终局（终局、命中、阵亡与 `ended_at`，同一事务）；
+      ② 下发 7B 演习结束帧。终局落库完成即视为停演成功（`200`）；结束帧是物理副作用，事务无法撤回，
+      故下发失败（含马甲串口链路未开启）只记 WARN 与一条 `SYSTEM` 存证日志，不影响停演结果。
+
+      `replayId` 即本场 `exerciseId`：`t_exercise` 一行两用，`ended_at` 一写定，这一行本身就是复盘记录，
+      不存在第二张复盘表另生成 ID。
     responses:
       '200':
         description: 停演结果
@@ -388,7 +401,9 @@ exerciseCurrent:
                   format: date-time
                 replayId:
                   type: [string, 'null']
-                  description: 复盘记录 ID，可用于立即跳转复盘
+                  description: |
+                    复盘记录 ID，可用于立即跳转复盘。当前恒等于本场 `exerciseId`（`t_exercise` 一行两用）；
+                    保留可空形态是为了对齐「复盘未落库」的历史口径，本端点不产生 null。
                 endReason:
                   type: string
                   enum: [NORMAL, CRASH_RECOVERED]

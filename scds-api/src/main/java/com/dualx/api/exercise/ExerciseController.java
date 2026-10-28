@@ -204,7 +204,8 @@ public class ExerciseController {
      *
      * <p>只做契约形状的搬运：{@code planId} 解析、{@code battleMode} 为 null 时由服务层沿用想定，
      * 单实例保护与「想定/编成是否可用」全在 {@link ExerciseLifecycleService} 里判。
-     * 契约步骤 ②③（14B 轮询配置帧、7B 开始帧）属网关下行，尚未接线。</p>
+     * 契约步骤 ②③（逐台 14B 轮询配置帧、7B 开始帧）已由服务层在库与内存态写定后下发，且
+     * <b>只留痕、不回滚</b>——硬件失败不会把这次开演变成非 201。</p>
      */
     @PostMapping("/api/v1/exercise/current")
     @ResponseStatus(HttpStatus.CREATED)
@@ -212,13 +213,18 @@ public class ExerciseController {
         return toExercise(lifecycle.startExercise(exercisePlanId(request.planId()), request.battleMode()), situation);
     }
 
-    /** 结束演习；当前没有演习进行中时 409。 */
+    /**
+     * 结束演习；当前没有演习进行中时 409。
+     *
+     * <p><b>{@code replayId} 直接取 {@code exerciseId}</b>（M5 R1 口径）：{@code t_exercise} 一行两用，
+     * {@code ended_at} 一写定，这一行本身就是复盘记录，不存在第二张「复盘表」另生成一个 ID。
+     * 停演到此已落库完成，因此这个 ID 恒非空。</p>
+     */
     @DeleteMapping("/api/v1/exercise/current")
     public StopExerciseResult stopExercise() {
         ExerciseLifecycleService.StopOutcome outcome = lifecycle.stopExercise();
-        // replayId 为 null 是契约允许的形态（复盘落库失败也走这条路）；复盘本体归 M5 REPLAY
-        return new StopExerciseResult(outcome.exerciseId().toString(), outcome.endedAt(), null,
-                outcome.endReason());
+        String replayId = outcome.exerciseId().toString();
+        return new StopExerciseResult(replayId, outcome.endedAt(), replayId, outcome.endReason());
     }
 
     /**
