@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -141,6 +142,21 @@ class HitEventRepositoryIT {
         assertThat(hits.countByShooter(exerciseId, 1002)).isEqualTo(1);
         assertThat(hits.countLethalByShooter(exerciseId, 1002)).isEqualTo(1);
         assertThat(hits.countByShooter(exerciseId, 9999)).isZero();
+    }
+
+    @Test
+    void countByHitPart_groupsByPartAndStaysScopedToExercise() {
+        UUID mine = UuidV7.generate();
+        UUID other = UuidV7.generate();
+        hits.insert(hit(mine, 1001, 2001, HitPart.CHEST, false, indoor()));
+        hits.insert(hit(mine, 1002, 2002, HitPart.CHEST, true, indoor()));
+        hits.insert(hit(mine, 1003, 2003, HitPart.HEAD, false, indoor()));
+        hits.insert(hit(other, 1004, 2004, HitPart.CHEST, false, indoor()));
+
+        assertThat(hits.countByHitPart(mine))
+                .containsExactlyInAnyOrderEntriesOf(Map.of(HitPart.CHEST, 2L, HitPart.HEAD, 1L));
+        assertThat(hits.countByHitPart(other)).containsExactlyEntriesOf(Map.of(HitPart.CHEST, 1L));
+        assertThat(hits.countByHitPart(UuidV7.generate())).isEmpty();
     }
 
     @Test

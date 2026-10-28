@@ -4,19 +4,27 @@ import com.dualx.core.domain.BattleMode;
 import com.dualx.core.domain.CoordinateSystem;
 import com.dualx.core.domain.Exercise;
 import com.dualx.core.domain.ExerciseEndReason;
+import com.dualx.core.domain.ExerciseUnit;
 import com.dualx.core.domain.GeoPoint;
+import com.dualx.core.domain.HitEvent;
 import com.dualx.core.domain.MotionState;
 import com.dualx.core.domain.PositionSource;
 import com.dualx.core.domain.SampleReason;
 import com.dualx.core.domain.TrackSample;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.push.TeamSummary;
 import com.dualx.core.repository.ExerciseRepository;
+import com.dualx.core.repository.ExerciseUnitRepository;
+import com.dualx.core.repository.HitEventRepository;
 import com.dualx.core.repository.TrackSampleRepository;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
 import com.dualx.core.support.UuidV7;
+import com.dualx.protocol.HitPart;
+import com.dualx.protocol.Team;
 import com.dualx.protocol.VestStatus;
+import com.dualx.protocol.WeaponKind;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 复盘读侧的验收（契约 {@code docs/api/paths/replay.yaml} 的 {@code listReplays} / {@code getReplay} /
- * {@code getReplayTimeline}）。
+ * {@code getReplayTimeline} / {@code getReplayStatistics}）。
  *
  * <p>真库真事务：复盘与演习共用 {@code t_exercise} 一行，判据「进行中的场次不是复盘」要靠
  * {@code ended_at IS NULL} 这一列去证；轨迹分片的「不重不漏」要靠 {@code t_track_sample.id} 的
@@ -54,6 +63,12 @@ class ReplayServiceIT {
 
     @Autowired
     private TrackSampleRepository tracks;
+
+    @Autowired
+    private ExerciseUnitRepository units;
+
+    @Autowired
+    private HitEventRepository hits;
 
     private static final Instant START = Instant.parse("2026-10-20T08:00:00.000Z");
 
@@ -241,7 +256,124 @@ class ReplayServiceIT {
         assertCode(() -> replays.timeline(id, "-1", 100, null, 1), ApiErrorCode.VALIDATION_FAILED);
     }
 
+    // ── getReplayStatistics ─────────────────────────────────────────────────
+
+    @Test
+    void statistics_aggregatesTeamsFromFrozenRoster() {
+        UUID id = seedEnded("it_rp_统计_队伍", Instant.parse("2026-10-20T08:01:00Z"));
+        seedUnit(id, 1001, "甲", Team.RED, VestStatus.LIVE, null, 0, 3);
+        seedUnit(id, 1002, "乙", Team.RED, VestStatus.DIE, Instant.parse("2026-10-20T08:00:20Z"), 1, 2);
+        seedUnit(id, 1003, "丙", Team.BLUE, VestStatus.OFFLINE, null, 0, 0);
+
+        ReplayService.Statistics stats = replays.statistics(id, 10);
+
+        // 队伍按 Team 声明序、只含出现过的队伍
+        assertThat(stats.teams()).extracting(TeamSummary::team).containsExactly(Team.RED, Team.BLUE);
+        TeamSummary red = stats.teams().getFirst();
+        assertThat(red.total()).isEqualTo(2);
+        assertThat(red.live()).isEqualTo(1);
+        assertThat(red.dead()).isEqualTo(1);
+        assertThat(red.offline()).isZero();
+        assertThat(red.hitsDealt()).isEqualTo(5);
+        assertThat(stats.teams().get(1).offline()).isEqualTo(1);
+    }
+
+    @Test
+    void statistics_ranksShootersByKillsThenHitsThenVest() {
+        UUID id = seedEnded("it_rp_统计_排行", Instant.parse("2026-10-20T08:01:00Z"));
+        seedUnit(id, 1001, "甲", Team.RED, VestStatus.LIVE, null, 0, 0);
+        seedUnit(id, 1002, "乙", Team.RED, VestStatus.LIVE, null, 2, 5);
+        seedUnit(id, 1003, null, Team.BLUE, VestStatus.LIVE, null, 2, 3);
+        seedUnit(id, 1004, "丁", Team.BLUE, VestStatus.LIVE, null, 2, 5);
+
+        ReplayService.Statistics stats = replays.statistics(id, 10);
+
+        // 击杀降序 → 同为 2 杀再比命中降序 → 再同则编号升序；零战绩的 1001 被剔除
+        assertThat(stats.topShooters()).extracting(ReplayService.ShooterStat::vestNum)
+                .containsExactly(1002, 1004, 1003);
+        assertThat(stats.topShooters().get(2).name()).isNull();
+    }
+
+    @Test
+    void statistics_hitPartDistribution_groupsByPartInEnumOrder() {
+        UUID id = seedEnded("it_rp_统计_部位", Instant.parse("2026-10-20T08:01:00Z"));
+        seedHit(id, HitPart.CHEST, 1001, 2001);
+        seedHit(id, HitPart.HEAD, 1001, 2001);
+        seedHit(id, HitPart.CHEST, 1002, 2002);
+
+        ReplayService.Statistics stats = replays.statistics(id, 10);
+
+        // 键序 = HitPart 声明序：HEAD 在 CHEST 之前
+        assertThat(stats.hitPartDistribution()).extracting(ReplayService.HitPartStat::hitPart)
+                .containsExactly(HitPart.HEAD, HitPart.CHEST);
+        assertThat(stats.hitPartDistribution()).extracting(ReplayService.HitPartStat::count)
+                .containsExactly(1, 2);
+    }
+
+    @Test
+    void statistics_timeline_splitsDurationAndDropsTheDead() {
+        // 时长 10s，10 段 → t = 0,1000,...,9000
+        UUID id = seedEnded("it_rp_统计_曲线", Instant.parse("2026-10-20T08:00:10Z"));
+        seedUnit(id, 1001, "甲", Team.RED, VestStatus.DIE, Instant.parse("2026-10-20T08:00:03Z"), 0, 0);
+        seedUnit(id, 1002, "乙", Team.RED, VestStatus.LIVE, null, 0, 0);
+        seedUnit(id, 1003, "丙", Team.BLUE, VestStatus.DIE, Instant.parse("2026-10-20T08:00:07Z"), 0, 0);
+
+        ReplayService.Statistics stats = replays.statistics(id, 10);
+
+        assertThat(stats.timeline()).extracting(ReplayService.LiveBucket::t)
+                .containsExactly(0L, 1000L, 2000L, 3000L, 4000L, 5000L, 6000L, 7000L, 8000L, 9000L);
+        // t=0 三人全活
+        assertThat(stats.timeline().getFirst().liveByTeam())
+                .containsExactlyInAnyOrderEntriesOf(Map.of("RED", 2, "BLUE", 1));
+        // t=3000：1001 的 deadAt 落在此刻 → 自这一秒起不再计入
+        assertThat(stats.timeline().get(3).liveByTeam())
+                .containsExactlyInAnyOrderEntriesOf(Map.of("RED", 1, "BLUE", 1));
+        // t=7000：1003 阵亡 → 蓝队归零，但键仍在（各段键集一致）
+        assertThat(stats.timeline().get(7).liveByTeam())
+                .containsExactlyInAnyOrderEntriesOf(Map.of("RED", 1, "BLUE", 0));
+    }
+
+    @Test
+    void statistics_replayWithoutRosterOrHits_returnsEmptySections() {
+        UUID id = seedEnded("it_rp_统计_空", Instant.parse("2026-10-20T08:00:10Z"));
+
+        ReplayService.Statistics stats = replays.statistics(id, 10);
+
+        assertThat(stats.teams()).isEmpty();
+        assertThat(stats.topShooters()).isEmpty();
+        assertThat(stats.hitPartDistribution()).isEmpty();
+        assertThat(stats.timeline()).hasSize(10);
+        assertThat(stats.timeline()).allSatisfy(bucket -> assertThat(bucket.liveByTeam()).isEmpty());
+    }
+
+    @Test
+    void statistics_runningExercise_isNotFound() {
+        UUID id = seedRunning("it_rp_统计_进行中");
+
+        assertCode(() -> replays.statistics(id, 10), ApiErrorCode.REPLAY_NOT_FOUND);
+    }
+
+    @Test
+    void statistics_unknownId_isNotFound() {
+        assertCode(() -> replays.statistics(UuidV7.generate(), 10), ApiErrorCode.REPLAY_NOT_FOUND);
+    }
+
     // ── 铸造 ────────────────────────────────────────────────────────────────
+
+    /** 造一个停演冻结后的编成单元。 */
+    private void seedUnit(UUID exerciseId, int vestNum, String name, Team team,
+                          VestStatus finalStatus, Instant deadAt, int kills, int hitsDealt) {
+        units.insert(new ExerciseUnit(0L, exerciseId, vestNum, name, team, null, null, 0, 0,
+                null, null));
+        units.freezeOutcome(exerciseId, vestNum, finalStatus, deadAt, kills, hitsDealt);
+    }
+
+    /** 造一条命中（部位分布用），编号按单兵区间推导。 */
+    private void seedHit(UUID exerciseId, HitPart part, int shooterNum, int hitVestNum) {
+        hits.insert(new HitEvent(0L, exerciseId, START, 1000, hitVestNum, shooterNum,
+                WeaponKind.isSoldier(shooterNum), WeaponKind.fromNum(shooterNum), part, false,
+                new GeoPoint(CoordinateSystem.INDOOR, 0.1, 0.2, 1, 5, null, null, null, null)));
+    }
 
     /** 按 tick 交错写入多人，还原真实上行帧的写入顺序；每 tick 的 {@code tMs} 为 {@code (tick+1)*100}。 */
     private void seedTicks(UUID exerciseId, List<Integer> vestNums, int ticks) {

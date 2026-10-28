@@ -12,7 +12,9 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -148,6 +150,24 @@ public class HitEventRepository {
         return Optional.of(row.shooterNum());
     }
 
+    /**
+     * 命中部位分布（复盘统计用）：某场演习按 {@code hit_part} 分组计数。
+     *
+     * <p>只返回库里**实际出现过**的部位；键序按 {@link HitPart} 的声明序（{@code EnumMap}），
+     * 使同一条复盘反复读到的分布顺序一致，不随命中写入先后漂移。</p>
+     */
+    public Map<HitPart, Long> countByHitPart(UUID exerciseId) {
+        Map<HitPart, Long> counts = new EnumMap<>(HitPart.class);
+        jdbc.sql("SELECT hit_part, COUNT(*) AS hits FROM t_hit_event"
+                        + " WHERE exercise_id = :exerciseId GROUP BY hit_part")
+                .param("exerciseId", exerciseId.toString())
+                .query((rs, rowNum) -> new PartCount(
+                        HitPart.valueOf(rs.getString("hit_part")), rs.getLong("hits")))
+                .list()
+                .forEach(pc -> counts.put(pc.part(), pc.count()));
+        return counts;
+    }
+
     /** 删除某场演习的全部命中（仅随整场演习删除时调用）。 */
     public int deleteByExerciseId(UUID exerciseId) {
         return jdbc.sql("DELETE FROM t_hit_event WHERE exercise_id = :exerciseId")
@@ -157,6 +177,10 @@ public class HitEventRepository {
 
     /** {@link #markMostRecentLethal} 的一次定位结果：待回填行的 seq 与其开枪者。 */
     private record PendingLethal(long seq, int shooterNum) {
+    }
+
+    /** {@link #countByHitPart} 的一次分组结果。 */
+    private record PartCount(HitPart part, long count) {
     }
 
     private static HitEvent map(ResultSet rs, int rowNum) throws SQLException {
