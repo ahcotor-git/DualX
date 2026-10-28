@@ -43,11 +43,11 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | `0d8ef02`（test(map): 端到端校验标定时刻可读并回写文档）；网关下行改动在工作树 |
-| 实际远端main | `0d8ef02`（与本地一致，本轮未重新 fetch）：CAL-2 现场验收收口三笔已推送 |
-| 已推送 | `5e641b2..0d8ef02` 已入远端：CAL-2 现场验收收口三笔 `3b6b482`（读侧暴露 `calibrated_at`）/`1c8e5bd`（`MapDetail` 接线）/`0d8ef02`（端到端 + 文档）；更早批次（R1/R2/R3 各三笔与 R4 全部改动含 HTTP 端到端补测 `62d03c7`/`5e641b2`、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs，以及 CAL-1/MR-1~MR-3）亦已在远端 |
-| 未推送（仅本机） | 网关下行接线尚未提交：core `ExerciseLifecycleService`（14B/7B 接线）；core 测试 `TestCoreApplication`/`ExerciseLifecycleServiceReadinessTest` 与新测 `ExerciseLifecycleServiceDownlinkTest`；api `ExerciseController`（`replayId`）；契约 `docs/api/paths/exercise.yaml`；app `ExerciseLifecycleHttpIT` 与新测 `ExerciseDownlinkHttpIT`；docs `testing.md`/`decision-register.md`/`snapshot.md` |
-| 本轮继续成果 | **M3 LIFE 网关下行接线（A~D 四段）**——开演逐台 14B + 7B 开始帧、停演 7B 结束帧出站；发送失败只留痕不回滚；链路未开静默跳过；停演响应补 `replayId`。core +5、app +3；全量 `mvn -o test` **1148 项**全绿（**尚未提交**） |
+| 源码本地HEAD | `f13e90f`（docs: 回写网关下行接线的计数、D11 口径与快照）；工作树干净 |
+| 实际远端main | `f13e90f`（与本地一致）：网关下行四笔 `0d8ef02..f13e90f` 已推送 |
+| 已推送 | `0d8ef02..f13e90f` 已入远端：网关下行四笔 `2594b04`（core 接线）/`e715138`（api `replayId` + 契约）/`84d6809`（core + app 新测）/`f13e90f`（docs）；更早批次（CAL-2 现场验收收口三笔 `3b6b482`/`1c8e5bd`/`0d8ef02`、R1/R2/R3 各三笔与 R4 全部改动含 HTTP 端到端补测 `62d03c7`/`5e641b2`、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs，以及 CAL-1/MR-1~MR-3）亦已在远端 |
+| 未推送（仅本机） | 无——工作树干净，`main` 与 `origin/main` 无差异 |
+| 本轮继续成果 | **M3 LIFE 网关下行接线（A~D 四段）**——开演逐台 14B + 7B 开始帧、停演 7B 结束帧出站；发送失败只留痕不回滚；链路未开静默跳过；停演响应补 `replayId`。core +5、app +3；全量 `mvn -o test` **1148 项**全绿。已按 **4 笔语义提交**并**成功推送**（`0d8ef02..f13e90f`） |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -455,8 +455,8 @@ M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1148 项测试、M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，D11 落地口径；
-代码与文档已就位、**待授权提交与推送**）、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
+本快照已同步 1148 项测试、M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，D11 落地口径，
+**已推送** `0d8ef02..f13e90f`）、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
 含 HTTP 端到端补测）与 M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性，**均已推送**）
 与下一任务候选（开演链路就绪 409 硬前置 / Flutter 客户端 / 单实例保护 L6 / T-PROD 部署），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。
