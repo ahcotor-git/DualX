@@ -207,15 +207,24 @@ RosterEntry:
     hp:
       type: integer
       format: int32
+      minimum: 0
+      maximum: 255
       default: 100
+      description: '开演初始生命值；上限 255 由 14B 轮询配置帧的 1 字节承载决定'
     ammo1:
       type: integer
       format: int32
+      minimum: 0
+      maximum: 65535
       default: 30
+      description: '主武器弹药；上限 65535 由 14B 轮询配置帧的 2 字节大端承载决定'
     ammo2:
       type: integer
       format: int32
+      minimum: 0
+      maximum: 65535
       default: 30
+      description: '副武器弹药；上限 65535 由 14B 轮询配置帧的 2 字节大端承载决定'
     mode:
       type: string
       enum: [AUTO, MANUAL]

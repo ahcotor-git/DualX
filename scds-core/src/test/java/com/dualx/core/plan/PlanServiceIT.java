@@ -27,6 +27,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * 想定台账服务的验收（契约 {@code docs/api/paths/exercise.yaml} 的 plan / planRoster 段）。
@@ -239,6 +240,54 @@ class PlanServiceIT {
 
         assertCode(() -> service.replaceRoster(planId,
                 List.of(rosterDraft(502, Team.RED), rosterDraft(502, Team.BLUE))),
+                ApiErrorCode.VALIDATION_FAILED);
+        assertThat(rosters.findByPlanId(planId)).isEmpty();
+    }
+
+    @Test
+    void replaceRoster_acceptsTheProtocolBounds() {
+        UUID planId = service.create(draft("it_plan_边界")).plan().id();
+        seedVest(801);
+        seedVest(802);
+
+        List<RosterEntry> stored = service.replaceRoster(planId, List.of(
+                new PlanService.RosterDraft(801, null, Team.RED, 0, 0, 0, PollMode.AUTO),
+                new PlanService.RosterDraft(802, null, Team.BLUE, 255, 65535, 65535, PollMode.AUTO)));
+
+        // 0 与上限都合法：14B 轮询配置帧里 hp 占 1 字节、ammo 各占 2 字节大端，正好装得下
+        // 读回顺序按「队伍 → 马甲编号」，BLUE 排在 RED 前
+        assertThat(stored)
+                .extracting(RosterEntry::vestNum, RosterEntry::hp, RosterEntry::ammo1, RosterEntry::ammo2)
+                .containsExactly(tuple(802, 255, 65535, 65535), tuple(801, 0, 0, 0));
+    }
+
+    @Test
+    void replaceRoster_withAnHpPastOneByteOrAmmoPastTwoBytes_isRejectedWithoutTouchingTheStoredRoster() {
+        UUID planId = service.create(draft("it_plan_越界")).plan().id();
+        seedVest(811);
+        seedVest(812);
+        seedVest(813);
+        service.replaceRoster(planId, List.of(rosterDraft(811, Team.RED)));
+
+        // 越界值若落库，开演时组帧会按字节静默截断（hp=256 变 0、ammo=65536 变 0），现场只见「参数没生效」
+        assertCode(() -> service.replaceRoster(planId,
+                List.of(new PlanService.RosterDraft(812, null, Team.RED, 256, 30, 30, PollMode.AUTO))),
+                ApiErrorCode.VALIDATION_FAILED);
+        assertCode(() -> service.replaceRoster(planId,
+                List.of(new PlanService.RosterDraft(813, null, Team.RED, 100, 65536, 30, PollMode.AUTO))),
+                ApiErrorCode.VALIDATION_FAILED);
+
+        // 「不产生部分写入」：两次拒绝之后，库里还是上一次那份
+        assertThat(rosters.findByPlanId(planId)).extracting(RosterEntry::vestNum).containsExactly(811);
+    }
+
+    @Test
+    void replaceRoster_withANegativeHp_isRejected() {
+        UUID planId = service.create(draft("it_plan_负值")).plan().id();
+        seedVest(821);
+
+        assertCode(() -> service.replaceRoster(planId,
+                List.of(new PlanService.RosterDraft(821, null, Team.RED, -1, 30, 30, PollMode.AUTO))),
                 ApiErrorCode.VALIDATION_FAILED);
         assertThat(rosters.findByPlanId(planId)).isEmpty();
     }

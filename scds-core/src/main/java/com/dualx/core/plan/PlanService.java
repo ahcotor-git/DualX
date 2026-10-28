@@ -43,6 +43,15 @@ import java.util.UUID;
 @Service
 public class PlanService {
 
+    /**
+     * 协议承载上限（{@code docs/PROTOCOL.md} 下行指令表）：14B 轮询配置帧里 {@code hp} 占 1 字节，
+     * {@code ammo1} / {@code ammo2} 各占 2 字节大端。编成存进来的值迟早会走这一帧，
+     * 越界就是静默截断，故在写入侧按同一上限拦。下界同为 0（无负血量、无负弹药）。
+     */
+    private static final int MAX_HP = 255;
+
+    private static final int MAX_AMMO = 65535;
+
     private final PlanRepository plans;
     private final PlanRosterRepository rosters;
     private final VestRepository vests;
@@ -135,9 +144,9 @@ public class PlanService {
     /**
      * 整文件导入（契约 {@code importPlan}）。
      *
-     * <p><b>先整份解析校验，再落库</b>：契约要求「整文件校验通过才落库」。解析与编成的三条
-     * 语义校验（编号在台账、不重复、不跨队）都排在 {@code plans.insert} 之前，且整体一个事务——
-     * 中途失败既不留半份想定，也不留半份编成。</p>
+     * <p><b>先整份解析校验，再落库</b>：契约要求「整文件校验通过才落库」。解析与编成的四条
+     * 语义校验（编号在台账、不重复、不跨队、hp/ammo 越界）都排在 {@code plans.insert} 之前，
+     * 且整体一个事务——中途失败既不留半份想定，也不留半份编成。</p>
      *
      * <p>模板只承载编成：{@code battleMode} 取契约默认 TRAIN，{@code mapId} / {@code remark}
      * 留空，导入后在编辑页补。想定名优先用表单里的 {@code name}，没给才退回文件名。</p>
@@ -184,17 +193,18 @@ public class PlanService {
     /**
      * 整体替换编成（契约 {@code replaceRoster}，幂等全量语义）。
      *
-     * <p>三条校验挨个做完**才**落库，且整体在一个事务里：契约要求「任一不满足返回 400
+     * <p>四条校验挨个做完**才**落库，且整体在一个事务里：契约要求「任一不满足返回 400
      * {@code VALIDATION_FAILED}，不产生部分写入」。校验放在仓储的
      * {@link PlanRosterRepository#replaceByPlanId} 之前，就不会出现「删了旧的、新的没过校验」，
      * 那种中间态在现场表现为「编成忽然空了」。</p>
      *
-     * <p>校验顺序：先查重（纯内存、不落库），再逐条查台账。查重要放在前面——重号必然伴随
-     * 同一条 {@code uk_plan_roster} 冲突，先报重号才能给出「哪一号重复」这种可处置的信息。</p>
+     * <p>校验顺序：先查重（纯内存、不落库），再逐条查台账，最后查 {@code hp}/{@code ammo} 范围。
+     * 查重要放在前面——重号必然伴随同一条 {@code uk_plan_roster} 冲突，先报重号才能给出
+     * 「哪一号重复」这种可处置的信息。</p>
      *
      * @throws BusinessException {@code PLAN_NOT_FOUND} 想定不存在；
      *                           {@code PLAN_IN_USE} 该想定正在演习中；
-     *                           {@code VALIDATION_FAILED} 编号不在台账 / 重复 / 跨队
+     *                           {@code VALIDATION_FAILED} 编号不在台账 / 重复 / 跨队 / hp、ammo 越界
      */
     @Transactional
     public List<RosterEntry> replaceRoster(UUID planId, List<RosterDraft> entries) {
@@ -208,11 +218,18 @@ public class PlanService {
     // ── 校验 ────────────────────────────────────────────────────────────────
 
     /**
-     * 编成的三条契约校验：编号必须存在于设备台账、同编号不得重复、同编号不得跨队。
+     * 编成的四条契约校验：编号必须存在于设备台账、同编号不得重复、同编号不得跨队、
+     * {@code hp}/{@code ammo1}/{@code ammo2} 落在协议字节范围内。
      *
      * <p>「重复」与「跨队」在库里是同一件事（{@code uk_plan_roster (plan_id, vest_num)} 全局唯一），
      * 但报错文案分开：跨队重号是操作员排编成时最容易犯的错，说清「101 同时出现在 RED 和 BLUE」
      * 比只说「101 重复」少一轮排查。</p>
+     *
+     * <p><b>为什么范围校验在这里、而不是在下发指令时</b>：本方法同时守着
+     * {@link #replaceRoster} 与 {@link #importPlan} 两条写路径，脏值进不了库；若留到控制台下发时再拦，
+     * {@code t_plan_roster} 里已经存了越界值，每次开演都会按字节静默截断（14B 轮询配置帧的
+     * {@code hp} 占 1 字节、{@code ammo} 各占 2 字节大端），现场表现为「设了 300 血，实际 44」。
+     * 库层没有对应的 CHECK（{@code V3__plan.sql} 的历史迁移不改），一致性由应用层这一处保证。</p>
      */
     private void validate(List<RosterDraft> entries) {
         Map<Integer, Team> seen = new LinkedHashMap<>();
@@ -227,6 +244,20 @@ public class PlanService {
             if (!vests.existsByVestNum(entry.vestNum())) {
                 throw invalid("马甲编号不在设备台账中：" + entry.vestNum() + "（请先在台账登记该设备）");
             }
+            requireRange(entry.vestNum(), "hp", entry.hp(), MAX_HP);
+            requireRange(entry.vestNum(), "ammo1", entry.ammo1(), MAX_AMMO);
+            requireRange(entry.vestNum(), "ammo2", entry.ammo2(), MAX_AMMO);
+        }
+    }
+
+    /**
+     * {@code [0, max]} 之内，否则 400 {@code VALIDATION_FAILED}。文案带上马甲编号与字段名——
+     * 一份编成动辄几十条，只说「hp 越界」等于让操作员逐行盲找。
+     */
+    private static void requireRange(int vestNum, String field, int value, int max) {
+        if (value < 0 || value > max) {
+            throw invalid("编成内马甲 " + vestNum + " 的 " + field + " 超出协议范围："
+                    + value + "（允许 0.." + max + "）");
         }
     }
 
