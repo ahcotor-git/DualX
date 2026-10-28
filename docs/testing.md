@@ -2383,3 +2383,45 @@ flutter create --org com.dualx --project-name scds_client --platforms=android,wi
 
 本段为**代码验收（客户端基座测试层）**，不是生产发布批准，也不代表客户端已联调。
 
+## 35. M6 CLIENT-BASE 段 2：auth 域模型与客户端（账号 + 设备登录），内存会话存储
+
+段 1 的基座就位后，段 2 落**第一个业务域客户端**——auth。按当次裁定取
+「**账号 + 设备两端登录**」、「**内存会话存储**」、「**测试拆段 2b**」。
+
+### 35.1 交付物（3 文件）
+
+| 文件 | 内容 | 契约来源 |
+|---|---|---|
+| `lib/shared/api/auth_models.dart` | `AuthUser`（`userId`/`username`/`roles` + 可选 `displayName`/`permissions`/`lastLoginAt`）、`TokenPair`（`accessToken`/`expiresIn` + 可选 `refreshToken`/`user`）、`DeviceTokenPair`（`deviceToken`/`expiresIn`） | `docs/api/schemas/domain.yaml`（`User` / `TokenPair` / `DeviceTokenPair`，逐字对齐必填集） |
+| `lib/shared/api/auth_api.dart` | `AuthApi`（持 `ApiClient`）：`login` / `refresh` / `logout` / `me` / `deviceLogin` | `docs/api/paths/auth.yaml`（`login` / `refreshToken` / `logout` / `getCurrentUser` / `deviceLogin`） |
+| `lib/shared/auth/session_store.dart` | `AccountSession`（`accessToken`/`expiresAt` + 可选 `refreshToken`/`user`）、`DeviceSession`（`vestNum`/`deviceToken`/`expiresAt`）、`SessionStore` 抽象端口、`InMemorySessionStore` | 客户端侧模型（由 `TokenPair`/`DeviceTokenPair` 派生，非契约） |
+
+### 35.2 判据（实现口径）
+
+- **不臆造缺省值**：`AuthUser.fromJson` 对必填字段缺失抛 `FormatException`（`roles` 形状不符时
+  `_stringList` 抛，非静默丢弃）；`permissions` 缺失按空列表（契约未列为必填，且只用于前端显隐）；
+- **绝对时刻在客户端换算**：服务端只给相对剩余秒数 `expiresIn`，`AccountSession.fromTokenPair`
+  /`DeviceSession.fromTokenPair` 用**注入的 `now`（默认当前 UTC）** 换算成 `expiresAt`——
+  客户端**不据相对秒数猜测服务端时钟**；
+- **端口与实现分离**：`SessionStore` 是抽象接口，`InMemorySessionStore` 是进程内实现
+  （重启即丢、**不落盘**、**不得把令牌写进日志**），为后续「平台安全存储」只换实现留位；
+- **两类会话分开**：账号会话与设备会话各存各的，`clearAll()` 一次清空（切换实例/退出登录/顶替提示后调用）；
+- **不吞错、不重试、不缓存令牌**：`AuthApi` 只做「拼路径 + 解析契约模型」，非 2xx 由 `ApiClient`
+  抛 `ApiException`（失败如 `AUTH_BAD_CREDENTIALS` 401 / `AUTH_DEVICE_NOT_BOUND` 401 / 限流 429），
+  **登录失败不区分账号不存在与密码错误**（契约明确）；
+- **logout 无请求体**：`POST /auth/logout` 只带 `Bearer`，回 204；accessToken 无状态不可撤销，
+  由短有效期兜底。
+
+### 35.3 未做与边界
+
+- **本段无测试**（按裁定拆为段 2b：本地 `HttpServer` 打桩验四/五方法与模型解析），
+  故门禁只有静态分析：`flutter analyze` → `No issues found!`；
+- **未接 UI、未装配入口**：`main.dart` / `widget_test.dart` 仍是模板原样（登录页与入口装配留段 3~/段 4）；
+- **安全存储未落**：`InMemorySessionStore` 不落盘，**不用于现场长期登录**（重启需重登）；
+  平台安全存储（Android Keystore / Windows DPAPI）与「账号/实例切换清理」留后续段，**需另行授权引依赖**；
+- **未改动**：后端任何模块、协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期、在线窗口、
+  校验算法、四角编号口径、`scds-solver`、迁移与错误码；本段是 Dart 侧资产、**不进 Maven reactor**，
+  Maven 全量计数仍 **1151** 项。
+
+本段为**代码验收（客户端 auth 域层）**，不是生产发布批准，也不代表客户端已联调。
+
