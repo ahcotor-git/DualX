@@ -19,8 +19,11 @@ const Key kConsoleAccountNoticeKey = Key('consoleAccount.notice');
 const Key kConsoleAccountSignedOutKey = Key('consoleAccount.signedOut');
 const Key kConsoleAccountReturnButtonKey = Key('consoleAccount.returnButton');
 
-/// 会话续期端口：拿当前会话换一份**新的**账号会话（生产接线调
-/// `POST /api/v1/auth/refresh` 并把结果写回 `SessionStore`，见 `app/console_app.dart`）。
+/// 会话续期端口：拿当前会话换一份**新的**账号会话。
+///
+/// 生产接线（`app/console_app.dart`）委托给 `RefreshingApiTransport.refreshNow()`——
+/// 刷新与自动续期共用同一把单飞闸，落到本页的结果也已由装饰器合并（保留原身份）
+/// 并写回 `SessionStore`。入参只作页面侧判断之用，实际刷新以装饰器持有的会话为准。
 typedef AccountRefresh = Future<AccountSession> Function(AccountSession current);
 
 /// 身份重载端口：拿当前会话读一次 `GET /api/v1/auth/me`。

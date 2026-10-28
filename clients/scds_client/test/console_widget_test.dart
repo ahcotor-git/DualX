@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:scds_client/app/client_factory.dart';
 import 'package:scds_client/app/console_app.dart';
 import 'package:scds_client/features/connection/connection_page.dart';
 import 'package:scds_client/features/console/account_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
+import 'package:scds_client/shared/api/api_client.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
 import 'package:scds_client/shared/api/api_problem.dart';
 import 'package:scds_client/shared/api/auth_models.dart';
@@ -22,6 +25,10 @@ import 'package:scds_client/shared/config/connection_config_store.dart';
 /// 健康诊断注入 `InstanceHealthProbe` 桩；登录页注入 `AccountLogin` 桩；
 /// 汇总页注入 `fetch` 桩并用 `tester.pump(Duration)` 推进假时钟——
 /// **不落盘、不打印令牌、不依赖真实网络**。
+///
+/// RES-D 追加「指挥端认证接线」组：注入脚本化 `ApiTransport` 桩（**同样不建连接**），
+/// 断言的是真实的请求序列与 `Authorization` 头——认证接线的正确性恰恰体现在
+/// 「谁在第几次请求带了哪个令牌」。
 void main() {
   late InMemoryConnectionConfigStore store;
   late InMemorySessionStore sessionStore;
@@ -31,9 +38,16 @@ void main() {
     sessionStore = InMemorySessionStore();
   });
 
-  Future<void> pumpConsole(WidgetTester tester) async {
+  Future<void> pumpConsole(
+    WidgetTester tester, {
+    ApiTransport Function(ConnectionConfig config)? clientFactory,
+  }) async {
     await tester.pumpWidget(
-      ScdsConsoleApp(configStore: store, sessionStore: sessionStore),
+      ScdsConsoleApp(
+        configStore: store,
+        sessionStore: sessionStore,
+        clientFactory: clientFactory ?? httpApiClient,
+      ),
     );
     await tester.pumpAndSettle();
   }
@@ -957,4 +971,282 @@ void main() {
       );
     });
   });
+
+  group('指挥端认证接线（RES-D）', () {
+    /// 契约 `TokenPair` 形状的登录/刷新响应体。
+    Map<String, dynamic> pairBody(String accessToken, String refreshToken) => <String, dynamic>{
+          'accessToken': accessToken,
+          'expiresIn': 900,
+          'refreshToken': refreshToken,
+          'user': <String, dynamic>{
+            'userId': 'u-1',
+            'username': 'admin',
+            'roles': <String>['OPERATOR'],
+          },
+        };
+
+    /// 走完「连接配置 → 登录」并停在队伍汇总页（全程只打脚本化传输桩）。
+    Future<void> signIn(WidgetTester tester, ScriptedTransport transport) async {
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+    }
+
+    testWidgets('登录后：队伍汇总按登录令牌带 Bearer', (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(pairBody('access-1', 'refresh-1'));
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[
+              <String, dynamic>{'team': 'RED', 'total': 6, 'live': 4, 'dead': 1},
+            ]);
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await signIn(tester, transport);
+
+      expect(transport.sequence, <String>[
+        'POST $kApiPrefix/auth/login',
+        'GET $kApiPrefix/situation/teams/summary',
+      ]);
+      // 登录不带令牌；登录后的域请求带登录拿到的 accessToken。
+      expect(transport.calls.first.authorization, isNull);
+      expect(transport.calls.last.authorization, 'Bearer access-1');
+      expect((await sessionStore.readAccount())!.accessToken, 'access-1');
+      expect(find.byType(TeamSummaryPage), findsOneWidget);
+    });
+
+    testWidgets('队伍汇总遇 401 到期：自动续期一次并按新令牌重试（页面无感）', (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(pairBody('access-1', 'refresh-1'));
+          case 'GET $kApiPrefix/situation/teams/summary':
+            if (call.authorization == 'Bearer access-1') {
+              throw apiFailure(401, ApiErrorCode.authTokenExpired);
+            }
+            return jsonResponse(<Object>[]);
+          case 'POST $kApiPrefix/auth/refresh':
+            // 滚动刷新：回新令牌对，**不回** `user`。
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-2',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-2',
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await signIn(tester, transport);
+
+      expect(transport.sequence, <String>[
+        'POST $kApiPrefix/auth/login',
+        'GET $kApiPrefix/situation/teams/summary',
+        'POST $kApiPrefix/auth/refresh',
+        'GET $kApiPrefix/situation/teams/summary',
+      ]);
+      expect(transport.calls.last.authorization, 'Bearer access-2');
+      // 续期结果写回会话存储，且保留登录时的身份快照。
+      final AccountSession stored = (await sessionStore.readAccount())!;
+      expect(stored.accessToken, 'access-2');
+      expect(stored.refreshToken, 'refresh-2');
+      expect(stored.user!.username, 'admin');
+      // 页面无感：401 已在传输层被消化，汇总页不显示错误。
+      expect(find.byKey(kTeamSummaryErrorKey), findsNothing);
+      expect(find.byKey(kTeamSummaryEmptyKey), findsOneWidget);
+    });
+
+    testWidgets('账号页续期按钮：委托传输换新令牌并写回会话存储', (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(pairBody('access-1', 'refresh-1'));
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'POST $kApiPrefix/auth/refresh':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-2',
+              'expiresIn': 1800,
+              'refreshToken': 'refresh-2',
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await signIn(tester, transport);
+      await tapAccountButton(tester, kTeamSummaryAccountEntryKey);
+      await tapAccountButton(tester, kConsoleAccountRefreshButtonKey);
+
+      // 汇总页 2s 轮询期间会再拉一次 summary，与本次续期无关：只校验
+      // 「登录 → 首次汇总 → 续期」这条子序列，并单独断言续期**只打一次**
+      // （滚动刷新不可重放）。
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'POST $kApiPrefix/auth/refresh',
+        ]),
+      );
+      expect(
+        transport.sequence.where((String key) => key == 'POST $kApiPrefix/auth/refresh'),
+        hasLength(1),
+      );
+      // 刷新提交的是登录拿到的刷新令牌。
+      final ScriptedCall refreshCall = transport.calls.lastWhere(
+        (ScriptedCall call) => call.key == 'POST $kApiPrefix/auth/refresh',
+      );
+      final Map<String, dynamic> body = refreshCall.body! as Map<String, dynamic>;
+      expect(body['refreshToken'], 'refresh-1');
+      final AccountSession stored = (await sessionStore.readAccount())!;
+      expect(stored.accessToken, 'access-2');
+      expect(stored.refreshToken, 'refresh-2');
+      expect(stored.user!.username, 'admin');
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountNoticeKey)).data,
+        contains('已续期'),
+      );
+    });
+
+    testWidgets('会话终结（刷新被 401 拒绝）：清本地会话并弹回登录页', (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(pairBody('access-1', 'refresh-1'));
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'POST $kApiPrefix/auth/refresh':
+            throw apiFailure(401, ApiErrorCode.authTokenInvalid);
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await signIn(tester, transport);
+      await tapAccountButton(tester, kTeamSummaryAccountEntryKey);
+      expect(find.byType(AccountPage), findsOneWidget);
+
+      await tapAccountButton(tester, kConsoleAccountRefreshButtonKey);
+
+      // 会话终结：本地会话被清，页面栈一路弹回登录页（账号页与汇总页都不再在栈上）。
+      expect(await sessionStore.readAccount(), isNull);
+      expect(find.byType(AccountPage), findsNothing);
+      expect(find.byType(TeamSummaryPage), findsNothing);
+      expect(find.byType(ConsoleLoginPage), findsOneWidget);
+    });
+  });
 }
+
+/// RES-D：脚本化传输桩——按请求回预置响应，并把**真实收到的请求**记下来。
+///
+/// 路径拼接借内层 [ApiClient]（基址取一个不会连接的端口）：测试里不必重抄一份
+/// `/api/v1` 拼接规则，同时**不建连接、不发真实请求**。
+/// 非 2xx 由用例以 `throw apiFailure(...)` 表达，与 [ApiClient] 的抛错形状一致。
+class ScriptedTransport implements ApiTransport {
+  ScriptedTransport() : _inner = ApiClient(baseUri: Uri.parse('http://127.0.0.1:1'));
+
+  final ApiClient _inner;
+
+  /// 已收到的请求（按发生顺序）。
+  final List<ScriptedCall> calls = <ScriptedCall>[];
+
+  /// 由用例覆写：按请求决定回什么；缺省回 200 空对象。
+  Future<ApiResponse> Function(ScriptedCall call) responder =
+      (ScriptedCall call) async => jsonResponse(<String, dynamic>{});
+
+  /// 已收到的「方法 + 路径」序列（接线顺序的直接证据）。
+  List<String> get sequence =>
+      calls.map((ScriptedCall call) => call.key).toList(growable: false);
+
+  @override
+  Uri get baseUri => _inner.baseUri;
+
+  @override
+  Uri api(String path, [Map<String, String>? query]) => _inner.api(path, query);
+
+  @override
+  Uri resolve(String path, [Map<String, String>? query]) => _inner.resolve(path, query);
+
+  @override
+  Future<ApiResponse> get(String path, {Map<String, String>? query, String? bearerToken}) =>
+      _record('GET', path, query: query, bearerToken: bearerToken);
+
+  @override
+  Future<ApiResponse> post(String path,
+          {Map<String, String>? query, Object? jsonBody, String? bearerToken}) =>
+      _record('POST', path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
+
+  @override
+  Future<ApiResponse> put(String path,
+          {Map<String, String>? query, Object? jsonBody, String? bearerToken}) =>
+      _record('PUT', path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
+
+  @override
+  Future<ApiResponse> delete(String path,
+          {Map<String, String>? query, Object? jsonBody, String? bearerToken}) =>
+      _record('DELETE', path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
+
+  @override
+  Future<ApiResponse> send(String method, String path,
+          {Map<String, String>? query, Object? jsonBody, String? bearerToken}) =>
+      _record(method, path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
+
+  @override
+  Future<ApiResponse> probe(String path) => _record('GET', path, absolute: true);
+
+  @override
+  void close() => _inner.close();
+
+  Future<ApiResponse> _record(
+    String method,
+    String path, {
+    Map<String, String>? query,
+    Object? jsonBody,
+    String? bearerToken,
+    bool absolute = false,
+  }) {
+    final Uri uri = absolute ? _inner.resolve(path, query) : _inner.api(path, query);
+    calls.add(ScriptedCall(
+      method: method,
+      path: uri.path,
+      authorization: (bearerToken == null || bearerToken.isEmpty) ? null : 'Bearer $bearerToken',
+      body: jsonBody,
+    ));
+    // `Future.sync` 把同步抛错也转成 future 错误——与 `ApiClient` 的抛错形状一致。
+    return Future<ApiResponse>.sync(() => responder(calls.last));
+  }
+}
+
+/// 脚本化传输桩收到的一次请求。
+class ScriptedCall {
+  const ScriptedCall({
+    required this.method,
+    required this.path,
+    required this.authorization,
+    this.body,
+  });
+
+  final String method;
+  final String path;
+
+  /// 已还原成 `Bearer <token>` 的授权头；未带令牌为 `null`。
+  final String? authorization;
+  final Object? body;
+
+  /// 「方法 + 路径」，用于断言请求序列。
+  String get key => '$method $path';
+}
+
+/// 契约形状的 JSON 响应（UTF-8 编码，与 `ApiClient` 解码头一致）。
+ApiResponse jsonResponse(Object body, {int statusCode = 200}) => ApiResponse(
+      statusCode: statusCode,
+      contentType: 'application/json',
+      body: utf8.encode(jsonEncode(body)),
+    );

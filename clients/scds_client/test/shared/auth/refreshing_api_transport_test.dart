@@ -344,6 +344,89 @@ void main() {
     });
   });
 
+  group('手动续期', () {
+    test('refreshNow：发一次 refresh，整体换会话并回调 onRefreshed', () async {
+      responder = (_Call call, HttpRequest request) => refreshOk(request);
+
+      final AccountSession next = await transport.refreshNow();
+
+      expect(paths(), <String>['$kApiPrefix/auth/refresh']);
+      expect(transport.refreshCount, 1);
+      expect(next.accessToken, 'access-new');
+      expect(next.refreshToken, 'refresh-2');
+      expect(transport.session!.accessToken, 'access-new');
+      expect(transport.session!.refreshToken, 'refresh-2');
+      // 刷新响应未回 user：身份快照保留（变的是令牌，不是身份）。
+      expect(transport.session!.user!.username, 'commander');
+      expect(refreshed.single.accessToken, 'access-new');
+      expect(lostCount, 0);
+    });
+
+    test('并发两笔 refreshNow：只发一次 refresh，两笔复用同一结果', () async {
+      final Completer<void> gate = Completer<void>();
+      responder = (_Call call, HttpRequest request) async {
+        await gate.future;
+        await refreshOk(request);
+      };
+
+      final Future<AccountSession> first = transport.refreshNow();
+      final Future<AccountSession> second = transport.refreshNow();
+      expect(transport.refreshCount, 1);
+
+      gate.complete();
+      final List<AccountSession> both =
+          await Future.wait(<Future<AccountSession>>[first, second]);
+
+      expect(both.map((AccountSession s) => s.accessToken), <String>['access-new', 'access-new']);
+      expect(transport.refreshCount, 1);
+      // 单飞口径的直接证据：服务端只收到一次刷新请求。
+      expect(paths(), <String>['$kApiPrefix/auth/refresh']);
+    });
+
+    test('未接入会话：抛错且不发请求', () async {
+      final RefreshingApiTransport bare = transportWith(null);
+
+      await expectLater(bare.refreshNow(), throwsStateError);
+
+      expect(calls, isEmpty);
+      expect(bare.refreshCount, 0);
+    });
+
+    test('会话无 refreshToken（设备令牌形态）：抛错且不发请求', () async {
+      final RefreshingApiTransport deviceLike = transportWith(
+        AccountSession(accessToken: 'device-token', expiresAt: DateTime.utc(2030)),
+      );
+
+      await expectLater(deviceLike.refreshNow(), throwsStateError);
+
+      expect(calls, isEmpty);
+      expect(deviceLike.refreshCount, 0);
+    });
+
+    test('刷新被 401 拒绝：与自动续期同口径——清空会话、回调 onLost、原样抛出', () async {
+      responder = (_Call call, HttpRequest request) =>
+          respondProblem(request, 401, ApiErrorCode.authTokenInvalid);
+
+      final ApiException failure = await expectApiFailure(transport.refreshNow());
+
+      expect(failure.code, ApiErrorCode.authTokenInvalid);
+      expect(transport.session, isNull);
+      expect(lostCount, 1);
+      expect(paths(), <String>['$kApiPrefix/auth/refresh']);
+    });
+
+    test('刷新遇非 401（503 未就绪）：不算会话终结——清空会话不生效、不回调 onLost', () async {
+      responder = (_Call call, HttpRequest request) =>
+          respondProblem(request, 503, ApiErrorCode.instanceNotReady);
+
+      final ApiException failure = await expectApiFailure(transport.refreshNow());
+
+      expect(failure.statusCode, 503);
+      expect(transport.session, isNotNull);
+      expect(lostCount, 0);
+    });
+  });
+
   group('透传', () {
     test('成功请求不触发刷新', () async {
       final ApiResponse response = await transport.get('/situation');
@@ -423,10 +506,13 @@ Future<void> respondProblem(HttpRequest request, int status, String code) => res
     );
 
 /// 捕获 [ApiException]；未抛出时以 `fail` 报出真实结果。
-Future<ApiException> expectApiFailure(Future<ApiResponse> request) async {
+///
+/// 泛型入参：既接受 `Future<ApiResponse>`（业务请求），也接受 `Future<AccountSession>`
+/// （手动续期 [RefreshingApiTransport.refreshNow]）。
+Future<ApiException> expectApiFailure<T>(Future<T> request) async {
   try {
-    final ApiResponse response = await request;
-    fail('应当抛出 ApiException，实际得到 HTTP ${response.statusCode}');
+    final T result = await request;
+    fail('应当抛出 ApiException，实际得到 $result');
   } on ApiException catch (failure) {
     return failure;
   }

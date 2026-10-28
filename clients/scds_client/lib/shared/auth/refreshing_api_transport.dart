@@ -66,6 +66,28 @@ class RefreshingApiTransport implements ApiTransport {
   /// 接入 / 替换当前会话（登录成功、退出后重新登录时调用）。
   void adopt(AccountSession session) => _session = session;
 
+  /// 丢弃当前会话（退出登录时调用）：后续请求不再自动带令牌。
+  void forget() => _session = null;
+
+  /// 手动续期入口（指挥端账号页「续期会话」按钮）。
+  ///
+  /// 与自动续期**共用同一把单飞闸**（见 [\_refreshOnce]）：在途时复用同一 Future，
+  /// 不叠加刷新请求——契约的刷新是滚动的，重放旧 `refreshToken` 会让该账号
+  /// **全部** `refreshToken` 被撤销。
+  ///
+  /// 会话缺失或没有 `refreshToken`（未登录 / 设备令牌形态）时按契约直接抛错、不发请求；
+  /// 刷新被 401 拒绝时与自动续期同口径：清空会话并回调 [onLost]。
+  Future<AccountSession> refreshNow() async {
+    final AccountSession? current = _session;
+    if (current == null) {
+      throw StateError('未接入会话，无法续期');
+    }
+    if (current.refreshToken == null) {
+      throw StateError('当前会话没有刷新令牌，无法续期');
+    }
+    return _refreshOnce(current);
+  }
+
   @override
   Uri get baseUri => inner.baseUri;
 
@@ -138,18 +160,17 @@ class RefreshingApiTransport implements ApiTransport {
         rethrow;
       }
 
-      final AccountSession renewed;
-      try {
-        // 会话引用已换 = 期间别处续期过：直接用新令牌重试，不再发刷新
-        // （契约的刷新是滚动的，重放旧 refreshToken 会撤销该账号全部 refreshToken）。
-        renewed = identical(_session, used) ? await _refreshOnce(used!) : _session!;
-      } on ApiException catch (refreshFailure) {
-        if (refreshFailure.statusCode == 401) {
-          _session = null;
-          await onLost?.call();
-        }
+      // 会话引用已空 = 期间别处已判定会话终结（刷新被 401 拒绝）：不再刷新，原样抛出。
+      final AccountSession? current = _session;
+      if (current == null) {
         rethrow;
       }
+
+      // 会话引用已换 = 期间别处续期过：直接用新令牌重试，不再发刷新
+      // （契约的刷新是滚动的，重放旧 refreshToken 会撤销该账号全部 refreshToken）。
+      // 刷新失败的处置（401 → 清会话 + onLost）统一在 [\_refresh] 内，两条入口同口径。
+      final AccountSession renewed =
+          identical(current, used) ? await _refreshOnce(used!) : current;
 
       return await attempt(renewed.accessToken);
     }
@@ -171,6 +192,11 @@ class RefreshingApiTransport implements ApiTransport {
     return pending;
   }
 
+  /// 发一次刷新并换上新会话。
+  ///
+  /// 刷新被 **401** 拒绝 = `refreshToken` 已不可用（会话终结）：清空会话并回调 [onLost]，
+  /// 之后把错误抛出（两条入口——自动续期与 [refreshNow]——同口径）。
+  /// 非 401 的失败（网络、503 未就绪）**不算会话终结**，会话原样保留。
   Future<AccountSession> _refresh(AccountSession current) async {
     try {
       final TokenPair pair = await AuthApi(inner).refresh(current.refreshToken!);
@@ -178,6 +204,12 @@ class RefreshingApiTransport implements ApiTransport {
       _session = merged;
       await onRefreshed?.call(merged);
       return merged;
+    } on ApiException catch (failure) {
+      if (failure.statusCode == 401) {
+        _session = null;
+        await onLost?.call();
+      }
+      rethrow;
     } finally {
       _refreshInFlight = null;
     }
