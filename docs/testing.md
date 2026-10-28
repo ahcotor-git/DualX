@@ -2425,3 +2425,50 @@ flutter create --org com.dualx --project-name scds_client --platforms=android,wi
 
 本段为**代码验收（客户端 auth 域层）**，不是生产发布批准，也不代表客户端已联调。
 
+## 36. M6 CLIENT-BASE 段 2b：auth 客户端基座测试（Dart 侧，本地 HttpServer 打桩）+ 前缀缺陷修复
+
+段 2 按裁定把测试拆到段 2b。补测过程中**抓到并修复一个真实缺陷**：`ApiClient` 的
+`get`/`post`/`put`/`delete` 经 `send` → `resolve()` 拼接，**不含 `kApiPrefix`**，
+导致 `AuthApi` 五端点实际请求 `/auth/login` 等**无 `/api/v1` 前缀**的路径（现场会 404）。
+段 1b 的用例只断言方法 / 头 / 正文、**未断言请求路径**，故未暴露。
+
+### 36.1 交付物（4 文件：1 修复 + 3 测试）
+
+| 文件 | 变更 | 内容 |
+|---|---|---|
+| `lib/shared/api/api_client.dart` | 改 | `send` 由 `resolve(path, query)` 改为 `api(path, query)`：`get`/`post`/`put`/`delete` 统一带 `/api/v1`，业务域客户端只传业务相对路径 |
+| `test/shared/api/auth_models_test.dart` | 新 | auth 域契约模型解析边界（10 例） |
+| `test/shared/api/auth_api_test.dart` | 新 | `AuthApi` 五端点路径 / 请求体 / `Bearer` / 解析 / 错误映射（8 例） |
+| `test/shared/auth/session_store_test.dart` | 新 | `AccountSession`/`DeviceSession` 派生与 `InMemorySessionStore`（6 例） |
+
+提交拆分：`54e830b`（fix，1 文件）+ `d770556`（test，3 文件），守「原子 ≤3 文件」。
+
+### 36.2 用例与判据
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 模型（10） | `AuthUser` 全字段 / 可选缺失 / `roles` 非数组 → `FormatException` / 缺 `userId` → 抛错；`TokenPair` 必填+嵌套 `user` / 可选缺失 / `expiresIn` 小数收 int / 缺 `expiresIn` → 抛错；`DeviceTokenPair` 必填 / 缺必填 → 抛错 | **不臆造缺省值**：必填缺失或形状不符即抛，可选缺失为 `null`；`permissions` 缺失按空列表 |
+| 端点（8） | `login`：`POST` + 路径 `/api/v1/auth/login` + 正文 `username`/`password` + **不带** `Authorization`；401 `AUTH_BAD_CREDENTIALS` 带码；`refresh`：正文只带 `refreshToken`，401 `AUTH_TOKEN_EXPIRED`/`AUTH_TOKEN_INVALID` 分别带码；`logout`：**无请求体** + `Bearer` + 204 不抛；`me`：`GET` + `Bearer` → `AuthUser`；`deviceLogin`：正文 `vestNum`/`secret`，401 `AUTH_DEVICE_NOT_BOUND` 带码 | 路径**逐字**对齐契约（带 `/api/v1`）；非 2xx 统一由 `ApiClient` 抛 `ApiException`（`code` 稳定） |
+| 会话（6） | 注入 `now` → `expiresAt = now + expiresIn`（UTC）；不注入 → 以当前 UTC 起算；`DeviceSession` 保留 `vestNum`/`deviceToken`；`InMemorySessionStore` 初始为 `null` / 写入后可读回且两类互不覆盖 / `clearAll` 一次清空 | **绝对时刻在客户端换算**；账号 / 设备两类**分开存** |
+
+### 36.3 缺陷留档（业务请求缺 `/api/v1` 前缀）
+
+- **现象**：打桩记录到 `AuthApi.login` 的请求路径为 `/auth/login`（期望 `/api/v1/auth/login`）；
+- **根因**：`ApiClient.send` 用 `resolve()` 只补前导斜杠，**只有 `api()`** 才拼 `kApiPrefix`，
+  而 `get`/`post`/`put`/`delete` 都走 `send`——前缀从未被接上；
+- **契约依据**：`docs/api/openapi.yaml` 的 **51 条 REST 路径全部在 `/api/v1` 下**（含 `/api/v1/files`），
+  故 `send` 统一走 `api()` 是安全的、且与「业务域客户端只传相对路径」的分层一致；
+- **修复**：`send` 内 `resolve(path, query)` → `api(path, query)`（1 行）；
+- **回归**：段 1b **14 例**未受影响（其用例不含路径断言，均以 `handler` 按状态码回包）。
+
+### 36.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**39 例** = 段 1b 14 + 本段 24 + 模板 1）；
+  `flutter analyze` → `No issues found!`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（0/0/0）；
+- **未改动**：后端任何模块、协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期、在线窗口、
+  校验算法、错误码、迁移、`scds-solver`；**未新增依赖**（测试仍只用 `dart:io` + `flutter_test`）。
+
+本段为**客户端测试验收（auth 域层）**，不是生产发布批准；测试用 `HttpServer` 打桩，**不代表已与后端联调**。
+
+

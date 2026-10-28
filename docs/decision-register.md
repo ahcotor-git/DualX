@@ -112,6 +112,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | M6 CLIENT-BASE 段 1（共享契约/通信基座） | 用户当次裁定：通信实现取「**`dart:io` HttpClient**」（零新增依赖、不动 `pubspec.yaml`）；文件范围取「**三文件实现，测试留段 1b**」。**已落地提交** `dbc5dd9`（`lib/shared/api/` 下 `api_contract.dart` / `api_problem.dart` / `api_client.dart`，共 313 行）；`flutter analyze` 无问题。细节见文末该节与 [testing](testing.md) 第 33 节 |
 | M6 CLIENT-BASE 段 1b（通信基座契约测试） | 段 1 的测试部分，用户当次选择「**段 1b：基座测试**」并裁定「**提交 2 笔并推送**」。**已落地提交** `ac89a6a`（`test/shared/api/api_client_test.dart`，1 文件 282 行，**14 用例**，用本机 `HttpServer` 打桩断言真实 HTTP 行为）；`flutter analyze` 无问题、`flutter test` 14 例全绿。细节见文末该节与 [testing](testing.md) 第 34 节 |
 | M6 CLIENT-BASE 段 2（auth 域模型与客户端） | 用户当次裁定三项：范围取「**账号 + 设备两端登录**」、存储取「**内存实现**」、测试取「**拆段 2b**」。**已落地提交** `a26fc28`（`auth_models.dart` + `auth_api.dart` + `session_store.dart`，恰 3 文件 250 行，**未破每任务 ≤3 文件上限**）；`flutter analyze` 无问题。细节见文末该节与 [testing](testing.md) 第 35 节 |
+| M6 CLIENT-BASE 段 2b（auth 客户端基座测试 + 前缀缺陷修复） | 用户当次裁定「**提 3 笔（fix + test + docs）并推送**」。段 2b 补测中**抓到真实缺陷**：`ApiClient.send` 用 `resolve()` 不补 `kApiPrefix`，`AuthApi` 五端点实际请求无 `/api/v1` 前缀路径。用户当次裁定修法取「**修 `ApiClient`，`send` 统一走 `api()`**」。**已落地提交** `54e830b`（fix，1 文件）+ `d770556`（test，3 文件，**24 用例**）；`flutter test` **39 例**全绿、`flutter analyze` 无问题。细节见文末该节与 [testing](testing.md) 第 36 节 |
 | 提交/推送 M2 LEDGER 成果 | 用户本轮明确授权“提交 LEDGER 并尝试推送”。**已落地 5 个本地提交**（`86e9b71` 契约、`a95bcf3` 服务、`9c3ab09` 接线+权限、`74162ca` 测试、`e8258a0` 文档），叠加既有 4 个后 `main` 领先 `origin/main` **9 个提交**；推送**两次均因网络失败**（`Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。不推导后续自动提交授权 |
 | 提交/推送 M2 MAP-BASE A1/A2 与 B1-B3 | 用户当次选择“提交并尝试推送”与“B2 + B3 连做”。**已落地 5 个本地提交**（`c8c1d5d` 契约 A1/A2、`867bd4c` 裁定登记、`8e1adbd` B1 存储端口与实现、`55739f1` B2 签名 URL、`7846030` B3 单测与配置）。`867bd4c` 那次推送已成功入远端；B1-B3 三次推送**均因网络失败**（`Connection was reset` / 无法连接 github.com:443），`main` 领先 `origin/main` **3 个提交**，**远端未更新** |
 | 提交/推送 M2 MAP-BASE 分段 C 与“演习中删图”裁定 | 用户当次选择“提交并重试推送”与“一并拦截，复用 MAP_IN_USE”。**已落地 3 个本地提交**（`3787254` C1 错误码与契约登记、`e8006b6` C2 台账服务与想定/演习引用判据、`8b9de5c` C2 用例），叠加既有 4 个后 `main` 领先 `origin/main` **7 个提交**；本轮推送**两次均因网络失败**（`Recv failure: Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。`C` 段已跑通全量 `mvn -B verify`（716 项，protocol 19 / core 316 / api 100 / app 281） |
@@ -1371,9 +1372,20 @@ D（app 端到端）四段实施。这也正是 **D11**（「整体回滚」不�
 端口与实现分离，为后续平台安全存储只换实现留位）。门禁 `flutter analyze` → `No issues found!`。
 提交 `a26fc28`。证据见 [testing](testing.md) **第 35 节**。
 
-**再下一段（候选）**：段 2b（auth 客户端基座测试，本地 `HttpServer` 打桩）→ 段 3 连接配置 + 自身态势只读
-（Android 优先）→ 段 4 Android 入口装配 + 模拟器 `zaa_pixel6` 冒烟 → 段 5 Windows 指挥端骨架
-（本机缺 Visual Studio，**不能原生构建**，安装工作负载需另授权）。各段仍守「每原子任务 ≤3 文件」。
+**再下一段（段 2b）落地**：段 2 的测试部分，用户当次裁定「**提 3 笔（fix + test + docs）并推送**」。
+补测中**抓到并修复一个真实缺陷**——`ApiClient` 的 `get`/`post`/`put`/`delete` 经 `send` → `resolve()`
+只补前导斜杠、**不含 `kApiPrefix`**（只有 `api()` 才拼），导致 `AuthApi` 五端点实际请求
+`/auth/login` 等**无 `/api/v1` 前缀**路径（现场 404）；段 1b 用例未断言请求路径故未暴露。
+契约侧依据：`docs/api/openapi.yaml` 的 **51 条 REST 路径全部在 `/api/v1` 下**（含 `/api/v1/files`）。
+用户当次裁定修法取「**修 `ApiClient`，`send` 统一走 `api()`**」（业务域客户端只传业务相对路径）。
+落地：`54e830b`（fix，`lib/shared/api/api_client.dart` 1 行）+ `d770556`（test，3 文件
+`test/shared/api/auth_models_test.dart` / `test/shared/api/auth_api_test.dart` /
+`test/shared/auth/session_store_test.dart`，**24 用例**）。门禁：`flutter test` → `All tests passed!`
+（**39 例**）、`flutter analyze` → `No issues found!`。证据见 [testing](testing.md) **第 36 节**。
+
+**再下一段（候选）**：段 3 连接配置 + 自身态势只读（Android 优先）→ 段 4 Android 入口装配 +
+模拟器 `zaa_pixel6` 冒烟 → 段 5 Windows 指挥端骨架（本机缺 Visual Studio，**不能原生构建**，
+安装工作负载需另授权）。各段仍守「每原子任务 ≤3 文件」。
 
 
 

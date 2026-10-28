@@ -1,7 +1,17 @@
 # scds-next 交接快照
 
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M6 CLIENT-BASE 段 2——auth 域模型与客户端（账号 + 设备登录）+ 内存会话存储（testing 第 35 节）**——
+> 当前任务：**M6 CLIENT-BASE 段 2b——auth 客户端基座测试 + 前缀缺陷修复（testing 第 36 节）**——
+> 补测段 2 的 `AuthApi` / 模型 / 会话存储，过程中**抓到并修复一个真实缺陷**：`ApiClient` 的
+> `get/post/put/delete` 经 `send` → `resolve()` 只补前导斜杠、**不含 `kApiPrefix`**（只有 `api()` 才拼），
+> 故 `AuthApi` 五端点实际请求 `/auth/login` 等**无 `/api/v1` 前缀**路径（现场 404）；契约依据是
+> `openapi.yaml` **51 条 REST 全在 `/api/v1` 下**（含 `/api/v1/files`）。用户当次裁定修法取
+> 「**修 `ApiClient`，`send` 统一走 `api()`**」。落地**4 文件**（1 修复 + 3 测试），分两笔提交
+> `54e830b`（fix，`lib/shared/api/api_client.dart` 1 行）/ `d770556`（test，3 文件**24 用例**）：
+> `test/shared/api/auth_models_test.dart`（10）/ `test/shared/api/auth_api_test.dart`（8）/
+> `test/shared/auth/session_store_test.dart`（6）。门禁：`flutter test` → **39 例全绿**、
+> `flutter analyze` → `No issues found!`。
+> 本任务紧接 **M6 CLIENT-BASE 段 2——auth 域模型与客户端（账号 + 设备登录）+ 内存会话存储（testing 第 35 节）**——
 > 在 `clients/scds_client/` 落**恰 3 文件**（**未破每任务 ≤3 文件上限**）：`lib/shared/api/auth_models.dart`
 > （`AuthUser` / `TokenPair` / `DeviceTokenPair`，逐字对齐 `domain.yaml` 必填集；必填缺失或形状不符抛
 > `FormatException`，**不臆造缺省值**）、`lib/shared/api/auth_api.dart`（`AuthApi` 持 `ApiClient`：`login` /
@@ -10,8 +20,8 @@
 > （`AccountSession` / `DeviceSession` + `SessionStore` 抽象端口 + `InMemorySessionStore` 进程内实现；
 > `expiresIn` 在客户端换算成 `expiresAt`，**不猜服务端时钟**；端口与实现分离，为后续平台安全存储留位）。
 > 按当次裁定：范围「**账号 + 设备两端登录**」、存储「**内存实现**」、测试「**拆段 2b**」；
-> 门禁 `flutter analyze` → `No issues found!`；提交 `a26fc28`。
-> 本任务紧接 **M6 CLIENT-BASE 段 1b——通信基座契约测试（testing 第 34 节）**——新建
+> 门禁 `flutter analyze` → `No issues found!`；提交 `a26fc28`（**代码笔已本地提交，尚未推送**）。
+> 再前为 **M6 CLIENT-BASE 段 1b——通信基座契约测试（testing 第 34 节）**——新建
 > `clients/scds_client/test/shared/api/api_client_test.dart`：**14 用例**，用本机 `HttpServer` 打桩
 > （非 mock 库）断言段 1 三文件的**真实 HTTP 行为**（路径拼接 / 请求构造 / 非 2xx → `ApiException` /
 > `ApiProblem.tryParse` 不臆造缺省值）；`flutter analyze` + `flutter test` **全绿**；提交 `ac89a6a`。
@@ -37,7 +47,7 @@
 > 两者亦**均已在远端**。
 > 最新全量 `mvn test` **1151 项，失败/错误/跳过均 0**（见 testing 第 15~31 节；客户端段在 Dart 侧、
 > 不进 Maven reactor，故计数不变）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~35 节冲突处，以该处为准。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~36 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -65,33 +75,39 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 **M6 CLIENT-BASE 段 0（Flutter 工程脚手架，D12/D13 裁定后一次性生成 `clients/scds_client`，不含业务）**、
 **M6 CLIENT-BASE 段 1（共享契约/通信基座：`api_contract` + `api_problem` + `api_client`，只依赖 `dart:io`）**、
 **M6 CLIENT-BASE 段 1b（通信基座契约测试：本机 `HttpServer` 打桩 14 例，验路径拼接/请求构造/非 2xx 映射/`tryParse`）**、
-**M6 CLIENT-BASE 段 2（auth 域模型与客户端：账号 + 设备登录，内存会话存储，恰 3 文件）**。
+**M6 CLIENT-BASE 段 2（auth 域模型与客户端：账号 + 设备登录，内存会话存储，恰 3 文件）**、
+**M6 CLIENT-BASE 段 2b（auth 客户端基座测试 24 例 + `ApiClient` 缺 `/api/v1` 前缀缺陷修复）**。
 
-下一原子任务的候选：**M6 CLIENT-BASE 段 2b（auth 客户端基座测试，本地 `HttpServer` 打桩）**——其后为段 3 连接配置 + 自身态势只读
-（Android 优先）→ 段 4 Android 入口装配 + 模拟器 `zaa_pixel6` 冒烟 → 段 5 Windows 指挥端骨架
+下一原子任务的候选：**M6 CLIENT-BASE 段 3（连接配置 + 自身态势只读，Android 优先）**——其后为段 4 Android 入口装配 +
+模拟器 `zaa_pixel6` 冒烟 → 段 5 Windows 指挥端骨架
 （本机缺 Visual Studio，**不能原生构建**，安装需另授权）。
 另有一条单列后续：**T-PROD 部署**；以及一条**观察项**——硬件 ACK 解析（「已发送」≠「已确认」仍无人写入
 `ACKED`，且协议无回执帧）。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮段 0 / 段 1 / 段 1b / 段 2 的各笔**均已提交并推送**
-（段 2：代码 `a26fc28` + docs 笔；段 1b：测试 `ac89a6a` + docs 笔；见 §2）。
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；**段 0 / 段 1 / 段 1b 各笔已在远端**，
+但**段 2（代码 `a26fc28` + docs 笔 `c1079c8`）与段 2b（`54e830b` + `d770556` + docs 笔）尚在本机**——
+推送因 `github.com:443` 网络不可达失败，**未入远端**（见 §2）。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本轮 M6 CLIENT-BASE 段 0 / 段 1 / 段 1b / 段 2 的各笔**均已入远端**（段 0：`b16c348` 脚手架 + `f4c9f15` docs + `78bbb99` 订正；段 1：`dbc5dd9` 代码 + `8303add` docs；段 1b：`ac89a6a` 测试 + `6074e18` docs；段 2：`a26fc28` 代码 + docs 笔），工作树**干净**、与 `origin/main` 同步；HEAD 随后续回写前移，故不钉死具体 hash |
-| 实际远端main | 已入远端的是段 2 的 docs 笔（其前为段 2 代码笔 `a26fc28`，段 1b 两笔 `ac89a6a`/`6074e18`，段 1 两笔 `dbc5dd9`/`8303add`，段 0 三笔 `b16c348`/`f4c9f15`/`78bbb99`，`1950b4e` 快照订正）；更早为本轮 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
-| 已推送 | `a26fc28..` 段 2 两笔已入远端：**M6 CLIENT-BASE 段 2 两笔**（`a26fc28` 代码 `auth_models.dart` + `auth_api.dart` + `session_store.dart` + docs 回写 3 文件）；更早 `6074e18` 段 1b docs 笔（前 `ac89a6a` 测试笔）、`78bbb99..8303add` 为段 1 两笔、`b16c348..78bbb99` 为段 0 三笔、`4b76f2b..068d706` 为 R4 遗留收口三笔、`ac9353a..4b76f2b` 为 L6 口径收口三笔；再往前（链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3）亦均在远端 |
-| 未推送（仅本机） | **无**。本轮段 2 的代码笔（`a26fc28`）与 docs 笔（`docs/decision-register.md` 段 2 登记行与文末节 + `docs/testing.md` 第 35 节 + `snapshot.md`）**均已提交并推送** |
-| 本轮继续成果 | **M6 CLIENT-BASE 段 2：auth 域模型与客户端（账号 + 设备登录）+ 内存会话存储**——`clients/scds_client/` 下
+| 源码本地HEAD | 本轮段 2b 的 fix / test 两笔已本地提交（`54e830b` / `d770556`），随本 docs 笔一并在本机；本地 `main` **领先 `origin/main` 5 笔**（段 2：`a26fc28` 代码 + `c1079c8` docs；段 2b：`54e830b` fix + `d770556` test + 本 docs 笔），docs 笔提交后工作树**干净**；HEAD 随后续回写前移，故不钉死具体 hash |
+| 实际远端main | 停在**段 1b 的 docs 笔 `6074e18`**（其前为段 1b 测试笔 `ac89a6a`）；其前为段 1 两笔 `dbc5dd9`/`8303add`、段 0 三笔 `b16c348`/`f4c9f15`/`78bbb99`、`1950b4e` 快照订正；更早为 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
+| 已推送 | 至 `6074e18` 为止：**段 0 三笔 + 段 1 两笔 + 段 1b 两笔**（`b16c348..6074e18`）与更早的 R4 遗留收口三笔、L6 口径收口三笔、链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3 **均在远端** |
+| 未推送（仅本机） | **5 笔**（本地 `main` 相对 `origin/main` 领先）：段 2 的 `a26fc28`（代码 3 文件）+ `c1079c8`（docs 回写 3 文件）；段 2b 的 `54e830b`（fix 1 文件）+ `d770556`（test 3 文件）+ 本 docs 笔。两次 `git push` 均因 `Failed to connect to github.com:443` **失败**，**远端未更新**，不得视为已入远端 |
+| 本轮继续成果 | **M6 CLIENT-BASE 段 2b：auth 客户端基座测试 + 前缀缺陷修复**——补测段 2 时**抓到真实缺陷**：`ApiClient` 的 `get/post/put/delete` 经 `send` → `resolve()` 只补前导斜杠、**不含 `kApiPrefix`**，`AuthApi` 五端点实际请求无 `/api/v1` 前缀路径（现场 404）；修法取「**`send` 统一走 `api()`**」（1 行）。落 **4 文件**（1 修复 + 3 测试，两笔提交守「≤3 文件」）：`lib/shared/api/api_client.dart`、
+`test/shared/api/auth_models_test.dart`（10 例）/`test/shared/api/auth_api_test.dart`（8 例）/
+`test/shared/auth/session_store_test.dart`（6 例）。门禁 `flutter test` → **39 例全绿**、`flutter analyze` → `No issues found!`；
+本段三笔（`54e830b` + `d770556` + 本 docs 笔）**尚未推送** |
+| 上一轮成果（段 2） | **M6 CLIENT-BASE 段 2：auth 域模型与客户端（账号 + 设备登录）+ 内存会话存储**——`clients/scds_client/` 下
 **恰 3 文件**（**未破每任务 ≤3 文件上限**）：`lib/shared/api/auth_models.dart`（`AuthUser` / `TokenPair` /
 `DeviceTokenPair`，逐字对齐 `domain.yaml` 必填集，**不臆造缺省值**）、`lib/shared/api/auth_api.dart`
 （`AuthApi` 持 `ApiClient`：`login` / `refresh` / `logout`（无体、204）/ `me` / `deviceLogin`）、
 `lib/shared/auth/session_store.dart`（`AccountSession` / `DeviceSession` + `SessionStore` 抽象端口 +
 `InMemorySessionStore` 进程内实现）。门禁 `flutter analyze` → `No issues found!`；
-代码笔 `a26fc28` **已本地提交**，随本 docs 笔推送 |
-| 上一轮成果（段 1b） | **M6 CLIENT-BASE 段 1b：通信基座契约测试**——`clients/scds_client/test/shared/api/api_client_test.dart`
+本段两笔（`a26fc28` + `c1079c8`）**已本地提交、尚未推送** |
+| 更早成果（段 1b） | **M6 CLIENT-BASE 段 1b：通信基座契约测试**——`clients/scds_client/test/shared/api/api_client_test.dart`
 （**14 用例**，本机 `HttpServer` 打桩，断言路径拼接 / 请求构造 / 非 2xx → `ApiException` / `ApiProblem.tryParse`
 **不臆造缺省值**）。门禁 `flutter analyze` → `No issues found!`、`flutter test` → **14 例全绿**；
 本段两笔（`ac89a6a` + `6074e18`）**均已推送** |
@@ -276,8 +292,18 @@ D13（授权**仅一次** `flutter create` 例外，固定目录与文件清单�
 `TokenPair`/`DeviceTokenPair` 派生，`expiresIn` 在客户端换算成 `expiresAt`、**不猜服务端时钟**）+ `SessionStore`
 抽象端口 + `InMemorySessionStore` 进程内实现（重启即丢、**不落盘**、令牌不入日志）；端口与实现分离，为后续
 平台安全存储只换实现留位）。门禁 `flutter analyze` → `No issues found!`；**本段无测试**（按裁定拆段 2b）。
+新增已完成（**M6 CLIENT-BASE 段 2b：auth 客户端基座测试 + `/api/v1` 前缀缺陷修复**，见 testing 第 36 节）：
+补测段 2 时**抓到并修复一个真实缺陷**——`ApiClient` 的 `get`/`post`/`put`/`delete` 经 `send` → `resolve()`
+只补前导斜杠、**不含 `kApiPrefix`**（只有 `api()` 才拼），故 `AuthApi` 五端点实际请求 `/auth/login` 等
+**无 `/api/v1` 前缀**路径（现场 404）；契约依据是 `openapi.yaml` **51 条 REST 全在 `/api/v1` 下**
+（含 `/api/v1/files`）。修法取「**修 `ApiClient`，`send` 统一走 `api()`**」（1 行）。落 **4 文件**
+（1 修复 + 3 测试，分 `54e830b` fix / `d770556` test 两笔守「原子 ≤3 文件」）：
+`lib/shared/api/api_client.dart`、`test/shared/api/auth_models_test.dart`（10 例：模型边界）、
+`test/shared/api/auth_api_test.dart`（8 例：五端点路径/正文/`Bearer`/错误映射）、
+`test/shared/auth/session_store_test.dart`（6 例：会话派生与内存存储）。门禁 `flutter test` → **39 例全绿**、
+`flutter analyze` → `No issues found!`。
 file / map 其余业务方法按 testing 第 3 节矩阵推进。
-Flutter 工程**段 0（脚手架）+ 段 1（契约/通信基座）+ 段 1b（基座测试）+ 段 2（auth 域客户端）已就位**，
+Flutter 工程**段 0（脚手架）+ 段 1（契约/通信基座）+ 段 1b（基座测试）+ 段 2（auth 域客户端）+ 段 2b（auth 客户端基座测试与前置缺陷修复）已就位**，
 但**业务未开工**——Android 单兵端与 Windows 指挥端**均无业务代码**（无登录页、无态势、无入口装配），
 也**未与后端联调**。
 
@@ -318,6 +344,12 @@ M6 CLIENT-BASE 段 2（auth 域模型与客户端）证据：**Maven 侧仍无�
 `flutter analyze` → `No issues found!`；范围取「账号 + 设备两端登录」、存储取「内存实现」，
 落 `lib/shared/api/auth_models.dart` / `lib/shared/api/auth_api.dart` / `lib/shared/auth/session_store.dart`
 三文件（恰 3 文件），详见 testing 第 35 节。
+M6 CLIENT-BASE 段 2b（auth 客户端基座测试 + 前缀缺陷修复）证据：**Maven 侧仍无增减**（Dart 侧资产，
+**不在 reactor 内**），全量仍 **1151 项**（0/0/0）；客户端侧门禁 `flutter test` → `All tests passed!`
+（**39 例** = 段 1b 14 + 本段 24 + 模板 1）与 `flutter analyze` → `No issues found!`；
+本段**修复一个真实缺陷**——`ApiClient.send` 由 `resolve()` 改走 `api()`，`get/post/put/delete` 统一带
+`/api/v1`（段 1b 用例未断言请求路径故未暴露）；落 4 文件分 `54e830b`（fix）/`d770556`（test）两笔；
+详见 testing 第 36 节。
 M3 LIFE 开演链路就绪 409 硬前置新增证据：core `ExerciseLifecycleServiceIT` **+1**（610 → 611，
 新增 `startExercise_withVestLinkClosed_isDeviceLinkNotOpen` 并加 `@BeforeEach openVestLink()` 补前置）；
 app `ExerciseLifecycleHttpIT` **+1**（331 → 333 中的一笔，新增 `startWithVestLinkClosedIsRejectedAs409`）、
@@ -627,6 +659,17 @@ Dart 模型逐字对齐 `domain.yaml` 必填集（`AuthUser`/`TokenPair`/`Device
 测试按裁定**拆段 2b**，故本段只有静态门禁 `flutter analyze`（`No issues found!`）；
 本段**未改后端、未新增依赖、未新增错误码、未新增迁移**，全量计数仍 **1151** 项。
 
+2026-10-28新增已确认（M6 CLIENT-BASE 段 2b auth 客户端基座测试 + 前缀缺陷修复，见 testing 第 36 节）：
+**业务请求统一带 `/api/v1`**——用户当次裁定修法取「**修 `ApiClient`，`send` 统一走 `api()`**」，
+即 `get`/`post`/`put`/`delete` 自动拼 `kApiPrefix`，业务域客户端只传**业务相对路径**
+（依据：`openapi.yaml` **51 条 REST 全在 `/api/v1` 下**，含 `/api/v1/files`）；
+被修缺陷为 `send` 原走 `resolve()` 只补前导斜杠、**不含前缀**，致 `AuthApi` 五端点请求
+`/auth/login` 等无前缀路径（现场 404），**段 1b 用例未断言请求路径故漏过**——
+新增用例**必须断言请求路径**（本段 `auth_api_test.dart` 逐条断言 `$kApiPrefix/...`）；
+测试口径沿用段 1b——本机 `HttpServer` 打桩（非 mock 库）断言**真实 HTTP 行为**，
+模型**不臆造缺省值**（缺必填或形状不符即抛），会话 `expiresAt` 由客户端按注入/当前 UTC 换算；
+本段**只加测试 + 1 行修复**、**未新增依赖、未新增错误码、未新增迁移、未改后端**，全量计数仍 **1151** 项。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -661,7 +704,11 @@ Dart 模型逐字对齐 `domain.yaml` 必填集（`AuthUser`/`TokenPair`/`Device
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：M6 CLIENT-BASE 段 2——auth 域模型与客户端（`lib/shared/api/auth_models.dart` /
+最新证据：M6 CLIENT-BASE 段 2b——auth 客户端基座测试 + `/api/v1` 前缀缺陷修复
+（`test/shared/api/auth_models_test.dart` 10 + `test/shared/api/auth_api_test.dart` 8 +
+`test/shared/auth/session_store_test.dart` 6，共 **24 例**；并修 `lib/shared/api/api_client.dart` 的
+`send` 缺前缀缺陷，分 `54e830b`/`d770556` 两笔）详见 testing 第 36 节；
+M6 CLIENT-BASE 段 2——auth 域模型与客户端（`lib/shared/api/auth_models.dart` /
 `lib/shared/api/auth_api.dart` / `lib/shared/auth/session_store.dart`，范围取账号 + 设备两端登录、
 存储取内存实现、本段不含测试按裁定拆段 2b，门禁为 `flutter analyze`）详见 testing 第 35 节；
 M6 CLIENT-BASE 段 1b——通信基座契约测试（`test/shared/api/api_client_test.dart`，
@@ -690,7 +737,10 @@ M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1151 项测试、M6 CLIENT-BASE 段 2（auth 域模型与客户端 `lib/shared/api/auth_models.dart` /
+本快照已同步 1151 项测试、M6 CLIENT-BASE 段 2b（auth 客户端基座测试 `test/shared/api/auth_models_test.dart` /
+`test/shared/api/auth_api_test.dart` / `test/shared/auth/session_store_test.dart` 共 **24 例**，
+并修 `lib/shared/api/api_client.dart` 的 `send` 缺 `/api/v1` 前缀缺陷，分 `54e830b`/`d770556` 两笔；
+**尚未推送**）、段 2（auth 域模型与客户端 `lib/shared/api/auth_models.dart` /
 `lib/shared/api/auth_api.dart` / `lib/shared/auth/session_store.dart`，
 范围取**账号 + 设备两端登录**、存储取**内存实现**、本段不含测试按裁定拆段 2b，门禁为 `flutter analyze`）、
 段 1b（通信基座契约测试 `test/shared/api/api_client_test.dart`，
@@ -704,5 +754,5 @@ R4 遗留收口（`downloadUrl` 签名窗口过期 HTTP 用例，测试侧独立
 「先开串口链路」改造，**已推送** `8dda7be..f5bb261`）、M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，D11 落地口径，
 **已推送** `0d8ef02..8dda7be`）、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
 含 HTTP 端到端补测）与 M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性，**均已推送**）
-与下一任务候选（M6 CLIENT-BASE 段 2b auth 客户端基座测试 / 段 3 连接配置 + 态势只读 / T-PROD 部署），
+与下一任务候选（M6 CLIENT-BASE 段 3 连接配置 + 态势只读 / T-PROD 部署 / 段 4 Android 入口装配），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。
