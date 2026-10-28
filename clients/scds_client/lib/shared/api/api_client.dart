@@ -70,6 +70,9 @@ class ApiClient {
       send('DELETE', path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
 
   /// 底层发送：非 2xx 抛 [ApiException]；2xx 返回原始响应。
+  ///
+  /// 路径统一经 [api] 拼接，即所有 `get`/`post`/`put`/`delete` 自动带 [kApiPrefix]
+  /// （契约 51 条 REST 均在 `/api/v1` 下），业务域客户端只传**业务相对路径**。
   Future<ApiResponse> send(
     String method,
     String path, {
@@ -77,7 +80,7 @@ class ApiClient {
     Object? jsonBody,
     String? bearerToken,
   }) async {
-    final HttpClientRequest request = await _http.openUrl(method, resolve(path, query));
+    final HttpClientRequest request = await _http.openUrl(method, api(path, query));
     request.headers.set(HttpHeaders.acceptHeader, 'application/json, $kProblemMediaType');
     if (bearerToken != null && bearerToken.isNotEmpty) {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearerToken');
