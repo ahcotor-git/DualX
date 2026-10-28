@@ -43,19 +43,19 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 下一原子任务的候选：**Flutter 客户端工程**（Android 单兵端 / Windows 指挥端均未开工）；
 **T-PROD 部署**；以及一条**观察项**——硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，
 且协议无回执帧）。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮 R4 遗留收口改动**已本地提交 2 笔、
-尚未推送**（`git push` 连续两次因网络不可达失败，见 §2），网络失败时不得写成已入远端。
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；本轮 R4 遗留收口改动**已本地提交 3 笔（2 笔交付 + 1 笔快照订正）
+并已推送**（首次推送因网络不可达失败，连通性恢复后 `git push` 成功，见 §2）。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本地已含本轮 R4 遗留收口提交（3 个文件 2 笔：`test(app)` + `docs`），工作树**干净**；但因网络失败，**本地领先远端**（`origin/main` 仍是 `4b76f2b`） |
-| 实际远端main | `4b76f2b`：L6 口径收口三笔 `ac9353a..4b76f2b` 已入远端（本轮 R4 改动**尚未**入远端） |
-| 已推送 | `ac9353a..4b76f2b` 已入远端：L6 口径收口三笔 `2bafcbf`（core javadoc 订正）/`7d398d7`（testing + decision-register 订正）/`4b76f2b`（快照同步）；更早批次（链路就绪硬前置三笔 `479fc30`/`68eb2d9`/`f5bb261` 与两笔 docs 回写 `c9e1b02`/`ac9353a`、网关下行五笔 `2594b04`/`e715138`/`84d6809`/`f13e90f`/`8dda7be`、CAL-2 现场验收收口三笔 `3b6b482`/`1c8e5bd`/`0d8ef02`、R1/R2/R3 各三笔与 R4 全部改动含 HTTP 端到端补测 `62d03c7`/`5e641b2`、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs，以及 CAL-1/MR-1~MR-3）亦已在远端 |
-| 未推送（仅本机） | **本轮 R4 遗留收口改动**：`ReplayExportHttpIT.java`（`@BeforeAll` 加固定 `scds.files.sign-secret` + 新辅助 `resignWithExp`/`hmac` + `xlsxExportOverRealHttp` 内扩断言）、`docs/testing.md`（§26.2 第 17 条扩写 + §26.3「端到端覆盖已补齐」改写 + 新增第 31 节）、`snapshot.md`。**已本地提交 2 笔**（`test(app)` + `docs`）；`git push origin main` 连续两次因网络不可达失败（`curl 28` / `Failed to connect to github.com:443`，`push_exit=1`、`128`），**尚未推送**。恢复网络后执行 `git push origin main` 即可（勿 force push、勿重写历史；其上另有一笔本行订正的 docs 提交） |
-| 本轮继续成果 | **R4 遗留收口：`downloadUrl` 签名窗口过期的 HTTP 用例**——在 `ReplayExportHttpIT.xlsxExportOverRealHttp` 内补「签名正确、仅 `exp` 已过 → 403 `FILE_URL_INVALID`」断言；因 HTTP IT 推不动签名器的 `Clock.systemUTC()`，改由**测试侧按契约独立重算**签名（固定测试密钥 + `路径 + '\n' + exp` 的 HMAC-SHA256、Base64URL 无填充），先用「未过期」正例自证算法一致、再验过期。**未改验签逻辑、未引入可注入 Clock 到生产**；在既有用例内扩断言，**无新增用例**；全量 `mvn -o test` **1151 项**全绿（定向 `ReplayExportHttpIT` 2/2 绿）。**已本地提交，待网络恢复后推送** |
+| 源码本地HEAD | 本轮 R4 遗留收口三笔已入远端，工作树**干净**、与 `origin/main` 同步；其上另有若干 docs 回写提交，HEAD 会随回写前移，故不钉死具体 hash |
+| 实际远端main | 本轮 R4 遗留收口三笔 tip `068d706`（`test(app)` / `docs` / 快照订正）已入远端；更早为 L6 口径收口三笔 `ac9353a..4b76f2b` |
+| 已推送 | `4b76f2b..068d706` 已入远端：本轮 R4 遗留收口三笔（`eb755f0` `test(app)` + `4f2d546` `docs` + `068d706` 快照订正；首次推送因网络不可达失败，连通性恢复后成功）；更早批次（L6 口径收口三笔 `2bafcbf`/`7d398d7`/`4b76f2b`、链路就绪硬前置三笔 `479fc30`/`68eb2d9`/`f5bb261` 与两笔 docs 回写 `c9e1b02`/`ac9353a`、网关下行五笔 `2594b04`/`e715138`/`84d6809`/`f13e90f`/`8dda7be`、CAL-2 现场验收收口三笔 `3b6b482`/`1c8e5bd`/`0d8ef02`、R1/R2/R3 各三笔与 R4 全部改动含 HTTP 端到端补测 `62d03c7`/`5e641b2`、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs，以及 CAL-1/MR-1~MR-3）亦已在远端 |
+| 未推送（仅本机） | **无**。本轮 R4 遗留收口的 3 个文件（`ReplayExportHttpIT.java`：`@BeforeAll` 加固定 `scds.files.sign-secret` + 新辅助 `resignWithExp`/`hmac` + `xlsxExportOverRealHttp` 内扩断言；`docs/testing.md`：§26.2 第 17 条扩写 + §26.3 改写 + 新增第 31 节；`snapshot.md`）**已全部提交并推送** |
+| 本轮继续成果 | **R4 遗留收口：`downloadUrl` 签名窗口过期的 HTTP 用例**——在 `ReplayExportHttpIT.xlsxExportOverRealHttp` 内补「签名正确、仅 `exp` 已过 → 403 `FILE_URL_INVALID`」断言；因 HTTP IT 推不动签名器的 `Clock.systemUTC()`，改由**测试侧按契约独立重算**签名（固定测试密钥 + `路径 + '\n' + exp` 的 HMAC-SHA256、Base64URL 无填充），先用「未过期」正例自证算法一致、再验过期。**未改验签逻辑、未引入可注入 Clock 到生产**；在既有用例内扩断言，**无新增用例**；全量 `mvn -o test` **1151 项**全绿（定向 `ReplayExportHttpIT` 2/2 绿）。**已推送** |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
