@@ -114,6 +114,7 @@ D08 的 epoch 扩展若获批，需明确 query/帧字段、旧客户端兼容�
 | M6 CLIENT-BASE 段 2（auth 域模型与客户端） | 用户当次裁定三项：范围取「**账号 + 设备两端登录**」、存储取「**内存实现**」、测试取「**拆段 2b**」。**已落地提交** `a26fc28`（`auth_models.dart` + `auth_api.dart` + `session_store.dart`，恰 3 文件 250 行，**未破每任务 ≤3 文件上限**）；`flutter analyze` 无问题。细节见文末该节与 [testing](testing.md) 第 35 节 |
 | M6 CLIENT-BASE 段 2b（auth 客户端基座测试 + 前缀缺陷修复） | 用户当次裁定「**提 3 笔（fix + test + docs）并推送**」。段 2b 补测中**抓到真实缺陷**：`ApiClient.send` 用 `resolve()` 不补 `kApiPrefix`，`AuthApi` 五端点实际请求无 `/api/v1` 前缀路径。用户当次裁定修法取「**修 `ApiClient`，`send` 统一走 `api()`**」。**已落地提交** `54e830b`（fix，1 文件）+ `d770556`（test，3 文件，**24 用例**）；`flutter test` **39 例**全绿、`flutter analyze` 无问题。细节见文末该节与 [testing](testing.md) 第 36 节 |
 | M6 CLIENT-BASE 段 3（连接配置 + 自身态势只读） | 用户当次裁定四项：切分取「**拆 3a/3b/3c 三段**」、配置存储取「**内存实现先行，不引依赖**」、态势范围取「**四端点只读全做**」、提笔取「**每段 1 笔代码 + 末段统一 docs**」。**已落地 3 笔代码**：`1fc329a`（3a，`ConnectionConfig` + `ConnectionConfigStore`/`InMemoryConnectionConfigStore` + 10 例）、`c5c1e70`（3b，`situation_models.dart` 一套 Poll/WS 同构契约类型 + 8 枚举 + 15 例）、`6b58f93`（3c，`SituationApi` 四只读端点 + 9 例）。`flutter test` **73 例**全绿、`flutter analyze` 无问题；Dart 产物不进 Maven reactor，全量仍 **1151 项**。细节见文末该节与 [testing](testing.md) 第 37 节 |
+| M6 CLIENT-BASE 段 4（Android 入口装配 + 模拟器冒烟） | 用户当次裁定两项：网关取「**启动，simulator 网关**」（本机前台跑开发实例，附 `--scds.gateway.mode=simulator`——不占真串口、不监听 12001；**仿真通过不得写成现场通过**）、种子取「**完整种子，争取全绿 200**」（向开发库写专属编号段 **62400** 的 `t_vest`（含 BCrypt 绑定密钥）/`t_plan`/`t_plan_roster`，用**本地签发**的 ADMIN 令牌调 HTTP 开链路、开演）。**已落地 4 笔**：`1f61d27`（4a 入口装配 + 连接配置页）、`ee33764`（4b 设备登录页 + 接线）、`1bbb284`（4c 自身态势页 + 1s 轮询）、`3600056`（4d Android debug 回环明文许可）。冒烟在 `emulator-5554`（AVD `zaa_pixel6`）+ `adb reverse tcp:11001` 上全绿：设备登录成功，自身态势 `已刷新 5 次 → 20 次（每 1000 ms）` 持续增长，字段与种子编成逐项一致；冒烟后按 62400 段**精确回收**并停实例、关模拟器。`flutter test` **95 例**全绿、`flutter analyze` 无问题；Dart 产物不进 reactor，全量仍 **1151 项**。细节见文末该节与 [testing](testing.md) 第 38 节 |
 | 提交/推送 M2 LEDGER 成果 | 用户本轮明确授权“提交 LEDGER 并尝试推送”。**已落地 5 个本地提交**（`86e9b71` 契约、`a95bcf3` 服务、`9c3ab09` 接线+权限、`74162ca` 测试、`e8258a0` 文档），叠加既有 4 个后 `main` 领先 `origin/main` **9 个提交**；推送**两次均因网络失败**（`Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。不推导后续自动提交授权 |
 | 提交/推送 M2 MAP-BASE A1/A2 与 B1-B3 | 用户当次选择“提交并尝试推送”与“B2 + B3 连做”。**已落地 5 个本地提交**（`c8c1d5d` 契约 A1/A2、`867bd4c` 裁定登记、`8e1adbd` B1 存储端口与实现、`55739f1` B2 签名 URL、`7846030` B3 单测与配置）。`867bd4c` 那次推送已成功入远端；B1-B3 三次推送**均因网络失败**（`Connection was reset` / 无法连接 github.com:443），`main` 领先 `origin/main` **3 个提交**，**远端未更新** |
 | 提交/推送 M2 MAP-BASE 分段 C 与“演习中删图”裁定 | 用户当次选择“提交并重试推送”与“一并拦截，复用 MAP_IN_USE”。**已落地 3 个本地提交**（`3787254` C1 错误码与契约登记、`e8006b6` C2 台账服务与想定/演习引用判据、`8b9de5c` C2 用例），叠加既有 4 个后 `main` 领先 `origin/main` **7 个提交**；本轮推送**两次均因网络失败**（`Recv failure: Connection was reset` / 无法连接 github.com:443），**远端未更新**，不得视为已入远端。`C` 段已跑通全量 `mvn -B verify`（716 项，protocol 19 / core 316 / api 100 / app 281） |
@@ -1401,9 +1402,49 @@ D（app 端到端）四段实施。这也正是 **D11**（「整体回滚」不�
 门禁：`flutter test` → `All tests passed!`（**73 例**）、`flutter analyze` → `No issues found!`；
 Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。证据见 [testing](testing.md) **第 37 节**。
 
-**再下一段（候选）**：段 4 Android 入口装配（连接配置页 + 态势轮询接线）+ 模拟器 `zaa_pixel6` 冒烟 →
-段 5 Windows 指挥端骨架（本机缺 Visual Studio，**不能原生构建**，安装工作负载需另授权）。
-各段仍守「每原子任务 ≤3 文件」。
+**再下一段（段 4）落地**：用户当次两项裁定——网关取「**启动，simulator 网关（推荐）**」（本机前台跑开发实例，
+附 `--scds.gateway.mode=simulator`：不占真实串口、不监听 12001；**仿真通过不得写成现场通过**）、
+种子取「**完整种子，争取全绿 200（推荐）**」（向开发库写入**专属编号段 62400** 的种子：`t_vest`（含 BCrypt 绑定密钥）
+＋ `t_plan` ＋ `t_plan_roster`，用**本地签发**的 ADMIN 令牌调 HTTP 开链路、开演）。按裁定拆 **4a / 4b / 4c / 4d** 四笔
+（前三笔各 1 笔代码，守「原子 ≤3 文件」；4d 为 Android 构建配置笔）：
+- **4a**（`1f61d27`，3 文件）：`lib/features/connection/connection_page.dart`（连接配置页：读 `ConnectionConfigStore`
+  → 无值回落 `defaults`；保存前过构造校验，**失败只行内提示、不写库不跳转**）＋ `lib/main.dart` 外壳装配
+  （注入内存 `configStore`/`sessionStore` + `httpApiClient` 工厂，换实例先 `close` 旧客户端）＋ `test/widget_test.dart`
+  外壳装配 3 例与配置页校验 6 例（**替换模板 Counter 1 例**）；
+- **4b**（`ee33764`，3 文件）：`lib/features/device/device_login_page.dart`（本地只校验契约 `required` 与类型，
+  **不臆造服务端规则**；`AUTH_DEVICE_NOT_BOUND` → 可读文案；提交期间禁用按钮；**不重试、不落盘、不打印令牌**）
+  ＋ `main.dart` 接线 `AuthApi.deviceLogin` → `DeviceSession.fromTokenPair` → `sessionStore.writeDevice` ＋ 8 例测试；
+- **4c**（`1bbb284`，3 文件）：`lib/features/situation/situation_page.dart`（`SituationPoller`，`Timer.periodic`
+  ＋ `kSituationPollInterval = 1000ms`：**至多一个在途请求**、上一拍未回则跳过本拍；一次失败**不清空**上次成功数据、
+  只置 `lastError`；`successCount` 作「真的在轮询」的证据）＋ `main.dart` 接线 `SituationApi.getVestState`
+  ＋ 6 例测试；
+- **4d**（`3600056`，2 文件）：`android/app/src/debug/AndroidManifest.xml` ＋
+  `android/app/src/debug/res/xml/network_security_config.xml`——**仅 debug** 放行 `127.0.0.1`/`localhost` 明文 HTTP
+  （`includeSubdomains="false"`，局域网与公网在 debug 下同样被禁；release 不合并本覆盖层）。
+
+**模拟器冒烟（2026-10-28，simulator 网关 + 专属种子）**：后端以 `--spring.profiles.active=local
+--scds.gateway.mode=simulator` 起（schema 迁至 **v11**，`/actuator/health` **200 UP**）；种子全绿——
+`POST /api/v1/devices/vests` **201** → `.../62400/binding` **201** → `POST /api/v1/plans` **201** →
+`PUT /plans/{planId}/roster` **200** → `POST /api/v1/devices/links/serial` **200** →
+`POST /api/v1/exercise/current` **201**；服务端自检 `GET /api/v1/situation/vests/62400`（设备令牌）**200**
+（`hp=100`、`ammo1=30`、`ammo2=30`、`revision=1`）。设备侧 `emulator-5554`（AVD `zaa_pixel6`）
+＋ `adb reverse tcp:11001 tcp:11001`，debug APK 重建后安装；界面链路「连接配置（预填 `127.0.0.1:11001`）
+→ 保存并继续 → 设备登录（62400 + 绑定密钥）→ **登录成功** → 自身态势页」，轮询 `已刷新 5 次 →
+20 次（每 1000 ms）` **持续增长**，页面字段与种子编成**逐项一致**，全程无
+`拉取失败` / `DEVICE_VEST_NOT_FOUND` / `CLEARTEXT_NOT_PERMITTED`。
+**冒烟后按编号段 62400 精确回收**（`t_exercise_unit`/`t_exercise`/`t_plan_roster`/`t_plan`/`t_vest` 复核均为 0；
+日志/指令/审计等表本就为 0），并停后端实例、关模拟器。
+留档坑：**冒烟前须确认 fat jar 不早于最新迁移**——旧 jar（10-23 构建）首启只迁到 v10，重建后才迁到 v11；
+另 ADMIN 令牌须手工核对 payload JSON 合法（`exp` 值后多一个引号即致 Nimbus `toJSONObject()` 返回 null → 401）。
+
+门禁：`flutter test` → `All tests passed!`（**95 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23）、
+`flutter analyze` → `No issues found!`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。
+**局限**：simulator 网关无真实串口帧（`status=OFFLINE`/`position=null`/`positionSource=NONE` 属预期），
+**不证明硬件链路、真机网络与 WS**。证据见 [testing](testing.md) **第 38 节**。
+
+**再下一段（候选）**：段 5 Windows 指挥端骨架（本机缺 Visual Studio，**不能原生构建**，安装工作负载需另授权）
+→ T-PROD 部署；以及单列后续的 WS 连接与轮询调度器、平台安全存储（Android Keystore / Windows DPAPI）
+＋连接配置落盘（需另授权引依赖）。各段仍守「每原子任务 ≤3 文件」。
 
 
 

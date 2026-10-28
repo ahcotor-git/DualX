@@ -1,7 +1,24 @@
 # scds-next 交接快照
 
 > 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M6 CLIENT-BASE 段 3——连接配置（3a）+ 态势契约模型（3b）+ 态势只读四端点（3c）（testing 第 37 节）**——
+> 当前任务：**M6 CLIENT-BASE 段 4——Android 入口装配（4a 入口 + 连接配置页 / 4b 设备登录页 /
+> 4c 自身态势页 + 1s 轮询 / 4d Android debug 明文许可）（testing 第 38 节）**——
+> 按用户当次裁定：「**段 4 Android 入口装配**」「**拆 4a/4b/4c（+4d）**」「**配置 → 设备登录 → 自身态势**」
+> 「**零依赖手写**」「**模拟器 + adb reverse 11001**」。4a 落 `lib/main.dart`（外壳装配：注入
+> `InMemoryConnectionConfigStore` + `InMemorySessionStore`；换配置即换 `ApiClient` 实例并 `close` 旧实例）
+> 与 `lib/features/connection/connection_page.dart`（连接配置页：默认预填 `127.0.0.1:11001`；端口非数字或
+> `ConnectionConfig` 构造抛 `ArgumentError` 时**不写库、不跳转**，只置错误文案）；4b 落
+> `lib/features/device/device_login_page.dart`（设备登录页：`AuthApi.deviceLogin` → `DeviceSession.fromTokenPair`
+> → `sessionStore.writeDevice`；`AUTH_DEVICE_NOT_BOUND` 归为「编号或密钥不正确」文案）；4c 落
+> `lib/features/situation/situation_page.dart`（自身态势页 + `SituationPoller`：`Timer.periodic` **1000 ms**、
+> **至多一个在途请求**，失败**不清空** `latest` 只置 `lastError`，刷新文案 `已刷新 N 次（每 1000 ms）`）；
+> 4d 落 Android **debug-only** 网络配置（`android/app/src/debug/AndroidManifest.xml` +
+> `res/xml/network_security_config.xml`，**只放行 `127.0.0.1`/`localhost` 明文**，release 不合并该覆盖层）。
+> 四笔代码提交 `1f61d27`/`ee33764`/`1bbb284`/`3600056`；门禁 `flutter test` → **95 例全绿**、
+> `flutter analyze` → `No issues found!`。**已在本机用 simulator 网关 + 专属种子（62400 段）完成一次
+> 模拟器端到端冒烟**（轮询 5 次 → 20 次持续刷新、页面字段与种子逐项一致），冒烟后按 62400 段精确回收；
+> 该冒烟**只证「仿真通过」、不等于现场通过**，且**本段仍不含 WebSocket 与 revision 缓存聚合**。
+> 本任务紧接 **M6 CLIENT-BASE 段 3——连接配置（3a）+ 态势契约模型（3b）+ 态势只读四端点（3c）（testing 第 37 节）**——
 > 按用户当次四项裁定：「**拆 3a/3b/3c 三段**」「**内存实现先行、不引依赖**」「**四端点只读全做**」
 > 「**每段 1 笔代码 + 末段统一 docs**」。3a 落 `lib/shared/config/connection_config.dart`
 > （`ConnectionConfig` 构造即校验：空白地址 / 越界端口抛 `ArgumentError`；默认值逐字等于
@@ -88,40 +105,42 @@ M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停�
 **M6 CLIENT-BASE 段 2（auth 域模型与客户端：账号 + 设备登录，内存会话存储，恰 3 文件）**、
 **M6 CLIENT-BASE 段 2b（auth 客户端基座测试 24 例 + `ApiClient` 缺 `/api/v1` 前缀缺陷修复）**、
 **M6 CLIENT-BASE 段 3（连接配置 `ConnectionConfig`/`ConnectionConfigStore` + 态势契约模型 `situation_models.dart`
-（Poll/WS 同构）+ 态势只读四端点 `SituationApi`，三段 34 例）**。
+（Poll/WS 同构）+ 态势只读四端点 `SituationApi`，三段 34 例）**、
+**M6 CLIENT-BASE 段 4（Android 入口装配 4a/4b/4c/4d：外壳装配 + 连接配置页 + 设备登录页 +
+自身态势页与 `SituationPoller` + debug 回环明文许可，四段 23 例；含 simulator 网关 + 62400 段专属种子冒烟）**。
 
-下一原子任务的候选：**M6 CLIENT-BASE 段 4（Android 入口装配：连接配置页 + 态势轮询接线，模拟器 `zaa_pixel6` 冒烟）**——
-其后为段 5 Windows 指挥端骨架
-（本机缺 Visual Studio，**不能原生构建**，安装需另授权）。
+下一原子任务的候选：**M6 CLIENT-BASE 段 5（Windows 指挥端骨架）**——
+本机缺 Visual Studio，**不能原生构建/验收**，安装需另授权。
 另有一条单列后续：**T-PROD 部署**；以及一条**观察项**——硬件 ACK 解析（「已发送」≠「已确认」仍无人写入
 `ACKED`，且协议无回执帧）。启动前须重新核查仓库与环境，
-不照搬本快照的瞬时结论。提交/推送仍须当次授权；**段 0 / 段 1 / 段 1b 各笔已在远端**，
-但**段 2（代码 `a26fc28` + docs 笔 `c1079c8`）、段 2b（`54e830b` + `d770556` + docs 笔 `fb197ba`）
-与段 3（`1fc329a` + `c5c1e70` + `6b58f93`）尚在本机**——
-推送因 `github.com:443` 网络不可达失败，**未入远端**（见 §2）。
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；**段 0 / 段 1 / 段 1b / 段 2 / 段 2b / 段 3 各笔均已入远端**
+（`origin/main` = 段 3 docs 笔 `cdb2897`），但**段 4 四笔代码（`1f61d27`/`ee33764`/`1bbb284`/`3600056`）
+与本次段 4 docs 笔仍在本机**，尚未推送（见 §2）。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | 本轮段 3 的三笔代码笔已本地提交（`1fc329a` 3a / `c5c1e70` 3b / `6b58f93` 3c），随本 docs 笔一并在本机；本地 `main` **领先 `origin/main` 9 笔**（段 2：`a26fc28` + `c1079c8`；段 2b：`54e830b` + `d770556` + `fb197ba`；段 3：`1fc329a` + `c5c1e70` + `6b58f93` + 本 docs 笔），docs 笔提交后工作树**干净**；HEAD 随后续回写前移，故不钉死具体 hash |
-| 实际远端main | 停在**段 1b 的 docs 笔 `6074e18`**（其前为段 1b 测试笔 `ac89a6a`）；其前为段 1 两笔 `dbc5dd9`/`8303add`、段 0 三笔 `b16c348`/`f4c9f15`/`78bbb99`、`1950b4e` 快照订正；更早为 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
-| 已推送 | 至 `6074e18` 为止：**段 0 三笔 + 段 1 两笔 + 段 1b 两笔**（`b16c348..6074e18`）与更早的 R4 遗留收口三笔、L6 口径收口三笔、链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3 **均在远端** |
-| 未推送（仅本机） | **9 笔**（本地 `main` 相对 `origin/main` 领先）：段 2 的 `a26fc28`（代码 3 文件）+ `c1079c8`（docs 回写 3 文件）；段 2b 的 `54e830b`（fix 1 文件）+ `d770556`（test 3 文件）+ `fb197ba`（docs 回写 3 文件）；段 3 的 `1fc329a`（3a 3 文件）+ `c5c1e70`（3b 2 文件）+ `6b58f93`（3c 2 文件）+ 本 docs 笔。三次 `git push` 均因 `Failed to connect to github.com:443` / `Connection was reset` **失败**，**远端未更新**，不得视为已入远端 |
-| 本轮成果（段 3） | **M6 CLIENT-BASE 段 3：连接配置（3a）+ 态势契约模型（3b）+ 态势只读四端点（3c）**——按裁定「拆 3a/3b/3c 三段」且「每段 1 笔代码」。3a：`lib/shared/config/connection_config.dart`（`ConnectionConfig` 构造即校验、默认值逐字对齐 `kDefaultHost`/`kHttpPort`、`baseUri`/`display`）+ `connection_config_store.dart`（端口 + `InMemoryConnectionConfigStore`，**不落盘**）＋10 例；3b：`lib/shared/api/situation_models.dart`（6 模型 + 8 契约枚举，**Poll/WS 同构共用**，**未知枚举 → `FormatException`**）＋15 例；3c：`lib/shared/api/situation_api.dart`（四只读端点，查询串只拼非 null 参数，409 `SITUATION_REVISION_TOO_OLD` 交调用方改全量）＋9 例。门禁 `flutter test` → **73 例全绿**、`flutter analyze` → `No issues found!`；**本段不含 WS 与轮询调度器**（留段 4）；
-本段四笔（`1fc329a` + `c5c1e70` + `6b58f93` + 本 docs 笔）**尚未推送** |
+| 源码本地HEAD | 本轮段 4 的四笔代码笔已本地提交（`1f61d27` 4a / `ee33764` 4b / `1bbb284` 4c / `3600056` 4d），随本 docs 笔一并在本机；本地 `main` **领先 `origin/main` 4 笔**（段 4 四笔），docs 笔提交后工作树**干净**；HEAD 随后续回写前移，故不钉死具体 hash |
+| 实际远端main | 停在**段 3 的 docs 笔 `cdb2897`**（其前为段 3 三段代码 `6b58f93`/`c5c1e70`/`1fc329a`、段 2b 三笔 `fb197ba`/`d770556`/`54e830b`、段 2 两笔 `c1079c8`/`a26fc28`、段 1b 两笔 `6074e18`/`ac89a6a`、段 1 两笔 `8303add`/`dbc5dd9`、段 0 三笔 `78bbb99`/`f4c9f15`/`b16c348`、`1950b4e` 快照订正）；更早为 R4 遗留收口三笔 tip `068d706` 与 L6 口径收口三笔 `ac9353a..4b76f2b` |
+| 已推送 | 至 `cdb2897` 为止：**段 0 三笔 + 段 1 两笔 + 段 1b 两笔 + 段 2 两笔 + 段 2b 三笔 + 段 3 三笔 + 段 3 docs 笔**（`b16c348..cdb2897`）与更早的 R4 遗留收口三笔、L6 口径收口三笔、链路就绪硬前置三笔、网关下行五笔、CAL-2 现场验收收口三笔、R1/R2/R3 各三笔与 R4 全部改动、CAL-2c 四笔、`865a0b9` `moveVest`、`c1198db` 日志流水、`398495b` docs 及 CAL-1/MR-1~MR-3 **均在远端** |
+| 未推送（仅本机） | **4 笔**（本地 `main` 相对 `origin/main` 领先）：段 4 的 `1f61d27`（4a 入口装配 + 连接配置页）、`ee33764`（4b 设备登录页）、`1bbb284`（4c 自身态势页 + 1s 轮询）、`3600056`（4d debug 回环明文许可）；**本 docs 笔提交后将增至 5 笔**。此前多次 `git push` 曾因 `Failed to connect to github.com:443` / `Connection was reset` 失败，本段尚未尝试推送，**不得视为已入远端** |
+| 本轮成果（段 4） | **M6 CLIENT-BASE 段 4：Android 入口装配（4a 入口 + 连接配置页 / 4b 设备登录页 / 4c 自身态势页 + 1s 轮询 / 4d Android debug 明文许可）**——按裁定「段 4 Android 入口装配」「拆 4a/4b/4c（+4d）」「零依赖手写」「模拟器 + adb reverse 11001」。4a：`lib/main.dart`（外壳装配 + `ApiClient` 生命周期）+ `lib/features/connection/connection_page.dart`（构造即校验，非法**不写库不跳转**）＋9 例；4b：`lib/features/device/device_login_page.dart`（`deviceLogin` → `DeviceSession` → `writeDevice`）＋8 例；4c：`lib/features/situation/situation_page.dart`（`SituationPoller` 1000 ms、至多一个在途、失败不清空 `latest`）＋6 例；4d：`android/app/src/debug/AndroidManifest.xml` + `android/app/src/debug/res/xml/network_security_config.xml`（**只放行 `127.0.0.1`/`localhost` 明文**，release 不含本覆盖层）。门禁 `flutter test` → **95 例全绿**、`flutter analyze` → `No issues found!`；**已用 simulator 网关 + 62400 段专属种子做模拟器端到端冒烟**（轮询 5 → 20 次、字段逐项一致），冒烟后精确回收；**本段不含 WS 与 revision 缓存聚合**；
+本段四笔（`1f61d27` + `ee33764` + `1bbb284` + `3600056`）+ 本 docs 笔**尚未推送** |
+| 上一轮成果（段 3） | **M6 CLIENT-BASE 段 3：连接配置（3a）+ 态势契约模型（3b）+ 态势只读四端点（3c）**——按裁定「拆 3a/3b/3c 三段」且「每段 1 笔代码」。3a：`lib/shared/config/connection_config.dart`（`ConnectionConfig` 构造即校验、默认值逐字对齐 `kDefaultHost`/`kHttpPort`、`baseUri`/`display`）+ `connection_config_store.dart`（端口 + `InMemoryConnectionConfigStore`，**不落盘**）＋10 例；3b：`lib/shared/api/situation_models.dart`（6 模型 + 8 契约枚举，**Poll/WS 同构共用**，**未知枚举 → `FormatException`**）＋15 例；3c：`lib/shared/api/situation_api.dart`（四只读端点，查询串只拼非 null 参数，409 `SITUATION_REVISION_TOO_OLD` 交调用方改全量）＋9 例。门禁 `flutter test` → **73 例全绿**、`flutter analyze` → `No issues found!`；
+本段四笔（`1fc329a` + `c5c1e70` + `6b58f93` + docs 笔 `cdb2897`）**已在远端** |
 | 上一轮成果（段 2b） | **M6 CLIENT-BASE 段 2b：auth 客户端基座测试 + 前缀缺陷修复**——补测段 2 时**抓到真实缺陷**：`ApiClient` 的 `get/post/put/delete` 经 `send` → `resolve()` 只补前导斜杠、**不含 `kApiPrefix`**，`AuthApi` 五端点实际请求无 `/api/v1` 前缀路径（现场 404）；修法取「**`send` 统一走 `api()`**」（1 行）。落 **4 文件**（1 修复 + 3 测试，两笔提交守「≤3 文件」）：`lib/shared/api/api_client.dart`、
 `test/shared/api/auth_models_test.dart`（10 例）/`test/shared/api/auth_api_test.dart`（8 例）/
 `test/shared/auth/session_store_test.dart`（6 例）。门禁 `flutter test` → **39 例全绿**、`flutter analyze` → `No issues found!`；
-本段三笔（`54e830b` + `d770556` + `fb197ba`）**尚未推送** |
+本段三笔（`54e830b` + `d770556` + `fb197ba`）**已在远端** |
 | 更早成果（段 2） | **M6 CLIENT-BASE 段 2：auth 域模型与客户端（账号 + 设备登录）+ 内存会话存储**——`clients/scds_client/` 下
 **恰 3 文件**（**未破每任务 ≤3 文件上限**）：`lib/shared/api/auth_models.dart`（`AuthUser` / `TokenPair` /
 `DeviceTokenPair`，逐字对齐 `domain.yaml` 必填集，**不臆造缺省值**）、`lib/shared/api/auth_api.dart`
 （`AuthApi` 持 `ApiClient`：`login` / `refresh` / `logout`（无体、204）/ `me` / `deviceLogin`）、
 `lib/shared/auth/session_store.dart`（`AccountSession` / `DeviceSession` + `SessionStore` 抽象端口 +
 `InMemorySessionStore` 进程内实现）。门禁 `flutter analyze` → `No issues found!`；
-本段两笔（`a26fc28` + `c1079c8`）**已本地提交、尚未推送** |
+本段两笔（`a26fc28` + `c1079c8`）**已在远端** |
 | 更早成果（段 1b） | **M6 CLIENT-BASE 段 1b：通信基座契约测试**——`clients/scds_client/test/shared/api/api_client_test.dart`
 （**14 用例**，本机 `HttpServer` 打桩，断言路径拼接 / 请求构造 / 非 2xx → `ApiException` / `ApiProblem.tryParse`
 **不臆造缺省值**）。门禁 `flutter analyze` → `No issues found!`、`flutter test` → **14 例全绿**；
@@ -333,11 +352,28 @@ WS 落地时不新增第二套解析）；解析口径「**不臆造缺省值**�
 `/situation/hits`（`sinceSeq`/`limit`））；查询串**只拼非 null 参数**（缺省交服务端默认值）；令牌按 `Bearer`
 提交（指挥端 `accessToken`、单兵端 `deviceToken`）；409 `SITUATION_REVISION_TOO_OLD` 由调用方改全量重拉。
 门禁 `flutter test` → **73 例全绿**、`flutter analyze` → `No issues found!`；**本段不含 WS、轮询调度与界面**（留段 4）。
+新增已完成（**M6 CLIENT-BASE 段 4：Android 入口装配 4a/4b/4c/4d**，见 testing 第 38 节）：
+按裁定**拆 4a/4b/4c/4d 四段、每段 1 笔代码**，共 11 文件 23 例测试。
+**4a**：`lib/main.dart`（外壳装配——注入 `InMemoryConnectionConfigStore` + `InMemorySessionStore`；
+换配置即换 `ApiClient` 实例并 `close` 旧实例；导航链 连接配置页 → 设备登录页 → 自身态势页）与
+`lib/features/connection/connection_page.dart`（连接配置页，控件键 `kConnection*`；进入预填
+`store.read() ?? ConnectionConfig.defaults`；非法输入**不写库、不跳转**）。
+**4b**：`lib/features/device/device_login_page.dart`（设备登录页，控件键 `kDeviceLogin*`；`typedef DeviceLogin`；
+`int.tryParse` 失败 / 密钥空各自给文案；提交期间禁用按钮；`ApiException` → `_describe()`）。
+**4c**：`lib/features/situation/situation_page.dart`（自身态势页 + `SituationPoller extends ChangeNotifier`，
+`kSituationPollInterval = Duration(seconds: 1)`；`_inFlight` 保证**至多一个在途请求**；失败**不清空**
+`latest`；字段键 `kSituation*`；定位文案 = 室内整图百分比 / 室外 BD-09 + WGS-84 双呈现，**客户端不换算**）。
+**4d**：`android/app/src/debug/AndroidManifest.xml`（挂 `@xml/network_security_config`）+
+`android/app/src/debug/res/xml/network_security_config.xml`（`cleartextTrafficPermitted="true"` 仅
+`127.0.0.1`/`localhost`；release 不合并）。
+门禁 `flutter test` → **95 例全绿**、`flutter analyze` → `No issues found!`；详见 testing 第 38 节。
 file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter 工程**段 0（脚手架）+ 段 1（契约/通信基座）+ 段 1b（基座测试）+ 段 2（auth 域客户端）+
-段 2b（auth 客户端基座测试与前置缺陷修复）+ 段 3（连接配置 + 态势模型 + 态势只读四端点）已就位**，
-但**业务未开工**——Android 单兵端与 Windows 指挥端**均无业务代码**（无登录页、无态势、无入口装配），
-也**未与后端联调**。
+段 2b（auth 客户端基座测试与前置缺陷修复）+ 段 3（连接配置 + 态势模型 + 态势只读四端点）+
+段 4（Android 入口装配：连接配置页 + 设备登录页 + 自身态势页 + 1s 轮询 + debug 明文许可）已就位**；
+**Android 单兵端已有可运行入口**（配置 → 设备登录 → 自身态势，已用 simulator 网关 + 专属种子
+做过模拟器端到端冒烟，**只证仿真通过**），**Windows 指挥端仍无业务代码**，
+WS 连接与 revision 缓存聚合**尚未接线**，也**未做生产联调**。
 
 实际版本为Java21、Spring Boot **3.5.7**、MySQL本机8.4.11；
 以pom和当前代码为准，不沿用历史记忆里的Boot3.3.5。
@@ -387,6 +423,16 @@ M6 CLIENT-BASE 段 3（连接配置 + 态势契约模型 + 态势只读四端点
 （**73 例** = 段 1b 14 + 段 2b 24 + 本段 34 + 模板 1）与 `flutter analyze` → `No issues found!`；
 本段守「每原子任务 ≤3 文件」——3a 落 3 文件、3b 落 2 文件、3c 落 2 文件，分 `1fc329a`/`c5c1e70`/`6b58f93` 三笔；
 测试仍只用 `dart:io` + `flutter_test`（**未新增依赖**）；详见 testing 第 37 节。
+M6 CLIENT-BASE 段 4（Android 入口装配）证据：**Maven 侧仍无增减**（Dart 侧资产，**不在 reactor 内**），
+全量仍 **1151 项**（0/0/0）；客户端侧门禁 `flutter test` → `All tests passed!`（**95 例** =
+段 1b 14 + 段 2b 24 + 段 3 34 + 本段 23）与 `flutter analyze` → `No issues found!`；
+本段守「每原子任务 ≤3 文件」——4a 2 文件、4b 1 文件、4c 1 文件、4d 2 文件 + 测试文件，
+分 `1f61d27`/`ee33764`/`1bbb284`/`3600056` 四笔；**端到端冒烟**（2026-10-28）用 simulator 网关 +
+专属种子（62400 段）在 AVD `zaa_pixel6`（`emulator-5554`）上 `adb reverse tcp:11001 tcp:11001` 跑通，
+轮询 `已刷新 5 次 → 20 次（每 1000 ms）`，页面字段与种子逐项一致（`OFFLINE`/`RED`/`hp 100`/`ammo 30/30`/
+`revision 1`），无 `拉取失败` 与 `CLEARTEXT_NOT_PERMITTED`；冒烟后按 62400 段精确回收、停后端与模拟器；
+**该冒烟只证「仿真通过」，不代表现场/真机通过**；测试仍只用 `dart:io` + `flutter_test`（**未新增依赖**）；
+详见 testing 第 38 节。
 M3 LIFE 开演链路就绪 409 硬前置新增证据：core `ExerciseLifecycleServiceIT` **+1**（610 → 611，
 新增 `startExercise_withVestLinkClosed_isDeviceLinkNotOpen` 并加 `@BeforeEach openVestLink()` 补前置）；
 app `ExerciseLifecycleHttpIT` **+1**（331 → 333 中的一笔，新增 `startWithVestLinkClosedIsRejectedAs409`）、
@@ -721,6 +767,18 @@ WS 落地时不再写第二套解析）；解析新增一条口径：**未知枚
 本段**未做**：WebSocket 连接、轮询调度器、revision 缓存聚合、任何界面（均留段 4）；
 **未改后端、未新增依赖、未新增错误码、未新增迁移、未改契约**，全量计数仍 **1151** 项。
 
+2026-10-28新增已确认（M6 CLIENT-BASE 段 4 Android 入口装配 + 模拟器冒烟，见 testing 第 38 节）：
+**入口装配顺序固定为「配置 → 设备登录 → 自身态势」**（4a/4b/4c），换连接配置即**换 `ApiClient` 实例
+并关闭旧实例**，会话与连接配置本段仍走**内存实现、不落盘**（平台安全存储需另授权引依赖）；
+**轮询周期取 1000 ms**，与硬件串口 200 ms 周期**无关**（契约只要求兜底不超 10 s），
+`SituationPoller` **至多一个在途请求**且失败**不清空** `latest`（只置 `lastError`）；
+**Android 明文许可只开 debug 覆盖层、且只放行 `127.0.0.1`/`localhost`**，release 构建不合并该覆盖层
+（明文照旧全禁）；**单兵端本段不接 WebSocket**、不做 revision 缓存聚合（留后段）；
+**连接配置页非法输入不写库、不跳转**（构造即校验，见段 3 口径）；
+模拟器冒烟用 `scds.gateway.mode=simulator` + 专属种子（62400 段）跑通并**事后精确回收**，
+**只证仿真通过、不等于现场通过**；
+本段**未改后端、未新增依赖、未新增错误码、未新增迁移、未改契约**，全量计数仍 **1151** 项。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -755,7 +813,15 @@ WS 落地时不再写第二套解析）；解析新增一条口径：**未知枚
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：M6 CLIENT-BASE 段 3——连接配置（`lib/shared/config/connection_config.dart` +
+最新证据：M6 CLIENT-BASE 段 4——Android 入口装配（`lib/main.dart` 外壳装配与 `ApiClient` 生命周期 +
+`lib/features/connection/connection_page.dart` 连接配置页（非法输入不写库不跳转）+
+`lib/features/device/device_login_page.dart` 设备登录页（`deviceLogin` → `DeviceSession` → `writeDevice`）+
+`lib/features/situation/situation_page.dart` 自身态势页与 `SituationPoller`（1000 ms、至多一个在途、
+失败不清空 `latest`）+ `android/app/src/debug/**` 明文许可（**只放行回环**、release 不合并））
+四段共 11 文件 23 例（`flutter test` **95 例全绿**），分 `1f61d27`/`ee33764`/`1bbb284`/`3600056` 四笔；
+**已用 simulator 网关 + 62400 段专属种子在 AVD `zaa_pixel6` 上做过一次端到端冒烟**（轮询 5 → 20 次、
+字段逐项一致，冒烟后精确回收，**只证仿真通过**）详见 testing 第 38 节；
+M6 CLIENT-BASE 段 3——连接配置（`lib/shared/config/connection_config.dart` +
 `connection_config_store.dart`，构造即校验、默认值对齐契约、内存实现不落盘）、
 态势契约模型（`lib/shared/api/situation_models.dart`，6 模型 + 8 契约枚举、**Poll/WS 同构**、
 未知枚举 → `FormatException`）与态势只读四端点（`lib/shared/api/situation_api.dart`，
@@ -794,16 +860,23 @@ M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
 M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1151 项测试、M6 CLIENT-BASE 段 3（连接配置 `lib/shared/config/connection_config.dart` /
+本快照已同步 1151 项测试、M6 CLIENT-BASE 段 4（Android 入口装配 `lib/main.dart` /
+`lib/features/connection/connection_page.dart`（连接配置页，非法输入不写库不跳转）/
+`lib/features/device/device_login_page.dart`（设备登录页，`deviceLogin` → `DeviceSession` → `writeDevice`）/
+`lib/features/situation/situation_page.dart`（自身态势页 + `SituationPoller` 1000 ms、至多一个在途、
+失败不清空 `latest`）与 `android/app/src/debug/**`（**只放行回环明文**、release 不合并），
+四段 11 文件 23 例，分 `1f61d27`/`ee33764`/`1bbb284`/`3600056` 四笔；**本机已用 simulator 网关 +
+62400 段专属种子做过模拟器端到端冒烟、事后精确回收（只证仿真通过）；尚未推送**）、
+段 3（连接配置 `lib/shared/config/connection_config.dart` /
 `connection_config_store.dart`（端口 + 内存实现，**不落盘**）、态势契约模型
 `lib/shared/api/situation_models.dart`（6 模型 + 8 契约枚举，**Poll/WS 同构**，未知枚举 → `FormatException`）
 与态势只读四端点 `lib/shared/api/situation_api.dart`（查询串只拼非 null 参数，
 409 `SITUATION_REVISION_TOO_OLD` 交调用方改全量重拉），三段 7 文件 34 例，
-分 `1fc329a`/`c5c1e70`/`6b58f93` 三笔；**尚未推送**）、
+分 `1fc329a`/`c5c1e70`/`6b58f93` 三笔；**已推送** `cdb2897`）、
 段 2b（auth 客户端基座测试 `test/shared/api/auth_models_test.dart` /
 `test/shared/api/auth_api_test.dart` / `test/shared/auth/session_store_test.dart` 共 **24 例**，
 并修 `lib/shared/api/api_client.dart` 的 `send` 缺 `/api/v1` 前缀缺陷，分 `54e830b`/`d770556` 两笔；
-**尚未推送**）、段 2（auth 域模型与客户端 `lib/shared/api/auth_models.dart` /
+**已推送**）、段 2（auth 域模型与客户端 `lib/shared/api/auth_models.dart` /
 `lib/shared/api/auth_api.dart` / `lib/shared/auth/session_store.dart`，
 范围取**账号 + 设备两端登录**、存储取**内存实现**、本段不含测试按裁定拆段 2b，门禁为 `flutter analyze`）、
 段 1b（通信基座契约测试 `test/shared/api/api_client_test.dart`，
@@ -817,5 +890,5 @@ R4 遗留收口（`downloadUrl` 签名窗口过期 HTTP 用例，测试侧独立
 「先开串口链路」改造，**已推送** `8dda7be..f5bb261`）、M3 LIFE 网关下行接线（开演 14B/7B 与停演 7B 出站，D11 落地口径，
 **已推送** `0d8ef02..8dda7be`）、M5 REPLAY 四段（R1 读侧 / R2 轨迹分片 / R3 统计 / R4 导出下载，
 含 HTTP 端到端补测）与 M3 CAL-2 现场验收收口（`MapDetail.calibratedAt` 可读性，**均已推送**）
-与下一任务候选（M6 CLIENT-BASE 段 4 Android 入口装配 + 态势轮询接线 / T-PROD 部署 / 段 5 Windows 指挥端骨架），
+与下一任务候选（M6 CLIENT-BASE 段 5 Windows 指挥端骨架 / T-PROD 部署 / WS 连接与轮询调度器、平台安全存储），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。

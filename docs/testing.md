@@ -2521,4 +2521,82 @@ docs 统一在本节一次回写。范围是**「连接配置 + 自身态势只�
 
 本段为**客户端契约层验收**，不是生产发布批准；测试用 `HttpServer` 打桩，**不代表已与后端联调**。
 
+## 38. M6 CLIENT-BASE 段 4：Android 入口装配（4a 入口 + 连接配置页 / 4b 设备登录页 / 4c 自身态势页 + 1s 轮询 / 4d Android debug 明文许可）
+
+段 4 按裁定拆成 **4a / 4b / 4c / 4d** 四笔（前三笔各 1 笔代码，守「原子 ≤3 文件」；4d 为 Android 构建配置笔），
+docs 在本节一次回写。范围＝**「连接配置 → 设备登录 → 自身态势」三段界面装配 + 1000ms 轮询**，
+**仍不含 WebSocket、不含 revision 缓存聚合**（`/ws/v1/situation` 只认账号令牌，单兵端按设计 03 §4.7 不接）。
+另在**模拟器 `zaa_pixel6`** 上对着**本机真实后端**（simulator 网关 + 专属种子）完成一次端到端冒烟，证据见 38.4。
+
+### 38.1 交付物（4 笔 = 11 文件）
+
+| 段 | 提交 | 文件 | 内容 |
+|---|---|---|---|
+| 4a | `1f61d27` | `lib/features/connection/connection_page.dart`(新) | 连接配置页：进入时读 `ConnectionConfigStore`（无值回落 `ConnectionConfig.defaults`）；保存前过构造校验（失败只行内提示，**不写库、不跳转**）；校验通过才写库并回调 `onConnected`；控件键 `connection.*` |
+| 4a | `1f61d27` | `lib/main.dart`(改) | 应用外壳装配：注入 `InMemoryConnectionConfigStore` / `InMemorySessionStore` / `httpApiClient` 工厂；持有 `ApiClient` 并在换实例时 `close` 旧客户端；导航「连接配置 → 设备登录」 |
+| 4a | `1f61d27` | `test/widget_test.dart`(改) | 外壳装配 3 例 + 连接配置页校验 6 例（**替换模板 Counter 1 例**） |
+| 4b | `ee33764` | `lib/features/device/device_login_page.dart`(新) | 设备登录页：本地只校验契约 `required` 与类型（编号须整数、密钥非空），**不臆造服务端规则**；`AUTH_DEVICE_NOT_BOUND` → 可读文案，其余展示码；提交期间禁用按钮；**不重试、不落盘、不打印令牌**；控件键 `deviceLogin.*` |
+| 4b | `ee33764` | `lib/main.dart`(改) | 接线 `AuthApi.deviceLogin` → `DeviceSession.fromTokenPair` → `sessionStore.writeDevice`；成功后导航自身态势页 |
+| 4b | `ee33764` | `test/widget_test.dart`(改) | 设备登录页 8 例 |
+| 4c | `1bbb284` | `lib/features/situation/situation_page.dart`(新) | `SituationPoller`（`Timer.periodic` + `kSituationPollInterval = 1000ms`：**至多一个在途请求**，上一拍未回则跳过本拍；一次失败**不清空**上次成功数据，只置 `lastError`；`successCount` 作「真的在轮询」的证据）+ 自身态势页只读展示 `getVestState`；控件键 `situation.*` |
+| 4c | `1bbb284` | `lib/main.dart`(改) | 接线 `SituationApi.getVestState(vestNum: session.vestNum, token: session.deviceToken)` |
+| 4c | `1bbb284` | `test/widget_test.dart`(改) | 自身态势页 6 例 |
+| 4d | `3600056` | `android/app/src/debug/AndroidManifest.xml`(新) | **仅 debug** 覆盖层挂 `@xml/network_security_config`（release 不合并本覆盖层） |
+| 4d | `3600056` | `android/app/src/debug/res/xml/network_security_config.xml`(新) | 只对 `127.0.0.1` / `localhost` 放行明文 HTTP（`includeSubdomains="false"`），**局域网与公网地址在 debug 下同样被禁** |
+
+### 38.2 用例与判据（23 例）
+
+| 段 | 用例 | 判据 |
+|---|---|---|
+| 4a（9） | 启动即进连接配置页且预填契约默认 `127.0.0.1:11001`；存储已有值时预填该值；保存合法配置 → 写存储 + 跳设备登录页；空白地址 / 端口非数字 / 端口 70000 → 行内报错含合法区间、**不写存储、不跳转**；报错后修正输入可保存且提示消失；恢复默认写回出厂默认且**不改存储**；清除清空存储并写回出厂默认 | 校验发生在**写库之前**；页面只做校验与跳转，**不探测连通性、不发任何网络请求** |
+| 4b（8） | 编号非数字 / 编号为空 / 密钥为空 → 本地报错且**不调用登录端口**；登录成功 → 端口收到编号与密钥、回调带出 `DeviceSession`；401 `AUTH_DEVICE_NOT_BOUND` → 提示未绑定且**不回调**；无 Problem 正文的 500 → 回落 `HTTP_500`；网络异常 → 可读错误**不冒泡成红屏**；提交期间按钮禁用并显示进度、完成后恢复 | 本地校验**只覆盖契约 required**（不臆造服务端规则）；非 2xx 一律经 `ApiException` 呈现；令牌不出现在 UI |
+| 4c（6） | 首帧前提示「等待首帧…」、成功后展示自身字段与刷新次数；按注入周期轮询（每周期 `successCount` +1）；上一拍未回时**跳过本拍**（不叠加在途请求）；404 `DEVICE_VEST_NOT_FOUND` → 提示不在本场编成且**保留上次成功数据**；网络异常 → 可读错误且**不清空页面**；坐标只呈现不换算（室外同时给出 BD-09 与 WGS-84） | 轮询周期**可注入**（默认 1000ms）；失败语义＝「陈旧数据 + 明示失败」，**不清空成空白**；客户端**不做坐标换算、不翻转 Y 轴** |
+
+### 38.3 口径要点
+
+- **1000ms 不是硬件周期**：客户端 `kSituationPollInterval = 1000ms` 只是自身态势的观感默认，
+  与服务端→马甲的**串口 200ms 轮询**（`scds-gateway` 按冻结常量执行）**无关**；契约只要求客户端兜底轮询不超 10s。
+- **单兵端不接统一态势 WS**：`/ws/v1/situation` 只认 `scds-edge` 用途令牌，单兵设备令牌按设计 03 §4.7 不接；
+  故本段**没有 WS 代码、没有双通道调度**（留后续段）。
+- **明文许可只开回环**：现场自测走 `adb reverse tcp:11001 tcp:11001`；不配 4d 的网络配置时 Android 9+
+  直接抛 `CLEARTEXT_NOT_PERMITTED`——现场排障先看这条。
+- **存储仍不落盘**：连接配置与会话都是内存实现，App 重启即回默认；平台持久化（Android Keystore / Windows DPAPI）
+  需另授权引依赖后再换实现。
+- **权限面**：设备令牌只够 `POST /api/v1/auth/device/login` 与 `GET /api/v1/situation/vests/{vestNum}`（自身）；
+  取他人马甲由服务端按令牌 `sub` 裁剪（`DeviceScope.allowSelf`）→ 403。
+
+### 38.4 模拟器冒烟（真实后端 + 专属种子，2026-10-28）
+
+**性质声明**：这是 **simulator 网关**（`--scds.gateway.mode=simulator`，不占真串口、不监听 12001）下的
+**仿真通过**，**不得写成现场通过**；被测对象是「App → `adb reverse` → 本机后端 → MySQL」整条数据链路。
+
+| 项 | 事实 |
+|---|---|
+| 后端 | 本机 `scds-app/target/scds-next.jar`（按当前源码重建，schema 已迁至 **v11**）以 `--spring.profiles.active=local --scds.gateway.mode=simulator` 启动；`GET /actuator/health` → **200 UP** |
+| 种子 | 专属编号段 **62400**（事后按该段精确回收）：`POST /api/v1/devices/vests` → **201** → `POST .../62400/binding` → **201** → `POST /api/v1/plans` → **201** → `PUT /api/v1/plans/{planId}/roster` → **200** → `POST /api/v1/devices/links/serial` → **200** → `POST /api/v1/exercise/current` → **201** |
+| 令牌 | ADMIN 令牌**本地签发**（`dev-jwt-private.pem`，RS256，`iss=scds-edge`、`aud=scds-edge`、`roles=["ADMIN"]`）；设备令牌由 `POST /api/v1/auth/device/login` 返回 |
+| 服务端自检 | `GET /api/v1/situation/vests/62400`（设备令牌）→ **200**，正文 `status=OFFLINE`、`hp=100`、`ammo1=30`、`ammo2=30`、`revision=1` |
+| 设备侧 | `emulator-5554`（AVD `zaa_pixel6`）+ `adb reverse tcp:11001 tcp:11001`；debug APK 重建（含 4d 明文许可）后安装 |
+| 界面链路 | 连接配置（预填 `127.0.0.1:11001`）→「保存并继续」→ 设备登录（`62400` + 绑定密钥）→ **登录成功、无错误提示** → 自身态势页 |
+| 轮询证据 | `已刷新 5 次（每 1000 ms）` → 6 秒后 `已刷新 20 次（每 1000 ms）`（**持续增长**），全程无 `拉取失败` / `DEVICE_VEST_NOT_FOUND` / `CLEARTEXT_NOT_PERMITTED` |
+| 数据一致性 | 页面 `状态 OFFLINE` / `队伍 RED` / `HP 100` / `弹药 30 / 30` / `定位来源 NONE` / `态势 revision 1` 与种子编成**逐项一致**（说明取自后端真实编成，而非客户端假数据） |
+| 回收 | 冒烟后按编号段 62400 精确删除对应行（复核 `vest=0 plan=0 roster=0 exer=0 unit=0`；日志/指令/审计等表本就为 0）；后端实例与模拟器均已停 |
+
+**局限**：simulator 网关无真实串口帧，故 `status=OFFLINE`、`position=null`、`positionSource=NONE` 属预期表现——
+**本冒烟不证明硬件链路、不证明真机网络、不证明 WS**。
+另：后端 fat jar 首次启动只迁到 v10，重建 jar 后才迁到 v11——**冒烟前必须确认 jar 不早于最新迁移**。
+
+### 38.5 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**95 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23）；
+  `flutter analyze` → `No issues found!`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart + Android 构建配置），**不进 reactor**，
+  全量仍 **1151 项**（0/0/0）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、轮询周期、在线窗口、
+  校验算法、四角编号口径、`docs/api/**` 契约、迁移、`scds-solver`；**未新增依赖**
+  （仍只 `dart:io` + `flutter_test` / `flutter` SDK）。
+
+本段为**客户端 UI 装配与仿真联调验收**，不是生产发布批准；冒烟为 simulator 网关 + 本机回环，
+**不代表已过真机、真实串口或现场网络**。
+
 
