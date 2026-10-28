@@ -43,8 +43,9 @@ import java.util.UUID;
  *
  * <p><b>已接线</b>：{@code listReplays} 与 {@code getReplay} 走 {@link ReplayService}
  * （R1 复盘读侧），{@code getReplayTimeline} 亦走 {@link ReplayService#timeline}
- * （R2 轨迹分片），本层只做契约形状的搬运（领域 {@link Exercise} / 领域 {@code TrackSample} → DTO），
- * 分页元信息与 {@link PageRequest} 的换算在此完成。统计（R3）与导出（R4）仍抛
+ * （R2 轨迹分片），{@code getReplayStatistics} 走 {@link ReplayService#statistics}
+ * （R3 统计），本层只做契约形状的搬运（领域 {@link Exercise} / 领域 {@code TrackSample} /
+ * core 统计结果 → DTO），分页元信息与 {@link PageRequest} 的换算在此完成。导出（R4）仍抛
  * {@link NotImplementedException}，按 M5 的分段逐步落地。</p>
  */
 @RestController
@@ -97,7 +98,19 @@ public class ReplayController {
     public ReplayStatistics getReplayStatistics(@PathVariable String replayId,
                                                 @RequestParam(required = false, defaultValue = "120")
                                                 @Min(10) @Max(500) int timelineBuckets) {
-        throw new NotImplementedException("getReplayStatistics");
+        UUID id = replayId(replayId);
+        ReplayService.Statistics statistics = replays.statistics(id, timelineBuckets);
+        return new ReplayStatistics(id.toString(), statistics.teams(),
+                statistics.topShooters().stream()
+                        .map(s -> new ReplayStatistics.TopShooter(
+                                s.vestNum(), s.name(), s.hitsDealt(), s.kills()))
+                        .toList(),
+                statistics.hitPartDistribution().stream()
+                        .map(p -> new ReplayStatistics.HitPartCount(p.hitPart(), p.count()))
+                        .toList(),
+                statistics.timeline().stream()
+                        .map(b -> new ReplayStatistics.TimelineBucket(b.t(), b.liveByTeam()))
+                        .toList());
     }
 
     /** 发起复盘导出（异步）：返回 202 + AsyncTask，客户端轮询进度。 */
