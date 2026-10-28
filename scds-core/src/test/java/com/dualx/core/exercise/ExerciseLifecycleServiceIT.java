@@ -9,11 +9,15 @@ import com.dualx.core.domain.ExerciseLogEntry;
 import com.dualx.core.domain.ExerciseLogType;
 import com.dualx.core.domain.ExerciseUnit;
 import com.dualx.core.domain.HitEvent;
+import com.dualx.core.domain.LinkKind;
+import com.dualx.core.domain.LinkState;
+import com.dualx.core.domain.LinkStatus;
 import com.dualx.core.domain.Plan;
 import com.dualx.core.domain.PollMode;
 import com.dualx.core.domain.RosterEntry;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.repository.ExerciseCommandRepository;
 import com.dualx.core.repository.ExerciseLogRepository;
 import com.dualx.core.repository.ExerciseRepository;
@@ -27,6 +31,7 @@ import com.dualx.protocol.HitPart;
 import com.dualx.protocol.Team;
 import com.dualx.protocol.VestStatus;
 import org.assertj.core.api.ThrowableAssert;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -45,6 +50,7 @@ import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @Transactional
@@ -81,8 +87,26 @@ class ExerciseLifecycleServiceIT {
     @Autowired
     private JdbcClient jdbc;
 
+    /** 测试上下文里的马甲串口链路桩（装配点 {@code TestCoreApplication}），快照由 {@link #openVestLink()} 声明。 */
+    @Autowired
+    private DeviceLinkAdmin links;
+
     private static final Instant START = Instant.parse("2026-10-20T08:00:00.000Z");
     private static final Instant STOP_AT = Instant.parse("2026-10-20T09:00:00.000Z");
+
+    /**
+     * 开演前要求「马甲串口链路已开」（契约 {@code startExercise} 的 409 {@code DEVICE_LINK_NOT_OPEN}）。
+     *
+     * <p>上下文里的端口是 Mockito 桩，{@code snapshot()} 默认空列表即「未开」，故每个用例前显式声明一份
+     * 已开快照；需要验「未开」的用例在自身方法内改写它。这是 core 侧唯一能摆出「链路已开」的地方——
+     * 真装配（仿真适配器 + 真实 HTTP）由 {@code scds-app} 的 IT 覆盖。
+     */
+    @BeforeEach
+    void openVestLink() {
+        when(links.snapshot()).thenReturn(List.of(
+                new LinkStatus(LinkKind.SERIAL_VEST, LinkState.OPEN, "COM7", 115200, null,
+                        null, 0, 0, 0, null)));
+    }
 
     private UUID insertRunning(String planName) {
         UUID id = UuidV7.generate();
@@ -216,6 +240,21 @@ class ExerciseLifecycleServiceIT {
         assertCode(() -> lifecycle.startExercise(planId, null), ApiErrorCode.EXERCISE_ROSTER_EMPTY);
 
         // 拒绝发生在插库之前：不能留下一场没人、又占着唯一索引的「进行中」演习
+        assertThat(exercises.findRunning()).isEmpty();
+    }
+
+    @Test
+    void startExercise_withVestLinkClosed_isDeviceLinkNotOpen() {
+        UUID planId = seedPlan("it_life_链路未开");
+        seedRoster(planId, 1001);
+        // 覆盖 {@link #openVestLink()} 的默认快照：链路存在但未开
+        when(links.snapshot()).thenReturn(List.of(
+                new LinkStatus(LinkKind.SERIAL_VEST, LinkState.CLOSED, "COM7", 115200, null,
+                        null, 0, 0, 0, null)));
+
+        assertCode(() -> lifecycle.startExercise(planId, null), ApiErrorCode.DEVICE_LINK_NOT_OPEN);
+
+        // 判据排在插库之前：想定与编成都合法，但被前置条件拒下，同样不留半启动态
         assertThat(exercises.findRunning()).isEmpty();
     }
 

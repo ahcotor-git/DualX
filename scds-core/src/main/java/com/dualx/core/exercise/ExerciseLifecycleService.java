@@ -61,11 +61,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p><b>硬件下行已接线</b>：{@link #startExercise} 在库与内存态写定之后，逐台下发 14B 轮询配置帧、
  * 再下发 7B 演习开始帧；{@link #stopExercise} 在冻结收尾之后下发 7B 演习结束帧。物理副作用无法由
- * JDBC 撤回，故按用户裁定「只留痕、不回滚」：链路未开时不下发（只 WARN），真发送失败写一条
+ * JDBC 撤回，故按用户裁定「只留痕、不回滚」：真发送失败写一条
  * {@code SYSTEM} 存证行后继续——绝不因硬件影响已开演/已停演的场次与响应码。
+ * 开演侧另有「链路未开」的 409 硬前置（见下段）；停演侧与下发瞬间链路被并发关闭的情况，
+ * 仍走「不下发只 WARN」的静默跳过。
  *
- * <p><b>仍未落地</b>：开演前的「链路就绪」硬前置（设计 05 §4.7 与 D06 的 409
- * {@code DEVICE_LINK_NOT_OPEN}）与同库单实例保护（L6）——两者都会牵动既有集成测试，单列后续任务。
+ * <p><b>开演前置条件</b>：{@link #startExercise} 在想定与编成校验通过之后、写库之前，要求马甲串口链路
+ * 已 {@link LinkState#OPEN}，否则报 409 {@link ApiErrorCode#DEVICE_LINK_NOT_OPEN}（设计 05 §4.7 与决策
+ * D06）。链路未开时下发只会进到无人消费的队列并回报成功（假成功），早拒好过留下一场「配置根本没发出去」
+ * 的演习。停演**不设**此门禁——卡死的场次必须随时停得掉。
+ *
+ * <p><b>仍未落地</b>：同库单实例保护（L6）——它会牵动既有集成测试，单列后续任务。
  */
 @Service
 public class ExerciseLifecycleService {
@@ -167,9 +173,13 @@ public class ExerciseLifecycleService {
      * 唯一索引是原子的，冲突时抛 {@link DuplicateKeyException}，这里把它翻成
      * {@link ApiErrorCode#EXERCISE_ALREADY_RUNNING}（设计 01 §4.4 末句）。
      *
-     * <p>顺序：想定 → 编成 → 插入。前两者是**这次请求的内容**问题，报出来现场直接就能改；
-     * 而「已有在跑场次」是系统状态，只能在插入那一刻才确定。装载
-     * （{@link SituationSessionBinder#onExerciseStarted}）放在库写入之后：它改的是内存态。
+     * <p>顺序：想定 → 编成 → 链路就绪 → 插入。前三者是**这次请求的前置条件**，报出来现场直接就能改；
+     * 而「已有在跑场次」是系统状态，只能在插入那一刻才确定。链路就绪判据排在写库之前，因此被它拒下的请求
+     * 不留任何半启动态。装载（{@link SituationSessionBinder#onExerciseStarted}）放在库写入之后：它改的是内存态。
+     *
+     * <p><b>链路就绪是硬前置（设计 05 §4.7 与决策 D06）</b>：马甲串口链路未 {@link LinkState#OPEN} 时直接
+     * 报 409 {@link ApiErrorCode#DEVICE_LINK_NOT_OPEN}，不写库、不下发。判据与下发同用
+     * {@link #vestLinkOpen()}，只认 {@code OPEN}（{@code OPENING} 不算）。
      *
      * <p><b>硬件下行排在最末（契约步骤 ③④）</b>：库与内存态写定之后才逐台下发 14B、再下发 7B。
      * 这一步只留痕、不回滚——见类 javadoc「硬件下行已接线」。因此本方法的异常面仍是纯业务面，
@@ -181,6 +191,7 @@ public class ExerciseLifecycleService {
      * @throws BusinessException {@code INSTANCE_NOT_READY}(503) 启动自愈尚未完成；
      *                           {@code EXERCISE_PLAN_NOT_FOUND}(404) 想定不存在；
      *                           {@code EXERCISE_ROSTER_EMPTY}(400) 编成为空；
+     *                           {@code DEVICE_LINK_NOT_OPEN}(409) 马甲串口链路未开启；
      *                           {@code EXERCISE_ALREADY_RUNNING}(409) 已有演习进行中
      */
     @Transactional
@@ -196,6 +207,11 @@ public class ExerciseLifecycleService {
         if (roster.isEmpty()) {
             throw new BusinessException(ApiErrorCode.EXERCISE_ROSTER_EMPTY,
                     "想定编成为空，无法开演：" + planId);
+        }
+        if (!vestLinkOpen()) {
+            throw new BusinessException(ApiErrorCode.DEVICE_LINK_NOT_OPEN,
+                    "开演前马甲串口链路未开启（无处于 OPEN 的 SERIAL_VEST 链路），"
+                            + "无法下发轮询配置帧与开始帧：" + planId);
         }
 
         Instant at = Instant.now();
@@ -214,10 +230,11 @@ public class ExerciseLifecycleService {
     /**
      * 开演的硬件下行（契约 {@code startExercise} 步骤 ③④）：逐台下发 14B 轮询配置帧，再下发 7B 开始帧。
      *
-     * <p><b>链路未开就整段不下发，只 WARN</b>：链路未开时 {@code SerialVestLink.send} 会把帧放进无人
-     * 消费的发送队列并回报成功——那是假成功（与 {@code CommandService} 同一判据）。此时既不写日志
-     * 也不报错：它是**前置条件**问题，按 D06 应以 409 在开演前拦下（本段未做，见类 javadoc），
-     * 而不是在开演后往日志表里灌噪声。
+     * <p><b>链路未开就整段不下发，只 WARN（防御分支）</b>：正常情况下走不到——{@link #startExercise} 的
+     * 409 {@link ApiErrorCode#DEVICE_LINK_NOT_OPEN} 硬前置已在写库前拦下。留它是为了「门禁检查与下发之间
+     * 链路被并发关闭」这一窗口：此时 {@code SerialVestLink.send} 会把帧放进无人消费的发送队列并回报成功
+     * ——那是假成功（与 {@code CommandService} 同一判据）。这种情形既不写日志也不报错，因为在开演后往日志表
+     * 里灌噪声（而非 409 拒掉）正是 D11 要避免的。
      */
     private void sendStartDownlink(Exercise exercise, List<RosterEntry> roster, Instant at) {
         if (!vestLinkOpen()) {
@@ -270,8 +287,9 @@ public class ExerciseLifecycleService {
     /**
      * 马甲串口链路是否已开（与 {@code CommandService.vestLinkOpen} 同口径）。
      *
-     * <p>链路非 {@link LinkState#OPEN} 即视为不可下发。core 集成测试上下文里该端口是 Mockito 桩，
-     * {@code snapshot()} 返回空列表，故「未开」分支正是默认路径。
+     * <p>链路非 {@link LinkState#OPEN} 即视为不可下发（{@code OPENING} 不算已就绪）。这是开演的
+     * 409 硬前置与下发前防御共用的**唯一判据**：两处若各写一套，迟早会在「什么算就绪」上分叉。
+     * core 集成测试上下文里该端口是 Mockito 桩，故用例需自行声明快照（见 {@code ExerciseLifecycleServiceIT}）。
      */
     private boolean vestLinkOpen() {
         return links.snapshot().stream()

@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -56,10 +57,10 @@ import static org.mockito.Mockito.when;
  * 开演/停演的**硬件下行**（契约 {@code startExercise} 步骤 ③④、{@code stopExercise} 步骤 ③）的单元面：
  * 链路就绪与否、发了什么字节、顺序对不对、失败留不留痕、以及「失败绝不改变事务结局」。
  *
- * <p><b>为什么不写成 {@code @SpringBootTest}</b>：core 的测试上下文里 {@code DeviceLinkAdmin} 是
- * Mockito 桩，其 {@code snapshot()} 恒为空列表，走不到「链路已开」与「发送失败」两条分支。
- * 这里直接控制端口，才能把三条路径都摆出来；真装配（仿真适配器 + 真实 HTTP）由 {@code scds-app}
- * 的 {@code ExerciseDownlinkHttpIT} 覆盖。</p>
+ * <p><b>为什么不写成 {@code @SpringBootTest}</b>：core 的测试上下文里 {@code DeviceLinkAdmin} 是按类共享的
+ * Mockito 桩，一个上下文摆不出「链路已开」「链路未开」与「发送失败」三条互斥路径。这里直接控制端口，才能
+ * 把三条路径都摆出来；真装配（仿真适配器 + 真实 HTTP）由 {@code scds-app} 的 {@code ExerciseDownlinkHttpIT}
+ * 覆盖。</p>
  *
  * <p><b>为什么断言的是字节而不是调用次数</b>：14B 帧的 mode/hp/弹药/队伍一旦映射错位，现场看到的
  * 是「马甲收得到帧但配置全错」，比不发更糟。故用 {@link DownlinkCommands} 现编码一份期望值逐字节比对，
@@ -173,17 +174,21 @@ class ExerciseLifecycleServiceDownlinkTest {
     }
 
     @Test
-    void startDownlinkIsSkippedWithoutSendingOrLoggingWhenVestLinkIsClosed() {
+    void startIsRejectedWith409WithoutSendingOrLoggingWhenVestLinkIsClosed() {
         when(links.snapshot()).thenReturn(List.of(
                 new LinkStatus(LinkKind.SERIAL_VEST, LinkState.CLOSED, "COM7", 115200, null,
                         null, 0, 0, 0, null)));
 
-        lifecycle.startExercise(planId, BattleMode.TRAIN);
+        // 链路未开是开演的**硬前置**（设计 05 §4.7 / 决策 D06）：409 在写库前拦下，而不是「开演成功但静默跳过」
+        assertThatThrownBy(() -> lifecycle.startExercise(planId, BattleMode.TRAIN))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.code()).isEqualTo(ApiErrorCode.DEVICE_LINK_NOT_OPEN));
 
         // 链路未开时下发只会进到无人消费的队列并回报成功（假成功），故这里必须一条都不发
         verify(links, never()).sendVestCommand(anyInt(), any());
-        // 且不写日志：「链路未开」是前置条件问题，按 D06 应在开演前用 409 拦下，而不是往日志表灌噪声
+        // 且不写日志、不落库：它是前置条件问题，拒下即可，不在日志表灌噪声也不留半启动态
         verifyNoInteractions(logs);
+        verifyNoInteractions(exercises);
     }
 
     @Test
