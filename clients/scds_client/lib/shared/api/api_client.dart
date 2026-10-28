@@ -79,8 +79,22 @@ class ApiClient {
     Map<String, String>? query,
     Object? jsonBody,
     String? bearerToken,
+  }) =>
+      _send(method, api(path, query), jsonBody: jsonBody, bearerToken: bearerToken);
+
+  /// 应用级端点探活：GET 一个**不带** [kApiPrefix] 的路径（如 `/actuator/health`）。
+  ///
+  /// 业务接口一律经 [api] 带 `/api/v1`；`/actuator/**` 不属于业务路由，
+  /// 契约里也没有它的业务前缀，故单独开口而不是放宽 [api] 的语义。
+  Future<ApiResponse> probe(String path) => _send('GET', resolve(path));
+
+  Future<ApiResponse> _send(
+    String method,
+    Uri target, {
+    Object? jsonBody,
+    String? bearerToken,
   }) async {
-    final HttpClientRequest request = await _http.openUrl(method, api(path, query));
+    final HttpClientRequest request = await _http.openUrl(method, target);
     request.headers.set(HttpHeaders.acceptHeader, 'application/json, $kProblemMediaType');
     if (bearerToken != null && bearerToken.isNotEmpty) {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearerToken');

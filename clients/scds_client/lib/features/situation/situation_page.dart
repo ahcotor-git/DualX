@@ -1,11 +1,10 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/situation_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/polling/poller.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kSituationVestNumKey = Key('situation.vestNum');
@@ -25,104 +24,11 @@ const Key kSituationErrorKey = Key('situation.error');
 /// 本值取 1s 作单兵自身状态的观感默认，可注入覆盖。
 const Duration kSituationPollInterval = Duration(seconds: 1);
 
-/// 自身态势轮询器：按固定周期拉取**自身**马甲的实时状态。
-///
-/// 零依赖手写（`Timer.periodic`），口径：
-/// - **至多一个在途请求**：上一拍未回则跳过本拍，慢网络下不叠加请求；
-/// - 一次失败**不清空**上次成功数据，只置 [lastError]——现场观感是「数据陈旧 + 明示失败」，
-///   比清空成空白更可判读；
-/// - 不做本地 revision 归并、不连统一态势 WS（`/ws/v1/situation` 只认账号令牌，
-///   单兵端按设计 03 §4.7 不接）。
-class SituationPoller extends ChangeNotifier {
-  SituationPoller({
-    required this.fetch,
-    this.interval = kSituationPollInterval,
-  });
-
-  /// 单次拉取（生产接线见 `main.dart`：`SituationApi.getVestState`）。
-  final Future<UnitState> Function() fetch;
-
-  /// 轮询周期；默认 [kSituationPollInterval]。
-  final Duration interval;
-
-  Timer? _timer;
-  bool _inFlight = false;
-  bool _disposed = false;
-
-  /// 最近一次成功拉取到的自身状态；从未成功过则为 null。
-  UnitState? latest;
-
-  /// 最近一次失败的可读描述；成功后清空。
-  String? lastError;
-
-  /// 成功拉取次数（现场自测时可作「是否真的在轮询」的证据）。
-  int successCount = 0;
-
-  /// 是否处于轮询中。
-  bool get isPolling => _timer != null;
-
-  /// 立刻拉一次，随后按 [interval] 周期轮询；重复调用无副作用。
-  void start() {
-    if (_timer != null) {
-      return;
-    }
-    _timer = Timer.periodic(interval, (Timer _) => _tick());
-    _tick();
-  }
-
-  /// 停止轮询（可再次 [start]）。
-  void stop() {
-    _timer?.cancel();
-    _timer = null;
-    if (!_disposed) {
-      notifyListeners();
-    }
-  }
-
-  @override
-  void dispose() {
-    _disposed = true;
-    _timer?.cancel();
-    _timer = null;
-    super.dispose();
-  }
-
-  Future<void> _tick() async {
-    if (_inFlight) {
-      return;
-    }
-    _inFlight = true;
-    try {
-      final UnitState state = await fetch();
-      if (_disposed) {
-        return;
-      }
-      latest = state;
-      lastError = null;
-      successCount++;
-      notifyListeners();
-    } on ApiException catch (failure) {
-      if (_disposed) {
-        return;
-      }
-      lastError = failure.code == ApiErrorCode.deviceVestNotFound
-          ? '本场编成中没有该马甲（${ApiErrorCode.deviceVestNotFound}）'
-          : '拉取失败：${failure.code}';
-      notifyListeners();
-    } catch (error) {
-      // 网络不可达等非契约异常：必须变成可读状态，不能冒泡成红屏。
-      if (_disposed) {
-        return;
-      }
-      lastError = '拉取失败：$error';
-      notifyListeners();
-    } finally {
-      _inFlight = false;
-    }
-  }
-}
-
 /// 自身态势页（M6 CLIENT-BASE 段 4c）。
+///
+/// 轮询逻辑在共享层 [PollingFeed]（段 5 抽出，双端复用），本页只负责把
+/// 「自身马甲状态」这一个数据源接到它上面，并把 [ApiErrorCode.deviceVestNotFound]
+/// 翻成现场可读文案。
 ///
 /// 只读展示 [`getVestState`]（`/api/v1/situation/vests/{vestNum}`）的自身状态；
 /// 后端按令牌 `sub` 裁剪范围，单兵令牌见不到其他马甲（`DeviceScope.allowSelf`）。
@@ -137,7 +43,7 @@ class SituationPage extends StatefulWidget {
   /// 已登录的设备会话（提供马甲编号与设备令牌）。
   final DeviceSession session;
 
-  /// 单次拉取（生产接线见 `main.dart`：`SituationApi.getVestState`）。
+  /// 单次拉取（生产接线见 `app/device_app.dart`：`SituationApi.getVestState`）。
   final Future<UnitState> Function() fetch;
 
   /// 轮询周期；默认 [kSituationPollInterval]。
@@ -148,12 +54,19 @@ class SituationPage extends StatefulWidget {
 }
 
 class _SituationPageState extends State<SituationPage> {
-  late final SituationPoller _poller;
+  late final PollingFeed<UnitState> _poller;
 
   @override
   void initState() {
     super.initState();
-    _poller = SituationPoller(fetch: widget.fetch, interval: widget.interval)..start();
+    _poller = PollingFeed<UnitState>(
+      fetch: widget.fetch,
+      interval: widget.interval,
+      describeError: (ApiException failure) =>
+          failure.code == ApiErrorCode.deviceVestNotFound
+              ? '本场编成中没有该马甲（${ApiErrorCode.deviceVestNotFound}）'
+              : '拉取失败：${failure.code}',
+    )..start();
   }
 
   @override
