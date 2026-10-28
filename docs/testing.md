@@ -2961,3 +2961,55 @@ WS 子协议协商、`Authorization: Bearer` 握手、服务端 30s 无上行断
 **未验项**：本段只做 `flutter analyze` + `flutter test`（假连接器 / 假 `fetch`），**未对着真实后端实例**跑过真实 WS 握手、
 真实 `close 4000` 超窗重连或真实增量归并；`console_app` 的 WS 闭包（`connectSituationSocket` + `client.baseUri`）
 在**真实实例**上的连通性也未验证（app 级用例只覆盖到「入口回调」）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 45. M6 CLIENT-WINDOWS 续段（只读先行）：exercise 域只读客户端——当前演习状态 + 当前演习日志流水
+
+CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水**」且「**只读先行，写入另开段**」。
+契约摸底确认 [command.yaml](api/paths/command.yaml) 的 **8 个端点全部为写操作**（判死/活/伤/越界/充弹/全体充弹/改配置/手动置位），
+**无只读端点**，故本段只读面＝exercise 域的**两端点**：`GET /api/v1/exercise/current` + `GET /api/v1/exercise/current/logs`。
+写入类指令（command 域）**另开段**，本段**不含**。
+
+### 45.1 交付物（1 笔 = 3 文件，3 新）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/shared/api/exercise_models.dart`(新) | exercise 域契约模型：`BattleMode` / `ExerciseEndReason` / `ExerciseLogType` 三个枚举 + `Exercise` / `ExerciseLogEntry` / `ExerciseLogPage` 三个类；解析口径与 `situation_models.dart` 同源（**必填缺失 → `TypeError`；形状不符 / 未知枚举字面量 → `FormatException`；可空字段 → nullable**） |
+| `lib/shared/api/exercise_api.dart`(新) | `ExerciseApi` 持 `ApiTransport`（窄端口）：`getCurrentExercise({token})` → `GET /exercise/current`，`listCurrentExerciseLogs({token, sinceSeq, limit})` → `GET /exercise/current/logs`；只拼路径 + 解析模型，查询串**只拼非 null 参数**，非 2xx 交 `ApiTransport` 抛 `ApiException` |
+| `test/shared/api/exercise_api_test.dart`(新) | **8 例**契约测试（`HttpServer` 打桩，与 `situation_api_test.dart` 同口径：断言真实路径 / 查询串 / `Bearer` / 非 2xx → `ApiException` 映射） |
+
+### 45.2 用例与判据（8 例）
+
+| 用例 | 判据 |
+|---|---|
+| 进行中：`exercise/current` 带 `Bearer`，回完整 `Exercise` | 路径 `$kApiPrefix/exercise/current`、查询串为空、`Authorization: Bearer access-1`；`running=true`、`battleMode=BATTLE`、`elapsedSeconds=3725`、`endedAt` 为 `null` |
+| **无演习：回 200 + `running=false`，其余业务字段全为 `null`** | `running=false`、`exerciseId`/`planId`/`startedAt`/`elapsedSeconds`/`endReason` 均 `null`（**不编造场次**，D15-⑥） |
+| 未知 `battleMode` 字面量：抛 `FormatException` | `SKIRMISH` → `FormatException`（**不静默落默认分支**） |
+| 非 2xx 抛 `ApiException` 并带出服务端 `code` | 403 `AUTH_FORBIDDEN` → `failure.statusCode==403`、`failure.code==AUTH_FORBIDDEN` |
+| 日志：带 `sinceSeq`/`limit`，回 `items` 与 `latestSeq` | 路径 `.../logs`、查询串 `{sinceSeq: 40, limit: 100}`、`Bearer`；两条条目（`DIE` 带 `vestNum=21`、`SYSTEM` 无 `vestNum`）、`latestSeq=42` |
+| 不带参数：不拼查询串（走服务端默认 `limit=200`） | `uri.query` 为空；`items` 空、`latestSeq=42` |
+| 无演习：回 200 + 空页 + `latestSeq=null` | `items` 空、`latestSeq` 为 `null`（**不是 404**） |
+| 未知 `LogType` 字面量：抛 `FormatException` | `RESPAWN` → `FormatException` |
+
+### 45.3 口径要点
+
+- **无演习是常态、不是错误**：两个端点无演习时均回 **HTTP 200**——状态端点 `running=false`、日志端点空页 + `latestSeq=null`。
+  调用方**必须先判 `running`** 再解引用场次信息，**不得**据 `exerciseId` 缺失臆造默认值。
+- **日志是游标语义，不是分页**：`{items, latestSeq}`——`latestSeq` = **本批最大 seq**（空批为 `null`），客户端下次原样作 `sinceSeq` 续拉，
+  既去重又续拉，**不需要 total**。
+- **`SYSTEM` 条目可能既无 `vestNum` 也无 `downlinkHex`**：它是服务端自造事件（如实例重启后自愈收尾的残留指令存证），
+  **不对应任何协议帧**；客户端应按系统提示样式展示，**不可假设其必有马甲编号**。
+- **`Exercise` DTO 实现未下发 `endReason`**：契约（`domain.yaml`）有该字段、服务端 `Exercise` DTO **未发**，故实际解析结果恒为 `null`；
+  模型**保留**该字段以对齐契约，**不得据其臆造默认值**。
+- **不臆造缺省值**：`running` 必填、其余全可空（无演习时缺席）；未知 `battleMode` / `endReason` / `type` 字面量一律 `FormatException`。
+
+### 45.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**203 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + **本段 8**）；`flutter analyze` → `No issues found! (ran in 3.7s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务恰 3 文件**（3 新），**未破「每原子任务 ≤3 文件」上限**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（测试只用 `dart:io` + `flutter_test`）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（`HttpServer` 打桩），**未对着真实后端实例**跑过真实当前演习状态
+或真实日志流水拉取；写入类指令（command 域）**尚未实现**。本段为**实测前置的客户端骨架验收**，不是生产发布批准。

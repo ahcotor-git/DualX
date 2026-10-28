@@ -1622,5 +1622,32 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐
 **Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（段 5/6 与段 D 后半经授权放宽，后续恢复默认）。
 
+**本段（CLIENT-WINDOWS 续段·只读先行）落地**：用户当次裁定「**推进下一段**」，并在决策点选
+「**指令 + 当前演习日志流水（推荐）**」＋「**只读先行，写入另开段（推荐）**」。契约摸底确认
+[command.yaml](api/paths/command.yaml) 的 **8 个端点全部为写操作**（判死/活/伤/越界/充弹/全体充弹/改配置/手动置位），
+**无只读端点**，故本段只读面＝exercise 域**两端点**。落**一笔** `88e2b34`（**恰 3 文件 / 3 新 / 501 insertions**）：
+- `lib/shared/api/exercise_models.dart`（新）：`BattleMode` / `ExerciseEndReason` / `ExerciseLogType` 三枚举 +
+  `Exercise` / `ExerciseLogEntry` / `ExerciseLogPage` 三类；解析口径与 `situation_models.dart` 同源；
+- `lib/shared/api/exercise_api.dart`（新）：`ExerciseApi` 持窄端口 `ApiTransport`——`getCurrentExercise({token})` →
+  `GET /exercise/current`；`listCurrentExerciseLogs({token, sinceSeq, limit})` → `GET /exercise/current/logs`；
+- `test/shared/api/exercise_api_test.dart`（新）：**8 例**（`HttpServer` 打桩，与 `situation_api_test.dart` 同口径）。
+
+**口径要点**：**无演习是常态、不是错误**——两端点无演习均回 HTTP 200（状态端点 `running=false`、日志端点空页 +
+`latestSeq=null`），调用方**必须先判 `running`** 再解引用场次信息；**日志是游标语义**（`{items, latestSeq}`，
+`latestSeq` = 本批最大 seq，下次原样作 `sinceSeq`，**不需要 total**）；**`SYSTEM` 条目可能既无 `vestNum` 也无 `downlinkHex`**
+（服务端自造事件，不对应协议帧，**不可假设其必有马甲编号**）；**`Exercise` DTO 实现未下发 `endReason`**（契约有、实现未发，
+实际解析恒为 `null`，模型保留字段**不臆造默认值**）；**不臆造缺省值**——未知 `battleMode` / `endReason` / `type` 字面量一律 `FormatException`。
+本原子任务**恰 3 文件**，**未破上限**。
+
+门禁：`flutter test` → `All tests passed!`（**203 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + **本段 8**）、`flutter analyze` → `No issues found! (ran in 3.7s)`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实当前演习状态 / 真实日志流水拉取；写入类指令（command 域）**尚未实现**。
+证据见 [testing](testing.md) **第 45 节**。
+
+**下一段（候选）**：command 域**写操作**（判死/活/伤/越界/充弹/全体充弹/改配置/手动置位）；CLIENT-WINDOWS 其余子域
+（想定与生命周期、地图与标定、复盘与导出）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
+安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。各段守「每原子任务 ≤3 文件」。
+
 
 
