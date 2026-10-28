@@ -2847,3 +2847,60 @@ WS 子协议协商、`Authorization: Bearer` 握手、服务端 30s 无上行断
 真实 `POST /api/v1/auth/refresh` 的滚动刷新（旧 `refreshToken` 是否被服务端立即作废）、
 已撤销令牌重放的连锁撤销、`expiresIn` 与服务端时钟偏差**均未在真实实例上验证**；
 装饰器**尚未接线到任何页面**（RES-D）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 43. M6 CLIENT-RESILIENCE 段 D（前半）：指挥端认证接线（会话托管 + 手动续期委托 + 会话终结导航）
+
+段 C 只交付了**装饰器本体**、**未接到任何页面**；本段把它接进**指挥端外壳**：装饰器成为指挥端**唯一的会话持有者**，
+登录成功即把会话接进去（`adopt`），账号页「续期」按钮**委托**给学生传输（`refreshNow`），
+刷新被服务端 `401` 拒绝时（会话终结）由装饰器回调把页面栈**弹回登录页**。
+同时按「每原子任务 ≤3 文件」的裁定**拆两半**——本段只做**认证接线**，
+「全体态势」页接 `SituationFeed`（WS + 兜底 Poll 双通道）留段 D 后半。
+
+**为什么单兵端不在本段范围**：`SituationFeed` 的 WS 握手**只认账号令牌**
+（[03-auth.md](design/03-auth.md) Q7：设备令牌连 WS → `403`；§4.7：令牌走 `Authorization: Bearer` 头、不支持 query 参数），
+且 `DeviceSession` **无 `refreshToken`**（契约无设备刷新端点）——故 `device_app` **两端都不接**，不是遗漏。
+
+### 43.1 交付物（1 笔 `1c47d68` = 5 文件，0 新 5 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/shared/auth/refreshing_api_transport.dart`(改) | 新增 **`adopt()` / `forget()` / `refreshNow()`**；`_authorized` 补「会话引用已空即**不再刷新**、原样抛出」；把「刷新被 `401` 拒绝 → 清会话 + `onLost`」**收敛进 `_refresh`**，使**自动与手动两条入口同口径** |
+| `lib/app/console_app.dart`(改) | `clientFactory` 返回类型 `ApiClient` → **`ApiTransport`**；`_clientFor` / `_probe` 同步改口；新增 `_transportFor()`（装配 `onRefreshed` 写回会话存储、`onLost` 清存储并弹回登录页）与 `_returnToLogin()`；`onConnected` 里 `auth` / `situations` 都包在 `transport` 外，登录路由打 `kConsoleLoginRouteName`；`onLoggedIn` 调 `transport.adopt(session)`；`_openAccount` 的 `refresh` 改为 `transport.refreshNow()`（**删除页内重复的会话合并逻辑**） |
+| `lib/features/console/account_page.dart`(改) | `AccountRefresh` typedef 文档改为「生产接线**委托** `RefreshingApiTransport.refreshNow()`；入参只作页面侧判据，实际刷新以装饰器持有的会话为准」。**页面本体逻辑零改动** |
+| `test/shared/auth/refreshing_api_transport_test.dart`(改) | `expectApiFailure` 改**泛型**（可接受 `Future<AccountSession>`）；新增 `group('手动续期')` **6 例** |
+| `test/console_widget_test.dart`(改) | 新增 `group('指挥端认证接线（RES-D）')` **4 例**；新增**脚本化传输桩** `ScriptedTransport`（借内层 `ApiClient` 拼路径、**不建连接**，记录真实请求序列与 `Authorization` 头）与 `jsonResponse` 助手 |
+
+### 43.2 用例与判据（10 例）
+
+| 组 | 用例 | 判据 |
+|---|---|---|
+| 手动续期（6，传输层） | 发一次 refresh 并换会话 / 回调 `onRefreshed`；**并发两笔只发一次**；未接入会话抛 `StateError`；无 `refreshToken` 抛 `StateError`；刷新被 `401` 拒绝 → 清会话 + `onLost`；刷新遇**非 401**（503）→ 不清会话、不 `onLost` | `refreshNow()` 与自动续期**共用同一把单飞闸**；会话缺失 / 无刷新令牌时**不发请求**直接抛；终结判据与自动续期**完全一致**（只认「刷新被 `401` 拒绝」） |
+| 指挥端认证接线（4，UI 层） | 登录后汇总**按登录令牌带 Bearer**；汇总遇 `401` 到期 → **自动续期一次并按新令牌重试**（页面无感）；账号页「续期」按钮**委托传输**换新令牌并写回会话存储；会话终结（刷新被 `401` 拒绝）→ 清本地会话并**弹回登录页** | 登录请求**不带**令牌、登录后域请求带登录令牌；401 在传输层被消化，汇总页**不显示错误**；续期提交的是登录拿到的 `refreshToken` 且**只打一次**；终结后 `sessionStore` 为空、`AccountPage` / `TeamSummaryPage` 都不在栈上、当前页是 `ConsoleLoginPage` |
+
+### 43.3 口径要点
+
+- **会话所有权上收到装饰器**：指挥端不再在各处自己拼令牌/合并令牌对；页面拿到的 `AccountSession` 只是**展示快照**，
+  真正被 `Authorization` 使用的是装饰器持有的那一份（故续期后新令牌**真生效**，与段 6 的「按次读 `_account`」等价且更集中）。
+- **手动入口与自动入口同口径**：`refreshNow()` **不另写一套**刷新逻辑，而是复用 `_refreshOnce()`（同一把 `_refreshInFlight` 单飞闸）；
+  故「并发点两次按钮」与「并发两笔 401」在服务端看来都是**一次** `POST /auth/refresh`——滚动刷新不可重放的要求两条路径同时满足。
+- **终结判据只在 `_refresh` 内一处**：`_refresh` 捕获 `401` → 清 `_session` + `onLost()`；`_authorized` 在重试前**先判 `_session == null`**，
+  若已被终结则**直接 `rethrow`**、不再尝试刷新，避免「会话已死还打 refresh」。
+- **`onLost` 只做三件事**：清内存会话、清会话存储、**按路由名弹回登录页**（`popUntil` 直到首页或 `kConsoleLoginRouteName`）——
+  登录页加 `RouteSettings(name: kConsoleLoginRouteName)` 正是为此；`mounted` 为假时**只清状态不动导航**。
+- **导航回退到登录页而非复用页面**：终结后旧的「队伍汇总」页仍可能持有已失效的 `fetch` 闭包，故**一路弹出**比 push 一个新登录页更干净。
+
+### 43.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**188 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+  段 A 15 + 段 B 15 + 段 C 15 + **段 D 10**）；`flutter analyze` → `No issues found! (ran in 3.2s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（0/0/0）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、令牌载荷与 `aud` 口径、
+  `docs/api/**` 契约、迁移、`scds-solver`、`device_app`；**未新增依赖**（仍只 `flutter` + `cupertino_icons`，测试只用 `dart:io` + `flutter_test`）；
+  测试用**脚本化窄端口桩**（不建连接、不发真实请求），**未引入 mock 库**。
+- **一处测试断言口径修正**：账号页续期用例原先断言**全量请求序列恰 3 笔**，但汇总页 2s 兜底轮询会在期间**再拉一次** `summary`（与本用例无关）；
+  改为**子序列**断言（`containsAllInOrder`）＋「`POST /auth/refresh` **恰 1 次**」＋**按 key 取刷新请求读其体**——
+  判据更贴本意（续期不重放），也不受轮询节拍影响。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（脚本化桩），**未对着真实后端实例跑过真实续期 / 真实会话终结**；
+指挥端「全体态势」页**尚未接 `SituationFeed`**（段 D 后半）；WS 握手与 `close 4000` 的真实行为仍未在真实实例上验证。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。

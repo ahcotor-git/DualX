@@ -1571,9 +1571,34 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。证据见 [testin
 **未验项**：**未对着真实后端实例跑过真实续期**（滚动刷新是否即时作废旧 `refreshToken`、撤销重放的连锁撤销、
 `expiresIn` 与服务端时钟偏差均未验证）；装饰器**尚未接线到任何页面**（RES-D）。证据见 [testing](testing.md) **第 42 节**。
 
-**再下一段（候选）**：CLIENT-RESILIENCE 剩余子段（**RES-D** 接线到 UI：`device_app` / `console_app` 接
-`SituationFeed` 与 `RefreshingApiTransport`、收敛 `console_app` 里的刷新合并逻辑、补「会话终结 → 回登录页」
-导航与缓存隔离验证）；CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）；T-PROD 部署；平台安全存储（Android Keystore /
+**再下一段（CLIENT-RESILIENCE 段 D 前半）落地**：用户当次裁定「**RES-D UI 接线（推荐）**」、节奏「**沿用：代码 1 笔 + docs 1 笔 + 尝试推送（推荐）**」，
+并进一步裁定「**拆两段，先做认证接线（推荐）**」、指挥端账号页「续期」按钮「**委托 transport（推荐）**」。落 **一笔** `1c47d68`（5 文件 / 502 insertions / 45 deletions，**0 新 5 改**）：
+- `lib/shared/auth/refreshing_api_transport.dart`（改）：新增 `adopt()` / `forget()` / `refreshNow()`；
+  `_authorized` 补「会话引用已空即**不再刷新**、原样抛出」；把「刷新被 `401` 拒绝 → 清会话 + `onLost`」**收敛进 `_refresh`**，
+  使**自动与手动两条入口同口径**；
+- `lib/app/console_app.dart`（改）：`clientFactory` 返回类型 `ApiClient` → **`ApiTransport`**（`_clientFor` / `_probe` 同步改口）；
+  新增 `_transportFor()`（`onRefreshed` 写回会话存储、`onLost` 清存储并弹回登录页）与 `_returnToLogin()`；
+  `auth` / `situations` 都包在 `transport` 外，登录路由打 `kConsoleLoginRouteName`；`onLoggedIn` 调 `transport.adopt(session)`；
+  `_openAccount` 的 `refresh` 改为 `transport.refreshNow()`（**删除页内重复的会话合并逻辑**）；
+- `lib/features/console/account_page.dart`（改）：`AccountRefresh` typedef 文档改为「生产接线**委托** `refreshNow()`」（**页面本体零改动**）；
+- `test/shared/auth/refreshing_api_transport_test.dart`（改）：`expectApiFailure` 改**泛型** + `group('手动续期')` **6 例**；
+- `test/console_widget_test.dart`（改）：`group('指挥端认证接线（RES-D）')` **4 例** + **脚本化传输桩** `ScriptedTransport`（借内层 `ApiClient` 拼路径、**不建连接**）。
+
+**口径要点**：**会话所有权上收到装饰器**（页面拿到的 `AccountSession` 只是展示快照，真正被 `Authorization` 使用的是装饰器持有的那一份）；
+**手动入口与自动入口同口径**（`refreshNow()` 复用 `_refreshOnce()` 的同一把单飞闸，故「并发点两次按钮」与「并发两笔 401」服务端都只看到**一次** `POST /auth/refresh`）；
+**终结判据只在 `_refresh` 内一处**；`onLost` 只做「清内存会话 + 清存储 + 按路由名 `popUntil` 弹回登录页」三件事，`mounted` 为假时只清状态不动导航。
+**单兵端不在本段范围且非遗漏**：WS 握手**只认账号令牌**（`03-auth.md` Q7：设备令牌连 WS → `403`；§4.7：令牌走 `Authorization: Bearer` 头），
+且 `DeviceSession` **无 `refreshToken`**——故 `device_app` **两端都不接**。
+
+门禁：`flutter test` → `All tests passed!`（**188 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + **段 D 10**）、
+`flutter analyze` → `No issues found! (ran in 3.2s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。
+**一处测试断言口径修正**：账号页续期用例原断言「全量序列恰 3 笔」，但汇总页 2s 兜底轮询会在期间**再拉一次** `summary`（与本用例无关）；
+改为**子序列**断言（`containsAllInOrder`）＋「`POST /auth/refresh` **恰 1 次**」＋**按 key 取刷新请求读其体**，判据更贴「续期不重放」的本意。
+**未验项**：**未对着真实后端实例跑过真实续期 / 真实会话终结**；指挥端「全体态势」页**尚未接 `SituationFeed`**（段 D 后半）；
+WS 握手与 `close 4000` 的真实行为仍未验证。证据见 [testing](testing.md) **第 43 节**。
+
+**再下一段（候选）**：CLIENT-RESILIENCE 段 D **后半**（「全体态势」页接 `SituationFeed`——WS + 10s 兜底 Poll 双通道、
+本地缓存 `SituationCache` 接线与缓存隔离验证）；CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）；T-PROD 部署；平台安全存储（Android Keystore /
 Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐
 **Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（段 5/6 经授权放宽，后续恢复默认）。
 
