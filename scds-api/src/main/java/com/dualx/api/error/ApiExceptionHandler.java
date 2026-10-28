@@ -330,6 +330,12 @@ public class ApiExceptionHandler {
             case EXERCISE_ROSTER_EMPTY -> HttpStatus.BAD_REQUEST;
             case EXERCISE_ALREADY_RUNNING, EXERCISE_NOT_RUNNING -> HttpStatus.CONFLICT;
 
+            // ── 复盘（M5 REPLAY，R1 读侧）───────────────────────────────────────
+            // getReplay 的 404（契约 paths/replay.yaml）：{@code t_exercise} 里「还在进行中」的行
+            // 与「id 根本不存在」在复盘入口是同一件事——都不是一条复盘记录，故合并成同一个 404。
+            // REPLAY_EXPORT_FAILED 的 409 要等 R4 导出落地再登记，此刻仍走 default（响亮地失败）。
+            case REPLAY_NOT_FOUND -> HttpStatus.NOT_FOUND;
+
             // ── 受保护文件（M2 MAP-BASE，D09-②）────────────────────────────────
             // 签名错与已过期共用一个码、一个状态：客户端处置动作相同（回详情接口取新 URL）。
             // 与 AUTH_TOKEN_INVALID 的 401 分属两个信任域，文件签名失效不该要求重新登录。

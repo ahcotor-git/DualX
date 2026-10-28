@@ -24,6 +24,7 @@ import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileStore;
 import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.plan.PlanService;
+import com.dualx.core.replay.ReplayService;
 import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -81,6 +82,14 @@ class ApiSkeletonSmokeIT {
      * 与本测试「非 404」的判据正好撞车（占位串 {@code p1} 会让已注册路由看起来像没注册）。</p>
      */
     private static final String PLAN_ID = "018f4a2b-0000-7000-8000-000000000002";
+
+    /**
+     * 复盘路由的 {@code {replayId}} 取值，理由同 {@link #MAP_ID}。
+     *
+     * <p>R1 接线后，控制器把「拼不出来的 replayId」折叠成 {@code REPLAY_NOT_FOUND}（404）——
+     * 与「路由没注册」的 404 撞车（占位串 {@code r1} 会让已注册路由看起来像没注册）。</p>
+     */
+    private static final String REPLAY_ID = "018f4a2b-0000-7000-8000-000000000003";
 
     @BeforeAll
     static void setUpMockMvc() {
@@ -211,6 +220,15 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 复盘读侧（R1）已接核心 ReplayService：同一取向，替身一律抛占位异常，
+        // 使 listReplays / getReplay 在本测试里仍表现为 501（只证明路由注册）。
+        // 真实链路（进行中不算复盘、404 判据、分页与模糊搜索口径）由 ReplayServiceIT 覆盖。
+        ReplayService replayService = Mockito.mock(ReplayService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService, vestLedgerService, situationQuery),
@@ -222,7 +240,7 @@ class ApiSkeletonSmokeIT {
                         // 底图相关的 JSON 进出都会被替身的占位异常截断，用默认配置即可。
                         new MapController(mapLedgerService, uwbCalibrationService, new ObjectMapper(), fileUrlSigner),
                         new FileController(fileStore, fileUrlSigner),
-                        new ReplayController())
+                        new ReplayController(replayService))
                 .setControllerAdvice(new ApiExceptionHandler())
                 // standalone 不装配安全链，@AuthenticationPrincipal 需要显式解析器；
                 // 无认证上下文时它解析为 null，由控制器按「令牌不成立」返回 401。
@@ -318,12 +336,12 @@ class ApiSkeletonSmokeIT {
                 route("DELETE", "/api/v1/maps/" + MAP_ID + "/uwb-calibration"),
                 // ---- replay（7）----
                 route("GET", "/api/v1/replays"),
-                route("GET", "/api/v1/replays/r1"),
-                route("GET", "/api/v1/replays/r1/timeline"),
-                route("GET", "/api/v1/replays/r1/statistics"),
-                route("POST", "/api/v1/replays/r1/exports"),
-                route("GET", "/api/v1/replays/r1/exports/t1"),
-                route("GET", "/api/v1/replays/r1/exports/t1/download"),
+                route("GET", "/api/v1/replays/" + REPLAY_ID),
+                route("GET", "/api/v1/replays/" + REPLAY_ID + "/timeline"),
+                route("GET", "/api/v1/replays/" + REPLAY_ID + "/statistics"),
+                route("POST", "/api/v1/replays/" + REPLAY_ID + "/exports"),
+                route("GET", "/api/v1/replays/" + REPLAY_ID + "/exports/t1"),
+                route("GET", "/api/v1/replays/" + REPLAY_ID + "/exports/t1/download"),
                 // ---- file（1）----
                 // 带上三个查询参数而不是裸路径：裸路径会因缺参在参数解析阶段就 400，
                 // 那样只证明了「有条路由匹配上了」。带参则真的进到控制器里——签名端口的替身抛占位异常，
@@ -345,16 +363,16 @@ class ApiSkeletonSmokeIT {
     @DisplayName("未实现接口统一 501 + application/problem+json + code=NOT_IMPLEMENTED + traceId")
     void notImplementedIsReportedAsProblem() throws Exception {
         String traceId = "smoke-trace-0001";
-        // 用仍是真占位的复盘端点（M5 REPLAY/EXPORT 尚未落地），而不是已接核心服务的
-        // /auth/me、/auth/device/me 与设备链路端点（getVestLink 已接线）。
-        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/replays")
+        // 用仍是真占位的复盘端点：R1 已接线 listReplays / getReplay，轨迹分片（R2）尚未落地，
+        // 故这里改取 timeline 端点——它由控制器直接抛占位异常，与接线情况无关。
+        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/replays/" + REPLAY_ID + "/timeline")
                         .header(TraceIdFilter.HEADER, traceId))
                 .andExpect(status().isNotImplemented())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(header().string(TraceIdFilter.HEADER, traceId))
                 .andExpect(jsonPath("$.status").value(501))
                 .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"))
-                .andExpect(jsonPath("$.instance").value("/api/v1/replays"))
+                .andExpect(jsonPath("$.instance").value("/api/v1/replays/" + REPLAY_ID + "/timeline"))
                 .andExpect(jsonPath("$.traceId").value(traceId));
     }
 }

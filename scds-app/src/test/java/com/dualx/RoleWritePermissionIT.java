@@ -23,6 +23,7 @@ import com.dualx.core.map.UwbCalibrationService;
 import com.dualx.core.plan.PlanService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileUrlSigner;
+import com.dualx.core.replay.ReplayService;
 import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
 import com.dualx.solver.config.ScdsUwbProperties;
@@ -193,6 +194,13 @@ class RoleWritePermissionIT {
         @Bean
         FileUrlSigner fileUrlSigner() {
             return stub(FileUrlSigner.class);
+        }
+
+        // 复盘读侧（R1）已接核心的 ReplayService（要 ExerciseRepository，本切片已排掉 DataSource）。
+        // 放行的复盘读请求因此稳定返回 501（替身第一步就抛占位异常），不是 401/403，不影响判据。
+        @Bean
+        ReplayService replayService() {
+            return stub(ReplayService.class);
         }
 
         private static <T> T stub(Class<T> type) {
