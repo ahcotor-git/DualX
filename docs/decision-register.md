@@ -1254,12 +1254,48 @@ D（app 端到端）四段实施。这也正是 **D11**（「整体回滚」不�
     （`CommandHttpIT`）必须在开演后 `clearSentCommands()`，否则计数的起点错了。
 - `ReplayExportHttpIT` 原本不覆盖 `scds.gateway.mode`（走 `real`），本机没有 COM 口开不了链路，
   故改为与 `DeviceSelfHttpIT` / `CommandHttpIT` 同策的仿真装配；该类的断言全在导出链路上，与链路语义无关。
-- **仍未落地**：同库单实例保护（L6），`ExerciseLifecycleService` 类 javadoc 已就地标注。
+- **同库单实例保护（L6）已收口，不在本清单**：结论见 LIFE 分段（一）的 §L6——它落在**进程管理层**
+  （`environments.md` §6.4，**无 Java 改动**），应用侧三件（`claim(owner_instance)`/2000ms 心跳/
+  `uk_exercise_running` 唯一索引）已具备且有 IT 覆盖。`ExerciseLifecycleService` 类 javadoc 原先的
+  「仍未落地」表述**已订正**为「属进程管理层、本类无相关代码改动」，见文末「L6 口径订正」。
 
 **验证**：整仓 `mvn -o test` 全绿，**1151 项**（protocol 19 / gateway 49 / core 611 / api 139 / app 333；
 `solver`/`domain` 无测试；较上一轮 1148 增 `ExerciseLifecycleServiceIT` 1 + `ExerciseLifecycleHttpIT` 1 +
 `ExerciseDownlinkHttpIT` 1；`ExerciseLifecycleServiceDownlinkTest` 与 `CommandHttpIT` 计数不变，语义改写）。
 证据、用例判据与现场验收清单见 [testing](testing.md) 第 29 节。
+
+
+## L6 口径订正：单实例保护归属与「未做」表述的统一（2026-10-28）
+
+**起因**：LIFE 分段（一）的 §L6 已给出结论——单实例保护落在**进程管理层**（`environments.md` §6.4），
+应用侧三件已具备且有 IT 覆盖，**本段无 Java 代码可改**（D05 又禁分布式中间件与库级锁）。但后续三处文本
+仍把它写成「未做 / 仍未落地」，与之矛盾：
+
+- `ExerciseLifecycleService` 类 javadoc：「仍未落地：同库单实例保护（L6）——它会牵动既有集成测试，单列后续任务。」
+- `testing.md` §28.3：「**单实例保护 L6 未做**」；
+- `testing.md` §29.3 与本文档「网关下行」段的「仍未落地」清单里也列着 L6。
+
+**为什么当时会错标**：§6.4 是在 LIFE 分段（一）落笔时补的，而实现文件的 javadoc 写在 §6.4 之前，未随之更新；
+后续 §28/§29 又照抄了 javadoc 的措辞，于是「文档已结论」与「代码注释说未做」长期并存。
+
+**裁定（用户，2026-10-28）**：**以 §6.4 的「已结论」为准**。L6 **不是**一条待开工的代码任务，而是**部署前提**；
+本任务只做口径订正，不新增代码、不新增测试、不新增依赖。
+
+**订正结果**
+
+| 位置 | 原表述 | 现表述 |
+|---|---|---|
+| `ExerciseLifecycleService` 类 javadoc | 「仍未落地……单列后续任务」 | 「同库单实例保护（L6）**不在本类，属进程管理层**」——列明应用侧三件已就位、自愈不区分 owner、D05 的三条「不做」、**本类无相关代码改动** |
+| `testing.md` §28.3 | 「单实例保护 L6 未做」 | 「L6 **已收口，不在「未做」之列**」，并指向 §6.4 与 testing 第 30 节 |
+| `testing.md` §29.3 | 「仍未落地」清单含 L6 | 从清单**移除**，改为单列一段「已收口为进程管理层职责」 |
+| 本文档「网关下行」段 | 「仍未落地：同库单实例保护（L6）」 | 「**已收口，不在本清单**」，指向 LIFE 分段（一）§L6 与本节 |
+
+**未改动**：`environments.md` §6.4 本身无需改（四形态要求与现场判据已在其中）；协议冻结字节、端口、轮询周期、
+在线窗口、校验算法、四角编号口径、`scds-solver` 算法、`ApiErrorCode` 与 `ApiExceptionHandler` 均一字未动；
+**未新增依赖、未新增迁移、未新增错误码**。
+
+**验证**：整仓 `mvn -o test` 全绿，**1151 项**（计数不变——本任务只改 javadoc 与文档，无测试增减）。
+用例判据与现场验收清单见 [testing](testing.md) 第 30 节。
 
 
 
