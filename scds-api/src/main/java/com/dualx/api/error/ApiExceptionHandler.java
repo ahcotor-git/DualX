@@ -330,11 +330,15 @@ public class ApiExceptionHandler {
             case EXERCISE_ROSTER_EMPTY -> HttpStatus.BAD_REQUEST;
             case EXERCISE_ALREADY_RUNNING, EXERCISE_NOT_RUNNING -> HttpStatus.CONFLICT;
 
-            // ── 复盘（M5 REPLAY，R1 读侧）───────────────────────────────────────
+            // ── 复盘（M5 REPLAY，R1 读侧 + R4 导出）────────────────────────────
             // getReplay 的 404（契约 paths/replay.yaml）：{@code t_exercise} 里「还在进行中」的行
             // 与「id 根本不存在」在复盘入口是同一件事——都不是一条复盘记录，故合并成同一个 404。
-            // REPLAY_EXPORT_FAILED 的 409 要等 R4 导出落地再登记，此刻仍走 default（响亮地失败）。
+            // REPLAY_EXPORT_FAILED（R4 登记）的 409 只由 downloadExport 产生：任务未完成 / 产物
+            // 已过期 / 产物在存储里丢失，三者现场处置同为「回列表重新发起一次导出」。契约
+            // exportReplay 也写了这个 409，但本实现把「失败后重导」做成新受理（202）而非要求
+            // 先重置，详见 ExportTaskService 类注释。
             case REPLAY_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case REPLAY_EXPORT_FAILED -> HttpStatus.CONFLICT;
 
             // ── 受保护文件（M2 MAP-BASE，D09-②）────────────────────────────────
             // 签名错与已过期共用一个码、一个状态：客户端处置动作相同（回详情接口取新 URL）。

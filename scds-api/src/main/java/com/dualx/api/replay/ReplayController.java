@@ -8,11 +8,15 @@ import com.dualx.api.dto.replay.ReplayPage;
 import com.dualx.api.dto.replay.ReplayStatistics;
 import com.dualx.api.dto.replay.TimelineChunk;
 import com.dualx.api.dto.replay.TrackSample;
-import com.dualx.api.error.NotImplementedException;
+import com.dualx.core.domain.AsyncTaskState;
 import com.dualx.core.domain.Exercise;
+import com.dualx.core.domain.ExportTask;
 import com.dualx.core.domain.GeoPoint;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
+import com.dualx.core.port.FileUrlSigner;
+import com.dualx.core.replay.ExportTaskService;
+import com.dualx.core.replay.ReplayExportReport;
 import com.dualx.core.replay.ReplayService;
 import com.dualx.core.support.Page;
 import com.dualx.core.support.PageRequest;
@@ -20,6 +24,10 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,8 +35,11 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -44,9 +55,9 @@ import java.util.UUID;
  * <p><b>已接线</b>：{@code listReplays} 与 {@code getReplay} 走 {@link ReplayService}
  * （R1 复盘读侧），{@code getReplayTimeline} 亦走 {@link ReplayService#timeline}
  * （R2 轨迹分片），{@code getReplayStatistics} 走 {@link ReplayService#statistics}
- * （R3 统计），本层只做契约形状的搬运（领域 {@link Exercise} / 领域 {@code TrackSample} /
- * core 统计结果 → DTO），分页元信息与 {@link PageRequest} 的换算在此完成。导出（R4）仍抛
- * {@link NotImplementedException}，按 M5 的分段逐步落地。</p>
+ * （R3 统计），导出三端点（R4）走 {@link ExportTaskService}。本层只做契约形状的搬运
+ * （领域 {@link Exercise} / 领域 {@code TrackSample} / core 统计结果 / 导出任务 → DTO），
+ * 分页元信息与 {@link PageRequest} 的换算、以及签名下载 URL 的组装在此完成。</p>
  */
 @RestController
 @Validated
@@ -54,8 +65,30 @@ public class ReplayController {
 
     private final ReplayService replays;
 
-    public ReplayController(ReplayService replays) {
+    /** 导出受理 / 查询 / 下载的编排（R4）。受理与执行分离的形态见该类注释。 */
+    private final ExportTaskService exports;
+
+    /**
+     * 把产物路径签成 {@code AsyncTask.downloadUrl}。
+     *
+     * <p>签名在 core（密钥与 TTL 属存储域），URL 形状属接口层——与
+     * {@code MapController.imageUrl} 同一取向、同一组查询参数名。</p>
+     */
+    private final FileUrlSigner signer;
+
+    /** 契约 {@code downloadExport} 的两种 200 内容类型。xlsx 那个是 OOXML 的冻结 MIME。 */
+    private static final String XLSX_MIME =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    private static final String CSV_MIME = "text/csv";
+
+    /** 产物扩展名，用来在下载时还原内容类型（见 {@link #mediaTypeOf}）。 */
+    private static final String CSV_SUFFIX = ".csv";
+
+    public ReplayController(ReplayService replays, ExportTaskService exports, FileUrlSigner signer) {
         this.replays = replays;
+        this.exports = exports;
+        this.signer = signer;
     }
 
     /** 复盘列表：按结束时间倒序，支持想定名模糊搜索与结束时间区间过滤。 */
@@ -113,22 +146,38 @@ public class ReplayController {
                         .toList());
     }
 
-    /** 发起复盘导出（异步）：返回 202 + AsyncTask，客户端轮询进度。 */
+    /**
+     * 发起复盘导出（异步）。
+     *
+     * <p>状态码固定 202：{@code request} 要么新建一条 {@code PENDING}，要么复用同一复盘同一格式
+     * 的活跃任务，两者对客户端都是「已受理，去轮询」——不会出现 200/202 两种成功码。
+     * 契约给本操作列的 409 落在 {@link #downloadExport}（见 {@code ExportTaskService} 类注释）。</p>
+     */
     @PostMapping("/api/v1/replays/{replayId}/exports")
+    @ResponseStatus(HttpStatus.ACCEPTED)
     public AsyncTask exportReplay(@PathVariable String replayId, @RequestBody @Valid ExportRequest body) {
-        throw new NotImplementedException("exportReplay");
+        return toAsyncTask(exports.request(replayId(replayId), body.format()));
     }
 
     /** 查询导出任务进度。 */
     @GetMapping("/api/v1/replays/{replayId}/exports/{taskId}")
     public AsyncTask getExportTask(@PathVariable String replayId, @PathVariable String taskId) {
-        throw new NotImplementedException("getExportTask");
+        return toAsyncTask(exports.get(replayId(replayId), taskId(taskId)));
     }
 
-    /** 下载导出文件：xlsx/csv 二进制，仅任务 SUCCEEDED 且未过期时可下载。 */
+    /**
+     * 下载导出文件：xlsx/csv 二进制，仅任务 SUCCEEDED 且未过期时可下载。
+     *
+     * <p>{@code Content-Type} 按产物格式给：契约列了 xlsx 与 csv 两种 200 内容类型。</p>
+     */
     @GetMapping("/api/v1/replays/{replayId}/exports/{taskId}/download")
     public ResponseEntity<byte[]> downloadExport(@PathVariable String replayId, @PathVariable String taskId) {
-        throw new NotImplementedException("downloadExport");
+        ReplayExportReport.Rendered rendered = exports.download(replayId(replayId), taskId(taskId));
+        return ResponseEntity.ok()
+                .contentType(mediaTypeOf(rendered.fileName()))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(rendered.fileName()).build().toString())
+                .body(rendered.content());
     }
 
     // ── 契约形状的搬运 ──────────────────────────────────────────────────────
@@ -144,6 +193,58 @@ public class ReplayController {
         } catch (IllegalArgumentException malformed) {
             throw new BusinessException(ApiErrorCode.REPLAY_NOT_FOUND, "复盘不存在：" + raw);
         }
+    }
+
+    /**
+     * 路径参数 {@code taskId} 转 UUID，理由同 {@link #replayId(String)}：拼不出来的 taskId
+     * 必然不对应 {@code t_export_task} 里的任何一行，语义上就是不存在（服务层的 404 口径一致）。
+     */
+    private static UUID taskId(String raw) {
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException malformed) {
+            throw new BusinessException(ApiErrorCode.REPLAY_NOT_FOUND, "导出任务不存在：" + raw);
+        }
+    }
+
+    /**
+     * 导出任务 → 契约 {@code AsyncTask}。
+     *
+     * <p>{@code downloadUrl} 只在 {@code SUCCEEDED} 且已有产物路径时给（契约：「state=SUCCEEDED
+     * 时有效」）。每次查询都**重新签发**而不是把 URL 存库：签名 TTL 只有 15 分钟，缓存下来的 URL
+     * 会在客户端手里悄悄过期，而重新签发只是一次 HMAC 计算（与 {@code MapController.imageUrl}
+     * 同一取向）。</p>
+     */
+    private AsyncTask toAsyncTask(ExportTask task) {
+        String downloadUrl = task.state() == AsyncTaskState.SUCCEEDED && task.filePath() != null
+                ? signedFileUrl(task.filePath())
+                : null;
+        return new AsyncTask(task.id().toString(), task.state(), task.progressPct(), task.fileName(),
+                downloadUrl, task.expireAt(), task.errorMessage());
+    }
+
+    /**
+     * 为产物路径签发短时效访问 URL。
+     *
+     * <p>返回**根相对路径**，不带 scheme/host：服务端不猜部署形态下的对外地址（本地实例 +
+     * 云端反向代理）。三个查询参数的名字属于接口层，必须与 {@code paths/files.yaml} 逐字一致
+     * ——客户端只会原样转发，它无法自己纠正。</p>
+     */
+    private String signedFileUrl(String path) {
+        FileUrlSigner.SignedFileUrl signed = signer.sign(path);
+        return "/api/v1/files?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8)
+                + "&exp=" + URLEncoder.encode(signed.exp(), StandardCharsets.UTF_8)
+                + "&signature=" + URLEncoder.encode(signed.signature(), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 产物文件名 → {@code Content-Type}。
+     *
+     * <p>按扩展名判定而不是把 MIME 随任务存库：产物只有 {@code .xlsx} / {@code .csv} 两种，
+     * 而扩展名由生成侧（{@code ReplayExportReport}）与内容同步决定，不会单独漂移。</p>
+     */
+    private static MediaType mediaTypeOf(String fileName) {
+        return MediaType.parseMediaType(fileName.endsWith(CSV_SUFFIX) ? CSV_MIME : XLSX_MIME);
     }
 
     /**

@@ -165,7 +165,7 @@ class ApiExceptionHandlerBusinessTest {
 
         @GetMapping("/boom/unmapped")
         void unmapped() {
-            throw new BusinessException(ApiErrorCode.REPLAY_EXPORT_FAILED, "复盘导出失败");
+            throw new BusinessException(ApiErrorCode.DEVICE_ANCHOR_NOT_CALIBRATED, "基站未标定");
         }
     }
 
@@ -267,12 +267,12 @@ class ApiExceptionHandlerBusinessTest {
     @DisplayName("未登记状态的错误码响亮地失败：500 并在响应里保留原码")
     void unmappedCodeFailsLoudlyInsteadOfGuessingAnHttpStatus() throws Exception {
         // 这条是刻意的绊线：状态映射表刻意不按前缀猜（同一前缀里既有 404 又有 409）。
-        // 台账域（M2 LEDGER）、演习块（M3 LIFE）、态势（M4）与指挥指令（M3 COMMAND）登记完后，
-        // 绊线换到尚未落服务的 REPLAY_* 上；将来为 REPLAY_EXPORT_FAILED 登记了状态，
-        // 本用例会失败——那一刻请一并换成下一个未登记的码，而不是把默认分支改回「猜一个
-        // 看起来合理的 4xx」。
+        // 台账域（M2 LEDGER）、演习块（M3 LIFE）、态势（M4）、指挥指令（M3 COMMAND）与
+        // 复盘导出（R4）登记完后，绊线换到契约里有、服务尚未落地因而还没登记状态的
+        // DEVICE_ANCHOR_NOT_CALIBRATED 上；将来为它登记了状态，本用例会失败——那一刻请一并
+        // 换成下一个未登记的码，而不是把默认分支改回「猜一个看起来合理的 4xx」。
         mockMvc.perform(MockMvcRequestBuilders.get("/boom/unmapped"))
                 .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.code").value("REPLAY_EXPORT_FAILED"));
+                .andExpect(jsonPath("$.code").value("DEVICE_ANCHOR_NOT_CALIBRATED"));
     }
 }

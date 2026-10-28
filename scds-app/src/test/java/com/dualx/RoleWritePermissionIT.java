@@ -23,6 +23,7 @@ import com.dualx.core.map.UwbCalibrationService;
 import com.dualx.core.plan.PlanService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileUrlSigner;
+import com.dualx.core.replay.ExportTaskService;
 import com.dualx.core.replay.ReplayService;
 import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
@@ -201,6 +202,13 @@ class RoleWritePermissionIT {
         @Bean
         ReplayService replayService() {
             return stub(ReplayService.class);
+        }
+
+        // 复盘导出（R4）已接核心的 ExportTaskService（要导出任务仓储、编成仓储与文件存储，
+        // 本切片已排掉 DataSource）。同上：放行的导出请求稳定返回 501，不是 401/403。
+        @Bean
+        ExportTaskService exportTaskService() {
+            return stub(ExportTaskService.class);
         }
 
         private static <T> T stub(Class<T> type) {

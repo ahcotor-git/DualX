@@ -315,11 +315,11 @@ class MvcProblemIT {
 
     @Test
     void businessUnregisteredMappingStillFailsLoudly() throws Exception {
-        // 绊线：台账域（DEVICE_VEST_*、EXERCISE_ALREADY_RUNNING）、
-        // 指挥域（COMMAND_*）已登记状态后，样例换到尚未落服务的 REPLAY_EXPORT_FAILED。
-        // 为它登记状态时本用例会失败，那一刻请换成下一个未登记的码，
-        // 而不是把默认分支改成「猜一个 4xx」。
-        problem(get("/err01/business"), 500, "REPLAY_EXPORT_FAILED");
+        // 绊线：台账域（DEVICE_VEST_*、EXERCISE_ALREADY_RUNNING）、指挥域（COMMAND_*）与
+        // 复盘导出（REPLAY_EXPORT_FAILED）先后登记状态后，样例换到契约里有、服务尚未落地
+        // 因而还没登记状态的 DEVICE_ANCHOR_NOT_CALIBRATED。为它登记状态时本用例会失败，
+        // 那一刻请换成下一个未登记的码，而不是把默认分支改成「猜一个 4xx」。
+        problem(get("/err01/business"), 500, "DEVICE_ANCHOR_NOT_CALIBRATED");
     }
 
     @Test
@@ -395,7 +395,9 @@ class MvcProblemIT {
             throw new BusinessException(ApiErrorCode.RATE_LIMITED, "rate", Duration.ofSeconds(123));
         }
         @GetMapping("/err01/business")
-        public void business() { throw new BusinessException(ApiErrorCode.REPLAY_EXPORT_FAILED, "export failed"); }
+        public void business() {
+            throw new BusinessException(ApiErrorCode.DEVICE_ANCHOR_NOT_CALIBRATED, "anchor not calibrated");
+        }
         @GetMapping("/err01/unexpected")
         public void unexpected() { throw new IllegalStateException("secret-server-detail"); }
     }

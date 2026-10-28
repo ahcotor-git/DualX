@@ -24,6 +24,7 @@ import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.port.FileStore;
 import com.dualx.core.port.FileUrlSigner;
 import com.dualx.core.plan.PlanService;
+import com.dualx.core.replay.ExportTaskService;
 import com.dualx.core.replay.ReplayService;
 import com.dualx.core.state.SituationEnvelopeFactory;
 import com.dualx.core.state.SituationQuery;
@@ -90,6 +91,14 @@ class ApiSkeletonSmokeIT {
      * 与「路由没注册」的 404 撞车（占位串 {@code r1} 会让已注册路由看起来像没注册）。</p>
      */
     private static final String REPLAY_ID = "018f4a2b-0000-7000-8000-000000000003";
+
+    /**
+     * 导出路由的 {@code {taskId}} 取值，理由同 {@link #MAP_ID}。
+     *
+     * <p>R4 接线导出后，控制器把「拼不出来的 taskId」折叠成 {@code REPLAY_NOT_FOUND}（404）——
+     * 与「路由没注册」的 404 撞车（占位串 {@code t1} 会让已注册路由看起来像没注册）。</p>
+     */
+    private static final String TASK_ID = "018f4a2b-0000-7000-8000-000000000004";
 
     @BeforeAll
     static void setUpMockMvc() {
@@ -229,6 +238,15 @@ class ApiSkeletonSmokeIT {
             }
             throw new NotImplementedException(invocation.getMethod().getName());
         });
+        // 复盘导出（R4）已接核心 ExportTaskService（要四个协作者，各自都要数据源与文件存储）：
+        // 同一取向，替身一律抛占位异常，使导出三端点在本测试里仍表现为 501（只证明路由注册）。
+        // 真实链路（受理合并、扫描执行、落盘、下载的 404/409 判据）由 ExportTaskServiceIT 覆盖。
+        ExportTaskService exportTaskService = Mockito.mock(ExportTaskService.class, invocation -> {
+            if (invocation.getMethod().getDeclaringClass() == Object.class) {
+                return invocation.callRealMethod();
+            }
+            throw new NotImplementedException(invocation.getMethod().getName());
+        });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
                         new AuthController(authService, deviceAuthService, vestLedgerService, situationQuery),
@@ -240,7 +258,7 @@ class ApiSkeletonSmokeIT {
                         // 底图相关的 JSON 进出都会被替身的占位异常截断，用默认配置即可。
                         new MapController(mapLedgerService, uwbCalibrationService, new ObjectMapper(), fileUrlSigner),
                         new FileController(fileStore, fileUrlSigner),
-                        new ReplayController(replayService))
+                        new ReplayController(replayService, exportTaskService, fileUrlSigner))
                 .setControllerAdvice(new ApiExceptionHandler())
                 // standalone 不装配安全链，@AuthenticationPrincipal 需要显式解析器；
                 // 无认证上下文时它解析为 null，由控制器按「令牌不成立」返回 401。
@@ -340,8 +358,8 @@ class ApiSkeletonSmokeIT {
                 route("GET", "/api/v1/replays/" + REPLAY_ID + "/timeline"),
                 route("GET", "/api/v1/replays/" + REPLAY_ID + "/statistics"),
                 route("POST", "/api/v1/replays/" + REPLAY_ID + "/exports"),
-                route("GET", "/api/v1/replays/" + REPLAY_ID + "/exports/t1"),
-                route("GET", "/api/v1/replays/" + REPLAY_ID + "/exports/t1/download"),
+                route("GET", "/api/v1/replays/" + REPLAY_ID + "/exports/" + TASK_ID),
+                route("GET", "/api/v1/replays/" + REPLAY_ID + "/exports/" + TASK_ID + "/download"),
                 // ---- file（1）----
                 // 带上三个查询参数而不是裸路径：裸路径会因缺参在参数解析阶段就 400，
                 // 那样只证明了「有条路由匹配上了」。带参则真的进到控制器里——签名端口的替身抛占位异常，
@@ -363,9 +381,10 @@ class ApiSkeletonSmokeIT {
     @DisplayName("未实现接口统一 501 + application/problem+json + code=NOT_IMPLEMENTED + traceId")
     void notImplementedIsReportedAsProblem() throws Exception {
         String traceId = "smoke-trace-0001";
-        // 用仍是真占位的复盘端点：R1 接线 listReplays / getReplay，R2 接线 timeline，R3 又接线了
-        // statistics，故这里改取导出任务查询端点——它由控制器直接抛占位异常，与接线情况无关。
-        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/replays/" + REPLAY_ID + "/exports/t1")
+        // 契约里的端点现已全部接线，本测试考的是「未实现出口长什么样」而不是「谁还没做」：
+        // 导出任务查询端点在本测试里由 ExportTaskService 的占位替身抛 NotImplementedException
+        // （见 setUpMockMvc），与真实业务无关，故用它稳定复现 501。
+        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/replays/" + REPLAY_ID + "/exports/" + TASK_ID)
                         .header(TraceIdFilter.HEADER, traceId))
                 .andExpect(status().isNotImplemented())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
@@ -373,7 +392,7 @@ class ApiSkeletonSmokeIT {
                 .andExpect(jsonPath("$.status").value(501))
                 .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"))
                 .andExpect(jsonPath("$.instance")
-                        .value("/api/v1/replays/" + REPLAY_ID + "/exports/t1"))
+                        .value("/api/v1/replays/" + REPLAY_ID + "/exports/" + TASK_ID))
                 .andExpect(jsonPath("$.traceId").value(traceId));
     }
 }
