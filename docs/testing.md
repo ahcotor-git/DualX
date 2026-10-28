@@ -2785,3 +2785,65 @@ Windows 页面测试**不得**用 Chrome 替代 Windows 桌面构建验收（承
 **未验项**：段 B 只做 `flutter analyze` + `flutter test`（widget / 假时钟层），**未对着真实后端实例建立过真实 WS 连接**；
 WS 子协议协商、`Authorization: Bearer` 握手、服务端 30s 无上行断开、真实 close `4000` 与 `PING`/`PONG` 往返
 **均未在真实实例上验证**。本段为**客户端骨架与 widget 层验收**，不是生产发布批准。
+
+## 42. M6 CLIENT-RESILIENCE 段 C：认证单飞（401 → 刷新 → 重试一次）
+
+本段把「**令牌过期不打断业务请求**」落成代码：`401` + `AUTH_TOKEN_EXPIRED` 时**自动续期并重试一次**，
+且并发多笔 401 **只发一次** `POST /api/v1/auth/refresh`（单飞）——契约的刷新是**滚动**的，
+重放旧 `refreshToken` 会让该账号**全部** `refreshToken` 被撤销（见 `auth_api.dart` 的 `refresh` 注释），
+所以「不重复刷新」在本段是**正确性要求**而非性能优化。
+范围为**传输层装饰器 + 窄端口抽取**；**不含**把装饰器接到 `device_app` / `console_app`（留 RES-D）。
+
+### 42.1 交付物（1 笔 = 6 文件，2 新 4 改）
+
+| 提交 | 文件 | 内容 |
+|---|---|---|
+| `5e83692` | `lib/shared/api/api_client.dart`(改) | 新增 **`ApiTransport` 窄端口**（`baseUri` / `api` / `resolve` / `get` / `post` / `put` / `delete` / `send` / `probe` / `close`）；`ApiClient implements ApiTransport`（并为被实现成员补 `@override`）。抽取理由：能在外面套**装饰器**而不惊动业务域客户端 |
+| `5e83692` | `lib/shared/api/auth_api.dart`(改) | 构造参数 `ApiClient` → `ApiTransport`（两行为一改；文档补「装饰器靠窄端口用**内层传输**发刷新，避免拦自己的刷新调用」） |
+| `5e83692` | `lib/shared/api/situation_api.dart`(改) | 同上（`ApiClient` → `ApiTransport`） |
+| `5e83692` | `lib/shared/api/health_api.dart`(改) | 同上（`ApiClient` → `ApiTransport`；`[ApiClient.probe]` 引用改为 `[ApiTransport.probe]`） |
+| `5e83692` | `lib/shared/auth/refreshing_api_transport.dart`(新) | **`RefreshingApiTransport implements ApiTransport`**：装饰器本体（判据 / 注入 / 单飞 / 重试一次 / 会话终结回调），见 42.3 |
+| `5e83692` | `test/shared/auth/refreshing_api_transport_test.dart`(新) | **15 例**（见 42.2），本机 `HttpServer` 打桩，断言**真实请求序列与 `Authorization` 头** |
+
+### 42.2 用例与判据（15 例）
+
+| 组 | 用例 | 判据 |
+|---|---|---|
+| 续期重试（3） | `401` 到期：刷新成功后按新令牌重试一次，返回重试响应；重试仍 `401` 到期：只重试一次、不再刷新；调用方显式传令牌：以调用方为准 | 请求序列恒为「业务 → refresh → 业务」，**重试带刷新回来的新令牌**；未传 `bearerToken` 时取会话令牌、传了则以调用方为准；重试回来再 401 **直接抛**（不自激循环） |
+| 单飞（2） | 并发两笔 401：只发一次 refresh，两笔都按新令牌成功；**后到的 401**（本次用的是旧令牌、期间已续期）：直接换新令牌重试，不发第二次 refresh | 并发 401 下 `POST /auth/refresh` **恰好 1 次**；已换代的会话**不再重放旧 `refreshToken`** |
+| 不触发续期（4） | 非 401（403 禁止）；`401` 但 code 为 `AUTH_TOKEN_INVALID`（已撤销 / 篡改）；未接入会话；会话无 `refreshToken`（设备令牌形态） | 只有 `401` + `AUTH_TOKEN_EXPIRED` 是续期信号；其余一律**原样抛出**、零刷新请求 |
+| 续期失败（3） | refresh 被 `401` 拒绝：清空本地会话、回调 `onLost`、原请求不重试；refresh 遇**非 401**（503 未就绪）：不算会话终结；刷新成功但服务端未回 `user` / `refreshToken` | 会话终结**只认刷新被 401 拒绝**这一种；网络 / 503 只抛错、保留会话可再试；刷新未回身份时**保留原身份快照**、未回刷新令牌时保留原令牌 |
+| 透传（3） | 成功请求不触发刷新；路径拼接与探测透传内层；`close` 透传 | `200` 路径零刷新；`baseUri`/`api`/`resolve`/`probe` 与内层一致（`probe` **不过**认证闸）；`close` 后底层不再接受请求 |
+
+### 42.3 口径要点
+
+- **触发判据是「到期」，不是「任何 401」**：只有 `401` + `AUTH_TOKEN_EXPIRED` 才续期；
+  `401` + `AUTH_TOKEN_INVALID`（未知 / 篡改 / 已撤销）**不续期**——那不是时间到了，而是令牌不该被信任，续期解决不了。
+- **单飞的正确性理由**：会话对象引用**已换**即表示「期间别处续期过」，此时**直接用新令牌重试、不再发刷新**；
+  判据用**本次请求实际使用的**会话（`used`，在发起前捕获）比对当前会话，**不能用 catch 时刻的当前会话**——
+  否则该优化永不触发（catch 时它已经是新会话了）。
+- **恰好重试一次**：重试在 `try` 之外，故重试回来即便再 `401` 也不会二次刷新。
+- **会话终结只认一种**：刷新被 `401` 拒绝 → 清 `_session` + 回调 `onLost`（调用方清存储 / 回登录页）+ **原请求不重试**；
+  非 401（网络、503 `INSTANCE_NOT_READY`）**不算会话终结**，只把错误抛出、会话原样保留。
+- **令牌注入两态**：`bearerToken` 为 `null` → 用会话 `accessToken`（页面不必自己拼令牌）；非空 → **以调用方为准**；
+  重试时一律换成刷新回来的新令牌。
+- **端口与装饰器（Ports & Adapters）**：业务域客户端（auth / situation / health）只依赖 `ApiTransport`；
+  `ApiClient` 是**唯一** `dart:io` 实现。装饰器的刷新请求**走内层**（`AuthApi(inner)`），否则会拦自己的刷新调用。
+- **设备端不适用**：`DeviceSession` 无 `refreshToken`（契约无设备刷新端点），401 时直接抛出；本段**未**为设备端做续期。
+- **本段不做**：把 `RefreshingApiTransport` 接到 `device_app` / `console_app`（含 `console_app` 里那段刷新合并逻辑的收敛）、
+  UI 侧「会话终结 → 回登录页」的导航（均留 RES-D）；指令、地图/标定、想定、复盘导出。
+
+### 42.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**178 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+  段 A 15 + 段 B 15 + 段 C 15）；`flutter analyze` → `No issues found! (ran in 2.6s)`；
+  段 C 的并发两例含真实 I/O 等待（`waitFor` 轮询至「两笔都已 401 且刷新已入队」），**连跑两次全绿**后记为稳定；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（0/0/0）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、令牌载荷与 `aud` 口径、
+  `docs/api/**` 契约、迁移、`scds-solver`；**未新增依赖**（仍只 `flutter` + `cupertino_icons`，测试只用 `dart:io` + `flutter_test`）；
+  测试用**真实 `HttpServer` 打桩**，**未引入 mock 库**。
+
+**未验项**：段 C 只做 `flutter analyze` + `flutter test`（打桩 HTTP 层），**未对着真实后端实例跑过真实续期**；
+真实 `POST /api/v1/auth/refresh` 的滚动刷新（旧 `refreshToken` 是否被服务端立即作废）、
+已撤销令牌重放的连锁撤销、`expiresIn` 与服务端时钟偏差**均未在真实实例上验证**；
+装饰器**尚未接线到任何页面**（RES-D）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。

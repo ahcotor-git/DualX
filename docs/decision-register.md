@@ -1544,9 +1544,36 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。证据见 [testin
 **未验项**：**未对着真实后端实例建立过真实 WS 连接**——子协议协商、`Bearer` 握手、服务端 30s 无上行断开、
 真实 close `4000` 与 `PING`/`PONG` 往返**均未验证**。证据见 [testing](testing.md) **第 41 节**。
 
-**再下一段（候选）**：CLIENT-RESILIENCE 剩余子段（**RES-C** 认证单飞：401 → refresh → 重试；
-**RES-D** 同源归并接线到 UI：`device_app` / `console_app` 接 `SituationFeed`，并验缓存隔离）；
-CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）；T-PROD 部署；平台安全存储（Android Keystore /
+**再下一段（CLIENT-RESILIENCE 段 C）落地**：范围＝**传输层认证单飞装饰器 + `ApiTransport` 窄端口抽取**，
+**不含**把装饰器接到 `device_app` / `console_app`（留 RES-D）。落 **一笔** `5e83692`（6 文件，685 insertions / 8 deletions）：
+- `lib/shared/api/api_client.dart`（改）：新增 `ApiTransport` 窄端口（`baseUri` / `api` / `resolve` /
+  `get` / `post` / `put` / `delete` / `send` / `probe` / `close`），`ApiClient implements ApiTransport`
+  并为被实现成员补 `@override`；抽取理由是**能在外面套装饰器而不惊动业务域客户端**；
+- `lib/shared/api/{auth_api,situation_api,health_api}.dart`（改）：构造参数 `ApiClient` → `ApiTransport`；
+- `lib/shared/auth/refreshing_api_transport.dart`（新）：`RefreshingApiTransport implements ApiTransport`——
+  只有 `401` + `AUTH_TOKEN_EXPIRED` 触发**单飞**刷新并**重试恰好一次**；令牌注入两态（未传 `bearerToken`
+  用会话令牌、传了以调用方为准，重试一律换新令牌）；刷新**走内层**（`AuthApi(inner)`）以免拦自己；
+  **会话终结只认「刷新被 401 拒绝」**（清 `_session` + `onLost`，原请求不重试），网络 / 503 只抛错保留会话；
+- `test/shared/auth/refreshing_api_transport_test.dart`（新）：**15 例**，本机 `HttpServer` 打桩，
+  断言**真实请求序列与 `Authorization` 头**。
+
+**口径要点**：**「不重复刷新」是正确性要求而非性能优化**——契约的刷新是**滚动**的，重放旧 `refreshToken`
+会让该账号**全部** `refreshToken` 被撤销（`auth_api.dart#refresh` 已注明），故并发 401 必须单飞；
+单飞的第二个门槛是**会话引用已换即不再发刷新**，判据必须用**本次请求实际使用的**会话（发起前捕获）
+比对当前会话，**不能用 catch 时刻的当前会话**（那时它已是新会话，优化永不触发——本段实现时修正过一次）；
+**触发判据是「到期」不是「任何 401」**（`AUTH_TOKEN_INVALID` 已撤销 / 篡改不续期）；重试写在 `try` 之外，
+故**重试回来再 401 也不会二次刷新**；`probe` **不过**认证闸（`/actuator/health` 无令牌）；
+设备端不适用（`DeviceSession` 无 `refreshToken`，契约无设备刷新端点）。
+
+门禁：`flutter test` → `All tests passed!`（**178 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15；并发两例含真实 I/O 等待，**连跑两次全绿**）、
+`flutter analyze` → `No issues found! (ran in 2.6s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。
+**未验项**：**未对着真实后端实例跑过真实续期**（滚动刷新是否即时作废旧 `refreshToken`、撤销重放的连锁撤销、
+`expiresIn` 与服务端时钟偏差均未验证）；装饰器**尚未接线到任何页面**（RES-D）。证据见 [testing](testing.md) **第 42 节**。
+
+**再下一段（候选）**：CLIENT-RESILIENCE 剩余子段（**RES-D** 接线到 UI：`device_app` / `console_app` 接
+`SituationFeed` 与 `RefreshingApiTransport`、收敛 `console_app` 里的刷新合并逻辑、补「会话终结 → 回登录页」
+导航与缓存隔离验证）；CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）；T-PROD 部署；平台安全存储（Android Keystore /
 Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐
 **Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（段 5/6 经授权放宽，后续恢复默认）。
 
