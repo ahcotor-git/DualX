@@ -1932,7 +1932,7 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 | 项 | 裁定 |
 |---|---|
 | 下发时机 | **同事务尾段下发**——先落库、再发硬件。物理副作用（已发字节）无法由 JDBC 撤回，故**只留痕、不回滚**：发送抛异常时 `catch` 后 WARN + 写 `t_exercise_log(SYSTEM)` 存证，方法**照常返回**、事务**照常提交**（响应仍 201 / 200），也**不发布半启动态** |
-| 链路未开 | **静默跳过**：`DeviceLinkAdmin.snapshot()` 里没有 `SERIAL_VEST` 且 `state=OPEN` 时，只打 WARN，**不发字节、不写日志**（这是布场前的正常路径，不是失败） |
+| 链路未开 | **静默跳过**：`DeviceLinkAdmin.snapshot()` 里没有 `SERIAL_VEST` 且 `state=OPEN` 时，只打 WARN，**不发字节、不写日志**（这是布场前的正常路径，不是失败）。**第 29 节已收窄**：开演侧升为 409 硬前置后，此分支只兜「门禁检查与下发之间链路被并发关闭」的窗口 |
 | 广播马甲编号 | 全体下行的 7B 帧用占位编号 `BROADCAST_VEST_NUM = 0`（`ExerciseLifecycleService` 常量）；写日志时该字段记 **`NULL`**，不写 0——0 会被误读成「1 号马甲」 |
 | 停演响应 `replayId` | `stopExercise` 的响应补 `replayId = outcome.exerciseId()`：停演即开一场可复盘的回放，`replayId` 就是本场 `exerciseId`（**发结束帧 + 补 `replayId=exerciseId`** 一并落地）。契约 `StopExerciseResult.replayId` 的既有字段语义不变，构造器仍是 3 参 |
 
@@ -1958,8 +1958,9 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
    `startExercise` **不抛异常**（用 `AtomicReference` 捕获返回行，断言非 null 且 `exercises.insert` 被调用），
    并断言 `t_exercise_log(SYSTEM)` 里有一条含失败详情的存证。**这是 D11 的核心判据**：硬件失败不得把开演
    变成异常——那会回滚一场事实上已经开始、字节也已经发出去的演习。
-4. `startDownlinkIsSkippedWithoutSendingOrLoggingWhenVestLinkIsClosed`——`snapshot()` 三条链路全非 OPEN 时，
-   零 `sendVestCommand`、零日志，开演照常成功。
+4. `startIsRejectedWith409WithoutSendingOrLoggingWhenVestLinkIsClosed`——`snapshot()` 三条链路全非 OPEN 时，
+   开演报 409 `DEVICE_LINK_NOT_OPEN`，零 `sendVestCommand`、零日志、**零 `exercises` 交互**。
+   （**第 29 节已把本用例由「仍开演」反转为「被 409 拒下」**：链路未开从静默跳过升为开演硬前置。）
 5. `stopSendsFinishBattleAfterFreezing`——停演先冻结终局，再发**唯一一条** 7B 结束帧。
 
 **app（`ExerciseDownlinkHttpIT`，3 条，真装配）**：真 Boot + 真 MySQL + 真安全链 + 真 HTTP，
@@ -1973,8 +1974,11 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
    `ORDER BY team, vest_num`，BLUE 先于 RED——**该排序不是契约**，用例不得依赖下标。
 2. `stopDownlinkSendsFinishBattleAfterFreeze`——清空已记录字节后停演，断言 1 条 `finishBattle()`、
    `replayId == exerciseId`。
-3. `downlinkIsSkippedWithoutBytesOrLogsWhenVestLinkIsClosed`——不手动开串口链路时，
-   开演（201）与停演（200）**都成功**，`sentCommands()` 为空、`totalLogCount() == 0`。
+3. `startIsRejectedAs409WithoutBytesOrLogsWhenVestLinkIsClosed`——不手动开串口链路时，开演被
+   409 `DEVICE_LINK_NOT_OPEN` 拒下：`sentCommands()` 为空、`exerciseCountOf(planId) == 0`、
+   读侧仍是「没有演习」。（**第 29 节把本用例由「开演停演都成功」反转为「被 409 拒下」**，
+   并把「停演侧链路已关仍是 200」拆成独立用例
+   `stopDownlinkIsSkippedWithoutBytesOrLogsWhenVestLinkWasClosedMeanwhile`，故本类 3 → 4 条。）
 
 两条成功路径用例都断言 `totalLogCount(exerciseId) == 0`：**正常下发不写存证日志，只有失败才写**
 （站内日志是「事故留痕」，不是「操作流水」）。
@@ -1983,11 +1987,11 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 
 **本段有意未做（附理由）**
 
-- **开演链路的「就绪硬前置」未纳入**：契约 `startExercise` 的 409 分支里「马甲串口链路未开启导致无法下发配置」
-  （`DEVICE_LINK_NOT_OPEN`）**仍未实现**——它不是一条判据，而是一次波及面很大的改造：一旦前置，
-  所有既有的「未开链路直接开演」用例（≥9 个 IT）都要先手动开串口链路才能继续跑。
+- **开演链路的「就绪硬前置」本段未纳入**（→ **第 29 节已落地**）：契约 `startExercise` 的 409 分支里
+  「马甲串口链路未开启导致无法下发配置」（`DEVICE_LINK_NOT_OPEN`）本段**未实现**——它不是一条判据，
+  而是一次波及面很大的改造：一旦前置，所有既有的「未开链路直接开演」用例都要先手动开串口链路才能继续跑。
   按裁定**单列为下一原子任务**，本段只把「链路未开」处理成**静默跳过**（见 28.1）。
-  故契约 409 描述里那句已就地标注「**未实现**：链路就绪 409 未交付」。
+  故契约 409 描述里那句已就地标注「**未实现**：链路就绪 409 未交付」——第 29 节起该句已删。
 - **单实例保护 L6 未做**（承 LIFE 分段（一）的未闭合项，与本段无关）。
 - **硬件确认（ACK）不在本段**：本段只保证「字节发出去了」，不等待、不解析设备执行结果——
   「已发送」≠「已确认」，这正是 D11 要区分的那条线（详见 [decision-register](decision-register.md) D11）。
@@ -2008,6 +2012,153 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 |---|---|
 | 开演出站字节真的到了马甲 | 开演后看 `scds-gateway` 日志：逐台 14B 轮询配置帧 + 末尾一条 7B 开始帧；马甲端确认轮询按 200ms 起振、初始 `hp`/`ammo` 与编成一致 |
 | 停演出站字节真的到了马甲 | 停演后看 7B 结束帧；马甲端确认停止上报、进入结束态 |
-| 链路未开时的静默跳过 | 布场前（未开串口）直接开演：响应仍 201、**无任何下行字节**、服务端只有一条 WARN |
+| 链路未开时开演被拒 | 布场前（未开串口）直接开演：409 `DEVICE_LINK_NOT_OPEN`、**无任何下行字节**、不留半场次（**第 29 节已把它从「静默跳过 + 201」升为硬前置**） |
 | 硬件失败的留痕 | 制造一次发送失败（拔串口/关闭链路），开演仍 201；`GET /api/v1/exercise/current/logs` 里应有一条 `SYSTEM` 日志，`downlinkHex` 是原样组帧的十六进制 |
+
+## 29. M3 LIFE 开演链路就绪 409 硬前置（`DEVICE_LINK_NOT_OPEN`）
+
+2026-10-28 收口第 28 节**有意留下**的那条未闭合项（见 28.3 第一条与 28.1 的「链路未开」行）。
+上一段把链路未开处理成**静默跳过**，留下的缺口是**假成功**：字节进了一个无人消费的队列、接口仍回 `201`，
+现场看到的是一场「配置根本没发出去」的演习，且要到复盘时才发现。本段把它改成**开演硬前置**：
+开演前马甲串口链路必须已 `OPEN`，否则 409。
+
+按用户 4 项裁定拆 A（core 生产代码）/ B（core 两个测试类）/ C（三个 app IT 改造）/ D（`ExerciseDownlinkHttpIT`）
+四段实施，期间由全量回归又暴露两个未列入预估的 app IT（`CommandHttpIT` / `ReplayExportHttpIT`），一并改造。
+
+命令（仓库根）：`mvn -o test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动（只被调用方多问了一次「链路开没开」，字节逻辑一字未动） |
+| core | 611 | 0/0/0 | `ExerciseLifecycleServiceIT` 12 → 13（链路未开 409）；`ExerciseLifecycleServiceDownlinkTest` 仍 5 条，其中一条语义由「仍开演」反转为「被 409 拒下」 |
+| api | 139 | 0/0/0 | 计数不变：`DEVICE_LINK_NOT_OPEN` 早在三层登记表里，无新增码、无新增用例 |
+| app | 333 | 0/0/0 | `ExerciseLifecycleHttpIT` 3 → 4、`ExerciseDownlinkHttpIT` 3 → 4；`CommandHttpIT`(6) / `ReplayExportHttpIT`(2) / `DeviceSelfHttpIT`(3) / `PushCrashRecoveryIT`(1) 计数不变、只改前置 |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1151** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径同第 20~28 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值（按
+> `target/surefire-reports/TEST-*.xml` 累加会漏掉 `@Nested` 内部类）。
+> 较第 28 节基线 1148 净增 **3** = core `+1`（段 B）+ app `+2`（段 C/D），两处新增即本段全部新增；
+> 其余改动是既有用例的**语义反转与前置补齐**，不改计数。
+
+### 29.1 落地范围与口径
+
+**判据落点（`scds-core` 的 `ExerciseLifecycleService.startExercise`）**：插在「编成为空」判据之后、
+`Instant at = Instant.now()`（写库起点）之前，判据与既有下发前防御**共用同一个私有方法 `vestLinkOpen()`**
+——两处若各写一套，迟早会在「什么算就绪」上分叉。
+
+**判据顺序（用户裁定①：请求内容问题先报、运行环境前置后报）**
+
+| 序 | 判据 | 码 / 状态 |
+|---|---|---|
+| 1 | 启动自愈门禁 | `INSTANCE_NOT_READY` / 503 |
+| 2 | 想定不存在 | `EXERCISE_PLAN_NOT_FOUND` / 404 |
+| 3 | 编成为空 | `EXERCISE_ROSTER_EMPTY` / 400 |
+| 4 | **马甲串口链路未开** | `DEVICE_LINK_NOT_OPEN` / 409 |
+| 5 | 插库（唯一索引 `uk_exercise_running`） | `EXERCISE_ALREADY_RUNNING` / 409 |
+
+第 4 条**排在写库之前**，故被它拒下的请求**不留任何半启动态**（无演习行、无编成快照、无态势装载）。
+
+**四条口径**
+
+| 项 | 口径 |
+|---|---|
+| 就绪判据 | 只认 `LinkState.OPEN`：`OPENING` 不算已就绪。`snapshot()` 里存在 `kind=SERIAL_VEST` 且 `state=OPEN` 的链路才算就绪 |
+| 既有「静默跳过」分支 | **保留为防御**（用户裁定③）：`sendStartDownlink` 里「链路未开就整段不下发、只 WARN」不删——它兜的是「门禁检查与下发之间链路被并发关闭」这一窗口。正常情况下走不到 |
+| 停演 | **不设门禁**：卡死的场次必须随时停得掉，故 `stopExercise` 的 409 仍只表示 `EXERCISE_NOT_RUNNING`；停演侧链路被并发关闭仍走静默跳过 |
+| 错误码 | **复用 `DEVICE_LINK_NOT_OPEN`**（用户裁定④所承的既有裁定）：它早已在 `ApiErrorCode`、`ApiExceptionHandler` 的 409 分组与 `docs/api/schemas/common.yaml` 中登记，本段**不新增**任何码、任何迁移，三层登记表一字未动 |
+
+**契约订正**：`docs/api/paths/exercise.yaml` 的 `startExercise` 步骤叙述由 4 步改成 5 步（链路就绪成为步骤②），
+409 段删去「**尚未交付**：…目前**未实现**」整段，改列为「已有演习进行中 **或** 链路未开」两种 409，
+并写明「两者都排在写库之前」与「判据只认 `OPEN`；停演不设此门禁」。
+
+### 29.2 用例判据
+
+**core（`ExerciseLifecycleServiceIT`，12 → 13）**
+
+1. `startExercise_withVestLinkClosed_isDeviceLinkNotOpen`——想定与编成都合法，只把桩快照摆成
+   `SERIAL_VEST CLOSED`：`startExercise` 抛 `DEVICE_LINK_NOT_OPEN`，且
+   **`exercises.findRunning()` 仍为空**——判据排在插库之前，被拒的请求不留半启动态。
+2. `@BeforeEach openVestLink()`（用户裁定②）——本类**其余 12 条**都要先能开演，故在 `@BeforeEach` 里令桩
+   `snapshot()` 返回一条 `SERIAL_VEST OPEN`；**不改** `TestCoreApplication` 的全局默认
+   （它的桩语义仍是「链路未开」，且类 javadoc 已就地说明）。用例内可再 `when(...)` 覆盖成本用例要的态。
+
+**core（`ExerciseLifecycleServiceDownlinkTest`，5 条，语义反转）**
+
+- `startIsRejectedWith409WithoutSendingOrLoggingWhenVestLinkIsClosed`（原
+  `startDownlinkIsSkippedWithoutSendingOrLoggingWhenVestLinkIsClosed`）——链路未开时断言
+  **抛 409 `DEVICE_LINK_NOT_OPEN`**，并 `verify(links, never()).sendVestCommand(...)`、
+  `verifyNoInteractions(logs)`、**`verifyNoInteractions(exercises)`**（连库都没碰）。
+  本类其余 4 条不变（含 D11 的「发送失败仍开演」核心判据）。
+
+**app（`ExerciseLifecycleHttpIT`，3 → 4；真装配 + 仿真网关）**
+
+- `startWithVestLinkClosedIsRejectedAs409`——显式关链路后开演，得真实 HTTP 的
+  409 `DEVICE_LINK_NOT_OPEN`（Problem 的 `type` 指向 `/api/v1/exercise/current`），并断言
+  `GET /api/v1/exercise/current` 仍 `running=false`、`t_exercise` 里该想定无未结束行。
+- `bootFullApplication` 注入 `scds.gateway.mode=simulator`（用户裁定④）：本机没有 COM 口，
+  真链路模式开不了串口，链路开关必须由本类自己摆布。
+- 其余 2 条成功路径用例在方法首行 `openSerial()`——成功路径现在**必须先开链路**。
+
+**app（`ExerciseDownlinkHttpIT`，3 → 4）**
+
+- `startIsRejectedAs409WithoutBytesOrLogsWhenVestLinkIsClosed`——链路未开时开演 409，
+  `sentCommands()` 为空、`exerciseCountOf(planId) == 0`、读侧仍无演习。
+- `stopDownlinkIsSkippedWithoutBytesOrLogsWhenVestLinkWasClosedMeanwhile`——**新增**，把原用例里
+  「停演侧链路已关」的覆盖**原位保住**：开演（链路已开）→ 关链路 → `clearSentCommands()` →
+  停演仍 `200`、零字节、零日志。停演不设门禁，这条必须继续立着。
+
+**app（既有 IT 的前置补齐，用户裁定④的波及面）**
+
+| 类 | 改法 |
+|---|---|
+| `DeviceSelfHttpIT` | `@BeforeAll` 在 `seedPlanAndRoster()` 与 `startExercise()` 之间插 `openSerial()` |
+| `PushCrashRecoveryIT` | 换代后的**第二个进程**开演前补 `next.openSerialLink()`（第一代本来就开了） |
+| `CommandHttpIT` | 两个夹具 `startRunningExercise` / `startRunningExerciseOnMap` 内先 `openSerial()` 再开演；开演后 `links.clearSentCommands()`；`closedLinkIsAcceptedWithoutEnqueue…` 改为开演后立刻 `closeSerial()` |
+| `ReplayExportHttpIT` | `@BeforeAll` 加 `scds.gateway.mode=simulator`（原先走 `real` 默认值，本机开不了串口），两处开演前加 `openSerial()` |
+
+**本段才暴露的两点（值得记下，都是「前置一改，测试的前提全变」）**
+
+- **开链路端点不是幂等**：链路已 `OPEN` 时再 `POST /api/v1/devices/links/serial` 回 409
+  （`DEVICE_LINK_ALREADY_OPEN`）。而一个用例里可能开演两次、或同类用例之间互不隔离，
+  故各 IT 的 `openSerial()` 夹具一律**先 `closeSerial()` 再 POST**（关链路端点才是幂等的）。
+- **开演自身会下发字节**：链路一开，14B 轮询配置帧 + 7B 开始帧就进了 `sentCommands()`。
+  凡按**条数**断言下行的用例（`CommandHttpIT`）必须在开演后 `clearSentCommands()`，
+  否则计数的起点从「开演」变成了「用例自己发的指令」——这是本段第一次全量回归 6 条失败的直接原因。
+
+### 29.3 边界与不变式
+
+**为什么是 409 而不是 400 / 500**：请求本身完全合法，缺的是**运行环境的前置条件**，
+与「已有演习进行中」同属「当前状态不允许这次操作」，故同为 409；且它**不新增错误码**。
+
+**停演刻意不设门禁**：门禁的目的是防止「配置根本没发出去的假演习」被开起来；
+停演没有任何对称的风险，反而卡死的场次必须**随时停得掉**。开演严、停演宽，是这一对端点的既定取向。
+
+**仍未落地（本段不涉及）**
+
+- **同库单实例保护 L6**（承 LIFE 分段（一）的未闭合项）：`ExerciseLifecycleService` 类 javadoc 已就地标注
+  「仍未落地」。
+- **硬件确认（ACK）**：本段只保证「要么早拒、要么字节发出去」，不等待、不解析设备执行结果（D11 的边界不变）。
+- **Flutter 两端工程、T-PROD 部署**：与本段无关。
+
+**未改动的硬约束**：协议冻结字节（`DownlinkCommands` 全部编码一字未动）、端口号（HTTP 11001 / UWB TCP 12001）、
+轮询周期（200ms）、在线窗口（5000ms）、校验算法、四角编号口径、`scds-solver` 全部算法一行未改；
+不改历史迁移（**不补 V8**）、不开启 out-of-order、**未新增依赖**、**未新增错误码**。
+
+**仿真通过不等于现场通过**：链路就绪判据验的是 `snapshot()` 的装配与状态流转，
+真实串口下「插上即 OPEN」「拔掉即 CLOSED」的时序仍属现场待验收。
+
+本段为**代码验收**，不是生产发布批准。
+
+### 29.4 现场验收清单（本段新增的待验收项）
+
+| 待验收项 | 现场判据 |
+|---|---|
+| 未开串口就开演被拒 | 布场前（不点开链路）直接开演：409 `DEVICE_LINK_NOT_OPEN`，`GET /api/v1/exercise/current` 仍 `running=false`，`t_exercise` 无残留未结束行 |
+| 已开串口正常开演 | 点开链路后再开演：201，且 `scds-gateway` 日志里逐台 14B 轮询配置帧 + 末尾一条 7B 开始帧 |
+| 门禁与下发之间的并发窗口 | 开演请求发出后、下发前立刻拔串口/关链路：响应仍 201（不因硬件回滚），服务端 WARN + 一条 `SYSTEM` 存证日志——这是 29.1 保留的防御分支 |
+| 停演不受门禁约束 | 关掉链路后停演：仍 200，场次正常冻结收尾（停演不设门禁） |
+| 真串口链路就绪判据 | 拔掉再插上串口：`GET /api/v1/devices/links/serial` 反映的状态应与物理插拔一致（`OPENING` 期间不得被当成已就绪） |
 

@@ -1198,9 +1198,9 @@ D（app 端到端）四段实施。这也正是 **D11**（「整体回滚」不�
 - **链路未开 → 静默跳过**：`DeviceLinkAdmin.snapshot()` 无 `SERIAL_VEST` 且 `state=OPEN` 时，
   只打 WARN，**不发字节、不写日志**——布场前未开串口是正常路径，不是失败。
 - **停演响应补 `replayId = exerciseId`**：停演即开一场可复盘的回放，`replayId` 就是本场 `exerciseId`。
-- **链路就绪 409 硬前置本轮不纳入**：契约 `startExercise` 的 `DEVICE_LINK_NOT_OPEN` 分支**仍未实现**
-  ——它不是一条判据，而是一次波及 ≥9 个既有 IT 的改造；**单列为下一原子任务**，契约描述已就地标注
-  「未实现」。
+- **链路就绪 409 硬前置本轮不纳入**：契约 `startExercise` 的 `DEVICE_LINK_NOT_OPEN` 分支**本轮未实现**
+  ——它不是一条判据，而是一次波及既有多个 IT 的改造；**单列为下一原子任务**，契约描述已就地标注
+  「未实现」。→ **已于下一原子任务落地**，见下节「开演链路就绪 409 硬前置」。
 
 **D11 的边界（本段只到哪一步）**：本段保证**字节发出去**，**不等待、不解析**设备执行结果。
 「已发送」≠「已确认」——`CommandAck.accepted=false` 的文案与「未入队」含义的那条不一致（D11 原问题）
@@ -1219,6 +1219,47 @@ D（app 端到端）四段实施。这也正是 **D11**（「整体回滚」不�
 **验证**：整仓 `mvn -o test` 全绿，**1148 项**（protocol 19 / gateway 49 / core 610 / api 139 / app 331；
 `solver`/`domain` 无测试；较上一轮 1140 增 `ExerciseLifecycleServiceDownlinkTest` 5 + `ExerciseDownlinkHttpIT` 3）。
 证据、用例判据与现场验收清单见 [testing](testing.md) 第 28 节。
+
+---
+
+### 开演链路就绪 409 硬前置（2026-10-28，M3 LIFE 前置条件闭合）
+
+落地上一段有意留下的那条未闭合项：契约 `startExercise` 的 `DEVICE_LINK_NOT_OPEN` 分支。上段的实现是
+「链路未开就静默跳过下发」，留下的缺口是**假成功**——字节进了一个没人消费的队列而接口仍回 `201`，
+现场看到的是一场「配置根本没发出去」的演习，且要到复盘时才发现。本段把它改成**硬前置**：
+开演前马甲串口链路必须已 `OPEN`，否则 409。
+
+**用户逐项裁定（4 项，均取推荐项）**
+
+| 项 | 裁定 |
+|---|---|
+| **① 判据落点** | **想定/编成之后、插库之前**：判据顺序为 503 门禁 → 404 想定不存在 → 400 编成为空 → 409 `DEVICE_LINK_NOT_OPEN` → 插库（409 `EXERCISE_ALREADY_RUNNING`）。「请求内容问题先报、运行环境前置后报」；链路判据排在写库之前，被它拒下的请求不留半启动态 |
+| **② 测试打桩方式** | **IT 内 `@BeforeEach` 打桩**：`ExerciseLifecycleServiceIT` 的 `@BeforeEach` 令 `DeviceLinkAdmin.snapshot()` 返回 `SERIAL_VEST OPEN`，**不改** `TestCoreApplication` 的全局默认（其桩语义仍是「链路未开」） |
+| **③ 既有防御分支** | **保留为防御，测试改写为 409**：`sendStartDownlink` 的「链路未开则整段不下发」保留，但语义收窄为「门禁检查与下发之间链路被并发关闭」这一窗口的兜底；其单元测试由「仍开演」反转为「被 409 拒下」 |
+| **④ app 端到端** | **改 simulator + 开链路 + 新增 409 用例**：`ExerciseLifecycleHttpIT` 注入 `scds.gateway.mode=simulator`，成功路径前先开链路，并新增真实 HTTP 的 409 用例 |
+
+**落地要点**
+
+- **判据与下发共用一处**：`ExerciseLifecycleService` 里 `vestLinkOpen()` 是唯一判据（只认 `OPEN`，
+  `OPENING` 不算已就绪），开演的 409 与下发前的防御都调它——两处各写一套，迟早会在「什么算就绪」上分叉。
+- **复用既有错误码，三层登记表一字未动**：`DEVICE_LINK_NOT_OPEN` 早已在 `ApiErrorCode`、`ApiExceptionHandler`
+  的 409 分组与 `common.yaml` 中登记，本段**不新增**任何码、任何迁移。
+- **停演不设门禁**：卡死的场次必须随时停得掉，故 `stopExercise` 的 409 仍只表示「当前没有演习进行中」；
+  停演侧下发瞬间链路被并发关闭，仍走「不下发只 WARN」的静默跳过。
+- **波及面实测 8 个测试类**（原估「≥9 个 IT」）：`ExerciseLifecycleServiceIT`、`ExerciseLifecycleServiceDownlinkTest`、
+  `ExerciseLifecycleHttpIT`、`ExerciseDownlinkHttpIT`、`CommandHttpIT`、`ReplayExportHttpIT`、
+  `DeviceSelfHttpIT`、`PushCrashRecoveryIT`。共同改法是「开演前先开串口链路」，另有两点本段才暴露：
+  - **开链路端点不是幂等**（已开时回 409），故各 IT 的 `openSerial()` 一律「先关后开」；
+  - **开演自身会下发 14B/7B**：链路一开，开演的字节就进了 `sentCommands()`，凡按条数断言的用例
+    （`CommandHttpIT`）必须在开演后 `clearSentCommands()`，否则计数的起点错了。
+- `ReplayExportHttpIT` 原本不覆盖 `scds.gateway.mode`（走 `real`），本机没有 COM 口开不了链路，
+  故改为与 `DeviceSelfHttpIT` / `CommandHttpIT` 同策的仿真装配；该类的断言全在导出链路上，与链路语义无关。
+- **仍未落地**：同库单实例保护（L6），`ExerciseLifecycleService` 类 javadoc 已就地标注。
+
+**验证**：整仓 `mvn -o test` 全绿，**1151 项**（protocol 19 / gateway 49 / core 611 / api 139 / app 333；
+`solver`/`domain` 无测试；较上一轮 1148 增 `ExerciseLifecycleServiceIT` 1 + `ExerciseLifecycleHttpIT` 1 +
+`ExerciseDownlinkHttpIT` 1；`ExerciseLifecycleServiceDownlinkTest` 与 `CommandHttpIT` 计数不变，语义改写）。
+证据、用例判据与现场验收清单见 [testing](testing.md) 第 29 节。
 
 
 
