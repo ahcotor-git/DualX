@@ -1,14 +1,24 @@
 /// exercise 域契约模型（`docs/api/schemas/domain.yaml` + `situation.yaml` + `common.yaml`）。
 ///
-/// 本文件只做**解析**：当前演习状态与日志流水两条只读载荷的类型。
-/// 指挥指令（判死/活/伤/越界/充弹/配置）是写操作，模型另行落地。
+/// 两半：
+/// · **只读载荷**——当前演习状态与日志流水的解析；
+/// · **写端点载荷**——想定（`Plan` / `PlanUpsertRequest`）、编成（`Roster` / `RosterEntry`）、
+///   开演（`StartExerciseRequest`）与停演结果（`StopExerciseResult`）的构造与解析。
+///   指挥指令（判死/活/伤/越界/充弹/配置）属 command 域，模型在 `command_models.dart`。
 ///
 /// 解析口径与 `situation_models.dart` / `auth_models.dart` 一致：**不臆造缺省值**。
 /// · 契约必填字段缺失 → `TypeError`；
 /// · 形状不符 → `FormatException`；
 /// · **未知枚举字面量 → `FormatException`**（宁可显式失败，也不静默落到某个默认分支）；
 /// · 契约中可空的字段（无 `required`）→ nullable。
+///
+/// **请求体口径分两类，不可混淆**（见 `docs/api/paths/exercise.yaml`）：
+/// · **整体替换**（`PlanUpsertRequest`）：`null` 就是「置空」，故显式输出全部键；
+/// · **可选缺省**（`RosterEntry` / `StartExerciseRequest`）：缺席由服务端补默认值，故只发非 null 键。
 library;
+
+import 'command_models.dart' show VestMode;
+import 'situation_models.dart' show Team;
 
 /// 演习模式（`domain.yaml#/Exercise.battleMode`）。
 enum BattleMode {
@@ -193,6 +203,241 @@ class ExerciseLogPage {
 
   /// 本批最大 seq，客户端下次请求作为 `sinceSeq`；无条目时为 `null`。
   final int? latestSeq;
+}
+
+/// 分页元信息（`common.yaml#/PageMeta`）。必填：`page` / `size` / `total`。
+class PageMeta {
+  const PageMeta({required this.page, required this.size, required this.total});
+
+  factory PageMeta.fromJson(Map<String, dynamic> json) => PageMeta(
+        page: json['page'] as int,
+        size: json['size'] as int,
+        total: json['total'] as int,
+      );
+
+  /// 页码，从 1 开始。
+  final int page;
+  final int size;
+  final int total;
+}
+
+/// 想定（`domain.yaml#/Plan`）——`listPlans` / `getPlan` / `createPlan` / `updatePlan` 的载荷。
+///
+/// 必填仅 [planId] / [name] / [createdAt]；其余（[mapId] / [battleMode] / [remark] /
+/// [rosterCount] / [updatedAt]）契约未置 `required`，故为 nullable。
+class Plan {
+  const Plan({
+    required this.planId,
+    required this.name,
+    required this.createdAt,
+    this.mapId,
+    this.battleMode,
+    this.remark,
+    this.rosterCount,
+    this.updatedAt,
+  });
+
+  factory Plan.fromJson(Map<String, dynamic> json) => Plan(
+        planId: json['planId'] as String,
+        name: json['name'] as String,
+        createdAt: DateTime.parse(json['createdAt'] as String),
+        mapId: json['mapId'] as String?,
+        battleMode: _enumOrNull(json['battleMode'], BattleMode.fromWire),
+        remark: json['remark'] as String?,
+        rosterCount: json['rosterCount'] as int?,
+        updatedAt: _dateTimeOrNull(json['updatedAt']),
+      );
+
+  final String planId;
+  final String name;
+
+  /// 绑定的底图（室内 UWB 或室外 GPS）；未绑定为 `null`。
+  final String? mapId;
+  final BattleMode? battleMode;
+  final String? remark;
+
+  /// 编成人数。
+  final int? rosterCount;
+  final DateTime createdAt;
+  final DateTime? updatedAt;
+}
+
+/// 想定分页结果（`domain.yaml#/PlanPage`）。
+class PlanPage {
+  const PlanPage({required this.items, required this.meta});
+
+  factory PlanPage.fromJson(Map<String, dynamic> json) => PlanPage(
+        items: _listOrEmpty(json['items'], Plan.fromJson),
+        meta: PageMeta.fromJson(json['meta'] as Map<String, dynamic>),
+      );
+
+  final List<Plan> items;
+  final PageMeta meta;
+}
+
+/// 新建 / 修改想定的请求体（`domain.yaml#/PlanUpsertRequest`）。必填：[name]（1~128 字符）。
+///
+/// **PUT 是整体替换**：服务端 `ExerciseController#draft` 把缺席字段一律当 `null` 落库，
+/// 故 [toJson] **显式输出全部四个键**（`null` 也发）——「解绑底图」就是把 `mapId: null` 发出去。
+/// 这与 `VestConfigRequest` 的「只发非 null、缺席即保持原值」是**相反**的口径，不可混淆。
+/// [battleMode] 缺席时服务端按契约默认 `TRAIN`。
+class PlanUpsertRequest {
+  const PlanUpsertRequest({required this.name, this.mapId, this.battleMode, this.remark});
+
+  final String name;
+  final String? mapId;
+  final BattleMode? battleMode;
+  final String? remark;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'name': name,
+        'mapId': mapId,
+        'battleMode': battleMode?.wire,
+        'remark': remark,
+      };
+}
+
+/// 编成单条（`domain.yaml#/RosterEntry`）。必填：[vestNum] / [team]。
+///
+/// [hp] / [ammo1] / [ammo2] / [mode] 缺席时服务端补契约默认（100 / 30 / 30 / AUTO），
+/// 故 [toJson] **只发非 null 键**，不臆造默认值。
+class RosterEntry {
+  const RosterEntry({
+    required this.vestNum,
+    required this.team,
+    this.name,
+    this.hp,
+    this.ammo1,
+    this.ammo2,
+    this.mode,
+  });
+
+  factory RosterEntry.fromJson(Map<String, dynamic> json) => RosterEntry(
+        vestNum: json['vestNum'] as int,
+        team: Team.fromWire(json['team'] as String),
+        name: json['name'] as String?,
+        hp: json['hp'] as int?,
+        ammo1: json['ammo1'] as int?,
+        ammo2: json['ammo2'] as int?,
+        mode: _enumOrNull(json['mode'], VestMode.fromWire),
+      );
+
+  /// 引用设备台账里的马甲编号。
+  final int vestNum;
+  final Team team;
+  final String? name;
+
+  /// 开演初始生命值，0..255（上限由 14B 轮询配置帧的 1 字节承载决定）。
+  final int? hp;
+
+  /// 主武器弹药，0..65535（上限由 14B 帧的 2 字节大端承载决定）。
+  final int? ammo1;
+  final int? ammo2;
+
+  /// 轮询模式，与 command 域覆盖配置共用 [VestMode]。
+  final VestMode? mode;
+
+  Map<String, Object?> toJson() {
+    final Map<String, Object?> json = <String, Object?>{
+      'vestNum': vestNum,
+      'team': team.wire,
+    };
+    if (name != null) {
+      json['name'] = name;
+    }
+    if (hp != null) {
+      json['hp'] = hp;
+    }
+    if (ammo1 != null) {
+      json['ammo1'] = ammo1;
+    }
+    if (ammo2 != null) {
+      json['ammo2'] = ammo2;
+    }
+    if (mode != null) {
+      json['mode'] = mode!.wire;
+    }
+    return json;
+  }
+}
+
+/// 想定编成（`domain.yaml#/Roster`）。必填：[planId] / [entries]。
+///
+/// **整体替换、幂等**：PUT 之后服务端存的就是这一份清单；空列表即清空（合法）。
+/// 服务端校验编号存在于设备台账、不重复、不跨队，任一不满足回 400 `VALIDATION_FAILED`，
+/// **不产生部分写入**。
+class Roster {
+  const Roster({required this.planId, required this.entries});
+
+  factory Roster.fromJson(Map<String, dynamic> json) => Roster(
+        planId: json['planId'] as String,
+        entries: _listOrEmpty(json['entries'], RosterEntry.fromJson),
+      );
+
+  final String planId;
+  final List<RosterEntry> entries;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'planId': planId,
+        'entries': entries
+            .map((RosterEntry entry) => entry.toJson())
+            .toList(growable: false),
+      };
+}
+
+/// 开始演习请求体（`domain.yaml#/StartExerciseRequest`）。必填：[planId]。
+///
+/// [battleMode] 缺席时服务端沿用想定里的模式，故 [toJson] 只发非 null 键。
+class StartExerciseRequest {
+  const StartExerciseRequest({required this.planId, this.battleMode});
+
+  final String planId;
+  final BattleMode? battleMode;
+
+  Map<String, Object?> toJson() {
+    final Map<String, Object?> json = <String, Object?>{'planId': planId};
+    if (battleMode != null) {
+      json['battleMode'] = battleMode!.wire;
+    }
+    return json;
+  }
+}
+
+/// 停演结果（`paths/exercise.yaml#/exerciseCurrent.delete` 的内联对象，契约未给它起名）。
+///
+/// [replayId] 即本场 `exerciseId`（`t_exercise` 一行两用），可直接跳转复盘；
+/// 走本端点停演 [endReason] 恒为 [ExerciseEndReason.normal]，[ExerciseEndReason.crashRecovered]
+/// 只会出现在启动自愈补写的场次里。
+class StopExerciseResult {
+  const StopExerciseResult({
+    required this.exerciseId,
+    required this.endedAt,
+    this.replayId,
+    this.endReason,
+  });
+
+  factory StopExerciseResult.fromJson(Map<String, dynamic> json) => StopExerciseResult(
+        exerciseId: json['exerciseId'] as String,
+        endedAt: DateTime.parse(json['endedAt'] as String),
+        replayId: json['replayId'] as String?,
+        endReason: _enumOrNull(json['endReason'], ExerciseEndReason.fromWire),
+      );
+
+  final String exerciseId;
+  final DateTime endedAt;
+  final String? replayId;
+  final ExerciseEndReason? endReason;
+}
+
+/// 想定导入模板格式（`paths/exercise.yaml#/planTemplate` 的 `format` 查询参数）。
+enum PlanTemplateFormat {
+  xlsx('XLSX'),
+  csv('CSV');
+
+  const PlanTemplateFormat(this.wire);
+
+  /// 契约字面量。
+  final String wire;
 }
 
 T? _enumOrNull<T>(Object? value, T Function(String wire) parse) =>

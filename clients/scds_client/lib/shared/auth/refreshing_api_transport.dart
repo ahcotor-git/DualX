@@ -134,6 +134,17 @@ class RefreshingApiTransport implements ApiTransport {
           (String? token) =>
               inner.send(method, path, query: query, jsonBody: jsonBody, bearerToken: token));
 
+  @override
+  Future<ApiResponse> sendBytes(String method, String path,
+          {Map<String, String>? query,
+          required List<int> body,
+          required String contentType,
+          String? bearerToken}) =>
+      _authorized(
+          bearerToken,
+          (String? token) => inner.sendBytes(method, path,
+              query: query, body: body, contentType: contentType, bearerToken: token));
+
   /// 探活端点**无令牌**（`/actuator/health` 在安全链白名单），故不过 [\_authorized]。
   @override
   Future<ApiResponse> probe(String path) => inner.probe(path);

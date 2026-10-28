@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 
 import 'api_contract.dart';
 import 'api_problem.dart';
@@ -51,6 +53,18 @@ abstract interface class ApiTransport {
   /// 底层发送（路径自动带 [kApiPrefix]）。
   Future<ApiResponse> send(String method, String path,
       {Map<String, String>? query, Object? jsonBody, String? bearerToken});
+
+  /// 发送**原始字节**请求体（路径自动带 [kApiPrefix]）。
+  ///
+  /// 给 JSON 之外的载荷留口：契约里的上传端点（想定导入、底图图片）都是
+  /// `multipart/form-data`，没有浏览器 `FormData` 可用，故由 [multipartFormData]
+  /// 组装好正文与 [contentType]（含 `boundary`）后经此送出。
+  /// 与 [send] 的 [jsonBody] 是**互斥**的两条路：本方法只发字节，不做任何编码。
+  Future<ApiResponse> sendBytes(String method, String path,
+      {Map<String, String>? query,
+      required List<int> body,
+      required String contentType,
+      String? bearerToken});
 
   /// 应用级端点探活（**不带** [kApiPrefix]，如 `/actuator/health`）。
   Future<ApiResponse> probe(String path);
@@ -127,6 +141,15 @@ class ApiClient implements ApiTransport {
   }) =>
       _send(method, api(path, query), jsonBody: jsonBody, bearerToken: bearerToken);
 
+  @override
+  Future<ApiResponse> sendBytes(String method, String path,
+          {Map<String, String>? query,
+          required List<int> body,
+          required String contentType,
+          String? bearerToken}) =>
+      _send(method, api(path, query),
+          bytesBody: body, bytesContentType: contentType, bearerToken: bearerToken);
+
   /// 应用级端点探活：GET 一个**不带** [kApiPrefix] 的路径（如 `/actuator/health`）。
   ///
   /// 业务接口一律经 [api] 带 `/api/v1`；`/actuator/**` 不属于业务路由，
@@ -138,6 +161,8 @@ class ApiClient implements ApiTransport {
     String method,
     Uri target, {
     Object? jsonBody,
+    List<int>? bytesBody,
+    String? bytesContentType,
     String? bearerToken,
   }) async {
     final HttpClientRequest request = await _http.openUrl(method, target);
@@ -148,6 +173,11 @@ class ApiClient implements ApiTransport {
     if (jsonBody != null) {
       request.headers.contentType = ContentType('application', 'json', charset: 'utf-8');
       request.add(utf8.encode(jsonEncode(jsonBody)));
+    } else if (bytesBody != null) {
+      // 完整头值（含 multipart boundary）；不用 `headers.contentType` 是因为
+      // `ContentType.parse` 会把 boundary 参数一并收下，但显式 set 更不易出错。
+      request.headers.set(HttpHeaders.contentTypeHeader, bytesContentType!);
+      request.add(bytesBody);
     }
 
     final HttpClientResponse response = await request.close().timeout(timeout);
@@ -174,4 +204,77 @@ class ApiClient implements ApiTransport {
     }
     return bytes;
   }
+}
+
+/// `multipart/form-data` 的一个**文件部件**（[multipartFormData] 的 `files` 值）。
+class MultipartFile {
+  const MultipartFile({
+    required this.filename,
+    required this.bytes,
+    this.contentType = 'application/octet-stream',
+  });
+
+  /// 上传文件名（写进 `Content-Disposition` 的 `filename=`）。
+  final String filename;
+
+  /// 文件原始字节。
+  final List<int> bytes;
+
+  /// 该部件的 Content-Type。服务端对图片按**真实图片头**判定类型、不信任此头
+  /// （见 `map.yaml#/mapImage`），但仍应如实填写。
+  final String contentType;
+}
+
+/// 组装好的 multipart 请求体：正文与配套的 `Content-Type` 头值（含 `boundary`）。
+class MultipartBody {
+  const MultipartBody({required this.contentType, required this.body});
+
+  /// 直接作为请求 `Content-Type` 头（已含 `boundary=` 参数）。
+  final String contentType;
+  final List<int> body;
+}
+
+/// 按 RFC 7578 手工拼装 `multipart/form-data` 正文（[fields] 在前、[files] 在后）。
+///
+/// 目标平台是 Android / Windows，不引第三方 HTTP 包，故没有 `FormData` 可用；
+/// 拼好的 [MultipartBody] 交给 [ApiTransport.sendBytes] 送出。
+///
+/// [random] 仅供测试注入以固定 `boundary`；生产走 [Random.secure]。
+MultipartBody multipartFormData({
+  Map<String, String> fields = const <String, String>{},
+  Map<String, MultipartFile> files = const <String, MultipartFile>{},
+  Random? random,
+}) {
+  final String boundary = '----scdsBoundary${_randomHex(random ?? Random.secure(), 16)}';
+  final BytesBuilder builder = BytesBuilder(copy: false);
+
+  void write(String text) => builder.add(utf8.encode(text));
+
+  fields.forEach((String name, String value) {
+    write('--$boundary\r\n');
+    write('Content-Disposition: form-data; name="$name"\r\n\r\n');
+    write('$value\r\n');
+  });
+  files.forEach((String name, MultipartFile file) {
+    write('--$boundary\r\n');
+    write('Content-Disposition: form-data; name="$name"; filename="${file.filename}"\r\n');
+    write('Content-Type: ${file.contentType}\r\n\r\n');
+    builder.add(file.bytes);
+    write('\r\n');
+  });
+  write('--$boundary--\r\n');
+
+  return MultipartBody(
+    contentType: 'multipart/form-data; boundary=$boundary',
+    body: builder.takeBytes(),
+  );
+}
+
+String _randomHex(Random random, int length) {
+  const String digits = '0123456789abcdef';
+  final StringBuffer buffer = StringBuffer();
+  for (int i = 0; i < length; i++) {
+    buffer.write(digits[random.nextInt(16)]);
+  }
+  return buffer.toString();
 }

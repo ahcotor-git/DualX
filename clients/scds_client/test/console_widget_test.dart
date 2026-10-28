@@ -1747,6 +1747,15 @@ class ScriptedTransport implements ApiTransport {
           {Map<String, String>? query, Object? jsonBody, String? bearerToken}) =>
       _record(method, path, query: query, jsonBody: jsonBody, bearerToken: bearerToken);
 
+  /// 原始字节体（multipart）：桩只记路径与令牌，正文不参与指挥端接线断言。
+  @override
+  Future<ApiResponse> sendBytes(String method, String path,
+          {Map<String, String>? query,
+          required List<int> body,
+          required String contentType,
+          String? bearerToken}) =>
+      _record(method, path, query: query, bearerToken: bearerToken);
+
   @override
   Future<ApiResponse> probe(String path) => _record('GET', path, absolute: true);
 

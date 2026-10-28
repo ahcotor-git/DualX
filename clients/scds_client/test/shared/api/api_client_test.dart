@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:scds_client/shared/api/api_client.dart';
@@ -232,6 +233,79 @@ void main() {
       expect(ApiProblem.tryParse(utf8.encode('not json')), isNull);
       expect(ApiProblem.tryParse(utf8.encode('[1,2,3]')), isNull);
       expect(ApiProblem.tryParse(<int>[]), isNull);
+    });
+  });
+
+  group('sendBytes / multipartFormData（原始字节请求体）', () {
+    test('sendBytes：原样送出字节并保留自定义 Content-Type（含 boundary）', () async {
+      const String payload = '----b\r\nraw\r\n--b--\r\n';
+
+      await client.sendBytes(
+        'POST',
+        '/plans/import',
+        body: utf8.encode(payload),
+        contentType: 'multipart/form-data; boundary=b',
+        bearerToken: 'access-token-1',
+      );
+
+      expect(seen.single.method, 'POST');
+      expect(seen.single.uri.path, '$kApiPrefix/plans/import');
+      expect(seen.single.contentType?.mimeType, 'multipart/form-data');
+      expect(seen.single.contentType?.parameters['boundary'], 'b');
+      expect(utf8.decode(seen.single.body), payload);
+      expect(seen.single.authorization, 'Bearer access-token-1');
+    });
+
+    test('sendBytes：非 2xx 同样抛 ApiException', () async {
+      handler = (HttpRequest request) => respondJson(
+            request,
+            413,
+            <String, dynamic>{
+              'status': 413,
+              'code': 'PAYLOAD_TOO_LARGE',
+              'traceId': 'trace-upload',
+            },
+            contentType: kProblemMediaType,
+          );
+
+      final ApiException failure = await expectApiFailure(client.sendBytes(
+        'POST',
+        '/plans/import',
+        body: <int>[1, 2, 3],
+        contentType: 'application/octet-stream',
+      ));
+
+      expect(failure.statusCode, 413);
+      expect(failure.code, 'PAYLOAD_TOO_LARGE');
+    });
+
+    test('multipartFormData：按 RFC 7578 拼装，fields 在前 files 在后、结尾闭合', () {
+      final MultipartBody body = multipartFormData(
+        fields: <String, String>{'name': '导入想定'},
+        files: <String, MultipartFile>{
+          'file': MultipartFile(
+            filename: 'template.xlsx',
+            bytes: <int>[0x50, 0x4B], // 'PK'
+            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          ),
+        },
+        random: Random(1),
+      );
+
+      expect(body.contentType, startsWith('multipart/form-data; boundary=----scdsBoundary'));
+      final String boundary = body.contentType.split('boundary=').last;
+      final String text = utf8.decode(body.body);
+
+      expect(text, startsWith('--$boundary\r\n'));
+      expect(text, endsWith('--$boundary--\r\n'));
+      expect(text, contains('Content-Disposition: form-data; name="name"\r\n\r\n导入想定\r\n'));
+      expect(
+        text,
+        contains('Content-Disposition: form-data; name="file"; filename="template.xlsx"\r\n'),
+      );
+      expect(text, contains('\r\n\r\nPK\r\n'));
+      // fields 必须排在 files 之前。
+      expect(text.indexOf('name="name"'), lessThan(text.indexOf('name="file"')));
     });
   });
 }
