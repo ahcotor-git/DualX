@@ -745,8 +745,8 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 
 ### 15.1 落地范围与口径
 
-8 类指令接口已落地 **7 条**：判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 全体充弹 / 覆盖配置。
-`move`（手动置位）仍为 501——它依赖地图置位写入口，单列任务。
+8 类指令接口**已全部落地**：判死 / 判活 / 判伤 / 超范围 / 单兵充弹 / 全体充弹 / 覆盖配置 / 手动置位。
+本节的 7 条与本段同时交付；第 8 条 `move`（手动置位）随后单独补上，证据见第 19 节。
 
 **顺序即纪律：先发字节，成功后落库。** 契约把「受理」定义为「指令进入发送队列」，而物理下发
 一旦发生就无法回滚（决策 D11：不得把 Accepted 当设备执行成功）。因此编排不写 `PENDING` 再走
@@ -795,7 +795,7 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 
 `ApiSkeletonSmokeIT` 的 70 条契约路由按「非 404」判定；已落地的指令端点在建线前即按令牌/参数失败
 （401 / 400），不会被该判据放过。它的 501 断言用例仍用真占位端点 `GET /devices/vests/1/link`。
-`move` 与 `getVestLink` 仍 501，与本段无关。`CommandService` 刻意不加 `@Transactional`：
+`getVestLink` 仍 501，与本段无关（`move` 当时仍 501，已由第 19 节收口）。`CommandService` 刻意不加 `@Transactional`：
 物理下发已不可回滚，只把两个库写包成事务会给出一种并不存在的「整体回滚」错觉。
 
 **已知缺口（本次不拦，单列任务）**：`t_plan_roster` 的 `hp` / `ammo1` / `ammo2` 在库层与 PLAN 写入侧
@@ -884,7 +884,7 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 **队列卫生**语义，不是「真的在等某个 ACK」。现场若要解释「指令为什么变成 EXPIRED」，答案应当是
 「发出去后没有回音，按 TTL 收口」，而不是「确认超时」。
 
-`move`（手动置位）、`getVestLink`、M3 CALIBRATION、M5 EXPORT 仍 501，与本段无关。
+`getVestLink`、M3 CALIBRATION、M5 EXPORT 仍 501，与本段无关（`move` 当时仍 501，已由第 19 节收口）。
 
 本段为**代码验收**，不是生产发布批准。
 
@@ -966,8 +966,8 @@ app（`SituationStateIT`，2）：
 `lastHeartbeatAt`；因此「只有 UWB、没有心跳」的马甲不会被判在线——这是既有口径，非本轮回归。
 
 **CAL-2 已收口**：三个标定端点去 501、进程内标定状态机、`V11` 校准列、现场实测长宽覆盖
-写回 `uwb_meta` 均已交付，证据见第 18 节。`move`（手动置位）、`getVestLink`、M5 EXPORT 仍 501，
-与本段无关。
+写回 `uwb_meta` 均已交付，证据见第 18 节。`getVestLink`、M5 EXPORT 仍 501，
+与本段无关（`move` 当时仍 501，已由第 19 节收口）。
 
 本段为**代码验收**，不是生产发布批准；UWB 盒子经 12001 的连续坐标、容量与长稳属现场待验收。
 
@@ -1074,3 +1074,177 @@ V11 只加列不加表。
 以及**底图四角编号须按 `bs1` 左下 → `bs2` 右下 → `bs3` 右上 → `bs4` 左上录入**，
 即 `bs4` 必须与 `bs1` 构成宽度基准（`bs1→bs4`）、`bs2` 与 `bs1` 构成长度基准（`bs1→bs2`），
 两基准近似正交——标定回写的 `realWidthCm` 对应的正是 `bs1↔bs4` 这条边，编号错了宽度就落错边。
+
+## 19. M3 COMMAND 手动置位（第 8 条指令 `moveVest`）
+
+2026-10-28 按 `docs/implementation-plan.md` 第 108-127 行的 command 工作包实施：8 条指令里
+**最后一条**（`moveVest`，契约 `docs/api/paths/command.yaml` 的 `x-internal` 联调端点）。
+按用户裁定拆三步：`moveVest-a` core 写入口 + 单测 → `moveVest-b` 楼层点位表读取 → `moveVest-c`
+端点接线 + 端到端 + 文档回写。本节记录三步合起来的证据，**其模块计数与总计取代第 18 节的表**。
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动（协议字节、`LogType` 一字未动） |
+| gateway | 49 | 0/0/0 | 未改动（手动置位**不发字节**，不经过下行链路） |
+| core | 555 | 0/0/0 | 新增 `SituationStateServiceTest` 4、`MapLedgerServiceIT` 3 |
+| api | 139 | 0/0/0 | `ApiSkeletonSmokeIT` 判据是「非 404」，去 501 不破该判据 |
+| app | 324 | 0/0/0 | 新增 `CommandHttpIT` 2（原 4 → 6） |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1086** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+### 19.1 落地范围与口径
+
+**为什么单独一条**：`moveVest` 与前 7 条不同——它**不下发任何字节**，只把马甲坐标置为本场底图
+某个楼层点位表里的那个点（联调/演示用；正式演习禁用）。它因此跨三层：接口层搬 DTO、
+`CommandService` 判语境与取坐标、`SituationStateService` 在唯一写手线程上改态势。
+
+**判据顺序固定**（`CommandService.moveVest`，一处判完）：无进行中演习 → 409 `EXERCISE_NOT_RUNNING`；
+本场 `BattleMode.BATTLE` → 403 `COMMAND_MOVE_FORBIDDEN`；`floorNum` / `posNum` 任一为 null →
+400 `VALIDATION_FAILED`；不在编成 → 404 `DEVICE_VEST_NOT_FOUND`；本场未绑底图 → 404 `MAP_NOT_FOUND`；
+点位表里没有这个点 → 404 `MAP_FLOOR_POINT_NOT_FOUND`；最后投事件。
+
+**403 与 `AUTH_FORBIDDEN` 严格分工**（新码 `COMMAND_MOVE_FORBIDDEN`）：后者是「令牌有效但角色不允许」，
+换个有权限的账号就能过；前者说的是**这一场演习的模式不允许该动作**，换谁登录都得拒。
+前端据此提示「本功能仅联调/训练可用」，而不是引导用户去要权限。
+
+**404 分两码的理由**：`MAP_NOT_FOUND` 是「图都不在」，`MAP_FLOOR_POINT_NOT_FOUND` 是「图在、
+点位表里没这个点」。对调用方的处置动作不同（换一张图 vs 把点位表补上），故不折叠成一个码；
+但**点位表内部的多种 miss 折叠成同一个 404**：整层没录、点位号不存在、该项缺 `xPct`/`yPct`、
+`points` 文本损坏、合法 JSON 但不是数组——对调用方都是同一件事「置位无处可去」。
+
+**写入口径**：`CommandService` 拿到 `(xPct, yPct)` 后调 `SituationStateService.moveVest(...)`，
+后者**只在队列上 `offer` 一个 `StateEvent.ManualPosition`**，坐标真正写进内存态是在唯一写手线程
+`scds-state-writer` 的 `applyManualPosition` 里（`PositionSource.MANUAL`、`CoordinateSystem.INDOOR`）。
+`accepted=false` 只有一种成因：态势侧已停止接收（`!accepting`）。**阵亡马甲不绕冻结**——已有的
+「阵亡冻结在最后有效坐标」是硬约束（见 `UnitState` 类注释），手置位不是它的例外。
+
+**不发字节、不落队列、不写审计**：回执 `downlinkHex` 恒为 `null`；不写 `t_exercise_command`
+（没有下行帧，写进去只会得到一行永远发不出去的假队列）；不写 `t_exercise_log`——协议 `LogType`
+里**没有 `MOVE`**，而协议已冻结、不新增值，故不借用别的类型。
+
+**新错误码按纪律三层登记**：先写进 openapi 的 `Problem.code` 描述（`common.yaml`），
+再回 `ApiErrorCode` 补枚举，最后由 `ApiExceptionHandler.statusOf` 登记状态（403 / 404）。
+
+### 19.2 用例判据
+
+core：
+
+- `SituationStateServiceTest`（4）：手置位事件写进 `units` 的坐标与来源、编成外只计数不改态势、
+  阵亡不绕冻结、队列不再接收时返回 `false`。
+- `MapLedgerServiceIT`（3）：命中点位回它那一项的归一化坐标；整层未录 / 点位号不存在 / 缺坐标 /
+  非数组 / `posNum` 非数字全部折叠成空 `Optional`；底图不存在时仍先判 `MAP_NOT_FOUND`。
+
+app（`CommandHttpIT`，真生产入口 + 真 MySQL + 真安全链 + `scds.gateway.mode=simulator`）：
+
+1. `moveVestRepositionsUnitFromFloorPointWithoutTouchingQueueOrAudit`（成功路径）——先建室内底图并
+   `PUT floors/{n}/points` 录点位表，再**开演前**经 `PUT /api/v1/plans/{id}` 把 `mapId` 绑到想定上
+   （想定一旦被演习占用就禁止改动），开演后 `POST .../move`：回执 `{command:"MOVE", accepted:true,
+   downlinkHex:null}`，仿真链路 `sentCommands()` 为空、`t_exercise_command` 与 `t_exercise_log`
+   计数不变；再轮询态势（写手线程异步）断言 `positionSource=MANUAL` 与
+   `GeoPoint(INDOOR, 0.25, 0.75, floor=3, pos=7)`。
+2. `moveVestRefusalsAreContractShaped`（拒绝路径）——点位号不存在与整层未录都是 404
+   `MAP_FLOOR_POINT_NOT_FOUND`；缺 `floorNum` / 缺 `posNum` 都是 400 `VALIDATION_FAILED`；
+   编成外 404 `DEVICE_VEST_NOT_FOUND`；把想定绑成 `BATTLE` 后开演则 403 `COMMAND_MOVE_FORBIDDEN`。
+
+### 19.3 边界与不变式
+
+**HTTP 用例必须先给想定绑底图**：`startRunningExercise` 建想定时不绑图，而 `moveVest` 的坐标
+来源只能是「本场底图 + 该楼层点位表」；不绑图会先拿到 404 `MAP_NOT_FOUND`，走不到想测的分支。
+
+**底图无需标定**：`moveVest` 只读楼层点位表，不读 `uwb_meta`；底图缺四角几何时装配层只记一条告警，
+开演与置位照常——这与 CAL-2 的「读数才要求标定」是两回事。
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不开启 out-of-order。
+
+**仍未交付**：全仓仍抛 501 的只剩 8 条——`DeviceController.getVestLink` 1 条，以及
+`ReplayController` 全部 7 条（`listReplays` / `getReplay` / `getReplayTimeline` /
+`getReplayStatistics` / `exportReplay` / `getExportTask` / `downloadExport`）；
+`ExerciseController.listCurrentExerciseLogs` 已由第 20 节收口（§19 当时记的「M5 EXPORT 三条」
+只是这 7 条中的一部分，漏记了 replay 读侧 4 条）。
+Flutter 两端未开工。`t_plan_roster` 的 `hp` / `ammo1` / `ammo2` 范围校验仍缺（见 15.3）。
+
+本段为**代码验收**，不是生产发布批准。
+
+## 20. 当前演习日志流水（`GET /api/v1/exercise/current/logs`）
+
+命令（仓库根）：`mvn test`。本地 MySQL `scds-local-mysql` healthy，
+IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`），不碰开发库。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动（本端点不经过下行链路，也不发字节） |
+| core | 555 | 0/0/0 | 未新增用例；新增读侧方法 `ExerciseLifecycleService.currentLogs` |
+| api | 139 | 0/0/0 | `ApiSkeletonSmokeIT` 判据是「非 404」，去 501 不破该判据 |
+| app | 325 | 0/0/0 | 新增 `ExerciseLifecycleHttpIT` 1（原 2 → 3） |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1087** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+
+> 计数口径：上表按 Maven **模块级汇总**（`[INFO] Tests run:`）取值。若改按
+> `target/surefire-reports/TEST-*.xml` 累加，core 会少 21 项——`@Nested` 内部类
+> （如 `TrackSamplingTest$Sampler` 13 + `$Writer` 8）不落在其外层类的 XML 里，
+> 需要逐个 XML 文件统计才不漏。核对模块总数时以模块级汇总为准。
+
+### 20.1 落地范围与口径
+
+**为什么单列**：这是 `ExerciseController` 最后一个 501 占位（同类的「当前演习」与「当前在线数」
+此前已接线）。它读的是 `t_exercise_log`，属**读侧**，与 §19 的手动置位（写侧）无关。
+
+**归属**：接口层不直连 `scds-core` 的仓储（既有取向），故读原语挂在
+`ExerciseLifecycleService.currentLogs`（该类已注入 `ExerciseLogRepository`）上，控制器只做
+「取列表 → 映射 DTO → 取末条 seq 做 `latestSeq`」。
+
+**游标口径**（`sinceSeq` → `latestSeq` 的推进）：
+
+- `sinceSeq` 为 `null`（不传）＝契约的**最新一页**：取 seq 最大的 `limit` 条，再按 seq 升序
+  （走 `ExerciseLogRepository.findLatest`）；非 `null` 走 `findByExerciseIdSince`
+  （`seq > sinceSeq` 升序）。
+- `latestSeq` 取本批**末条**（列表已升序），与 `SituationController.listHits` 同一口径；
+  客户端把它存下来当下次的 `sinceSeq`。
+- 库里 `t_exercise_log.seq` 是**全局自增**（不按演习分段），故换了场次游标也不回退；
+  本层不判「游标推没推到末尾」，那由客户端拿 `latestSeq` 自己比。
+
+**无演习进行中**：契约这个端点只有 401 / 500，**没有 404**，故不报错也不编造场次——
+返回 `200` + `items=[]` + `latestSeq=null`，与态势读侧「无演习返回空列表、不查库」同一取向。
+
+**`limit` 边界**：契约 1..500、默认 100；用 `@Min(1) @Max(500)` 拦在参数校验层
+（越界 → 400 `VALIDATION_FAILED`），与「路由没注册」的 404 区分开。
+
+**同名不同形状的两侧 `ExerciseLogEntry`**：领域侧（`scds-domain`）多一个 `exerciseId`、
+字段名是 `logType` / `operatorName`；契约 DTO（`scds-api`）没有 `exerciseId`、
+字段名是 `type` / `operator`。故控制器里写全名并用 `toLogEntry` 显式映射，
+不靠名字巧合（与 `toEntry` 同一处理）。
+
+### 20.2 用例判据
+
+app（`ExerciseLifecycleHttpIT`，真生产入口 + 真 MySQL + 真安全链）：
+
+1. `currentLogsFollowTheSeqCursor`（新增）——依次断言：
+   无演习时是空页（`items=[]`、`latestSeq=null`）；开演后**尚未写任何日志**时**仍是空页**
+   （证明按「当前场次」过滤，不是把历史行带出来）；种两行后不传 `sinceSeq` 得最新一页
+   （`items` 两条且按 seq 升序、`latestSeq` = 末条 seq，且 `type` / `vestNum` / `detail`
+   与所种行一致）；`sinceSeq=第一条` 只回第二条、`latestSeq` 随之推进；
+   `sinceSeq=第二条` 得空列表 + `latestSeq=null`（客户端据此判断「已是最新」）；
+   `limit=1` 只回 seq 最大的那条且仍按升序；`limit=0` → 400（契约边界拦在参数校验层）。
+   用例末尾**停演**——本类硬约束「同一时刻至多一场演习」，留下进行中的场次会让同类
+   其他用例的「开演前无演习」前置断言失败。
+
+**种行方式**：夹具 `seedLog` 直插 `t_exercise_log` 后以 `MAX(seq)` 读回。
+本用例只验 HTTP 接线与游标口径，「谁在何时写日志」由服务层与其调用方覆盖；
+用例串行执行，不存在与别场的并发插入。
+
+### 20.3 边界与不变式
+
+**未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
+在线窗口（5000ms）、校验算法、`scds-solver` 全部算法一行未改；协议 `LogType` 未新增值；
+不改历史迁移、不开启 out-of-order。本段**未新增错误码**（复用既有 `VALIDATION_FAILED`）。
+
+**只读**：本端点不写 `t_exercise_log`、不写 `t_exercise_command`、不发字节。
+
+本段为**代码验收**，不是生产发布批准。
+

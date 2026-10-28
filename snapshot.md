@@ -1,10 +1,11 @@
 # scds-next 交接快照
 
-> 更新：2026-10-27，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M3 CAL-2 UWB 中心基准校准（标定本体）已交付**——代码、测试与文档均已提交为三笔
-> 本地提交（`c503a06` / `88377be` / `ceb2698`），但**推送因 GitHub 443 连接超时未成功**，远端仍为 `07ce6cc`。
-> 最新全量 `mvn test` **1077 项，失败/错误/跳过均 0**（见 testing 第 15~18 节）。
-> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~18 节冲突处，以该处为准。
+> 更新：2026-10-28，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
+> 当前任务：**M4 读侧「当前演习日志流水」`GET /api/v1/exercise/current/logs` 已交付**
+> （testing 第 20 节）——连同此前的 `moveVest` 三段，改动仍在工作树、**未提交**（等当次授权）；
+> 本地 HEAD `71bb579`（CAL-2c 四笔本地提交仍未入远端）。
+> 最新全量 `mvn test` **1087 项，失败/错误/跳过均 0**（见 testing 第 15~20 节）。
+> 下文 2026-10-21 的部分保留为历史，凡与 testing 第 12~20 节冲突处，以该处为准。
 
 ## 1. 从这里继续
 
@@ -19,25 +20,27 @@ HTTP/WS唯一契约入口是 [openapi.yaml](docs/api/openapi.yaml)。
 M2 PLAN（想定与编成、导入导出）、M2 MAP-BASE（底图 CRUD / 图片 / 楼层点位）、
 M3 LIFE（开停演与恢复门禁、单实例保护）、M3 STATE（态势状态机与读侧）、
 M4 PUSH-WS（判据 1~9、背压与保活）、M4 DEVICE-SELF、M4 T-STOP（停机释放链路）、
-**M3 COMMAND MR-1 + MR-2 + MR-3**、**M3 CAL-1（UWB 室内解算链路）**，以及
-**M3 CAL-2（UWB 中心基准校准：CAL-2a 状态机 / CAL-2b 端点接线 / CAL-2c V11 + 端到端）**。
+**M3 COMMAND MR-1 + MR-2 + MR-3 + 第 8 条 `moveVest`**、**M3 CAL-1（UWB 室内解算链路）**，
+**M3 CAL-2（UWB 中心基准校准：CAL-2a 状态机 / CAL-2b 端点接线 / CAL-2c V11 + 端到端）**，以及
+**M4 读侧「当前演习日志流水」`GET /api/v1/exercise/current/logs`**。
 
-下一原子任务的候选（详见 testing 第 18 节与第 3 节矩阵）：COMMAND 剩余的 `move`（等地图置位
-写入口）；M5 EXPORT（replay 导出，仍 501）；`getVestLink` 仍 501；CAL-2 的**现场验收**
-（`calibrated_at` 可读性、50mm 静止阈值是否适配现场噪声）；Flutter 客户端（Android 单兵端 /
-Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，不照搬本快照的瞬时结论。
-提交/推送仍须当次授权；含 CAL-2c 在内的本轮改动仍在工作树、未提交，网络失败时不得写成已入远端。
+下一原子任务的候选（详见 testing 第 19、20 节与第 3 节矩阵）：`getVestLink` 1 条仍 501
+（需先补 STATE 侧每马甲计数，多段改动）；`ReplayController` 全 7 条仍 501（replay 读侧 4 + 导出 3，
+属 M5）；CAL-2 的**现场验收**（`calibrated_at` 可读性、50mm 静止阈值是否适配现场噪声）；
+Flutter 客户端（Android 单兵端 / Windows 指挥端）尚无工程。启动前须重新核查仓库与环境，
+不照搬本快照的瞬时结论。提交/推送仍须当次授权；`moveVest` 三段与本节读侧改动仍在工作树、
+未提交，网络失败时不得写成已入远端。
 
 ## 2. Git与工作树
 
 | 项 | 当前状态 |
 |---|---|
 | 分支 | main |
-| 源码本地HEAD | `ceb2698`（CAL-2c 第三笔，docs）**仅在本机** |
-| 实际远端main | 仍是 `07ce6cc`（CAL-2b 第二笔）；本轮三笔提交推送失败：连续 3 次 `git -c http.version=HTTP/1.1 push` 均在 ~21s 后 `Failed to connect to github.com:443`（连接超时，非认证问题），已停止重试 |
+| 源码本地HEAD | `71bb579`（CAL-2c 第四笔，docs 如实记录推送失败）**仅在本机** |
+| 实际远端main | 仍是 `07ce6cc`（CAL-2b 第二笔）；本轮四笔提交推送失败：连续 3 次 `git -c http.version=HTTP/1.1 push` 均在 ~21s 后 `Failed to connect to github.com:443`（连接超时，非认证问题），已停止重试 |
 | 已推送 | `880ae1b`（feat 标定状态机）、`15334f1`（feat 采样接入写手线程）、`6a3da21`（feat 链路未开拒绝码）、`07ce6cc`（feat 标定三端点接线），以及更早的 CAL-1 系列与 MR-1~MR-3 |
-| 未推送（仅本机） | `c503a06`（feat V11 校准列 + saveUwbMeta 落库）、`88377be`（test CAL-2 端到端 + 两处迁移清单守卫）、`ceb2698`（docs CAL-2 口径/证据/快照）；三笔按功能分开，可原样推送 |
-| 本轮继续成果 | CAL-2c 全部内容（迁移 `V11__map_calibration.sql` + core 仓储/服务 + app 端到端 IT + 5 份文档）已提交；工作树干净；合入后全量 `mvn test` 1077 项全绿 |
+| 未推送（仅本机） | `c503a06`（feat V11 校准列 + saveUwbMeta 落库）、`88377be`（test CAL-2 端到端 + 两处迁移清单守卫）、`ceb2698`（docs CAL-2 口径/证据/快照）、`71bb579`（docs 推送失败记录）；四笔按功能分开，可原样推送 |
+| 本轮继续成果 | `moveVest` 三段（core 写入口 + 楼层点位读取 + 端点接线与端到端）与 **M4 读侧「当前演习日志流水」**（core 读原语 `currentLogs` + `ExerciseController` 接线 + app 端到端）**仍在工作树、未提交**：共 19 个改动文件（`moveVest` 16 + 读侧 3，其中 `testing.md`/`snapshot.md` 各含两部分改动）；全量 `mvn test` **1087 项**全绿；等提交/推送授权 |
 | 凭据 | 开发.env未修改；新.env.test为独立owner-only测试凭据，两者均忽略，禁止打印或提交 |
 
 网络失败时只保留本地提交、如实报告，不重写历史、不 force push；提交/推送须逐次授权，
@@ -76,9 +79,24 @@ CAL-1c 在 `scds-app` 的 `SituationStateIT` 以真 Spring 装配 + 真库底图
 `t_map` 加 `calibrated_at DATETIME(3) NULL`，由 `MapLedgerService.saveUwbMeta` 与 `uwb_meta`
 同一次写入落库；`SituationStateService.applyUwb` 里 `calibration.onFrame` **刻意早于**编成判定，
 使标定能在**开演之前**采到帧。
-未完成：COMMAND 的 `move`（手动置位，等地图置位写入口）；`getVestLink` 仍 501；
-M5 EXPORT（replay 导出）仍 501；
-replay / file / map 其余业务方法按 testing 第 3 节矩阵推进。
+新增已完成（**M3 COMMAND 第 8 条 `moveVest` 手动置位**，分三步：写入口 / 楼层点位读取 / 端点接线与端到端）：
+`StateEvent.ManualPosition` + `SituationStateService.moveVest/applyManualPosition`（唯一写手线程
+`scds-state-writer` 上改坐标，`PositionSource.MANUAL`、`CoordinateSystem.INDOOR`，阵亡不绕冻结）；
+`MapLedgerService.floorPoint`（楼层点位表冻结 JSON → `(xPct,yPct)`，多种 miss 折叠成空 `Optional`）；
+`CommandService.moveVest` 判语境与取坐标、`CommandController` 端点去 501；新增两码
+`COMMAND_MOVE_FORBIDDEN`（403，正式演习禁止手动置位，与 `AUTH_FORBIDDEN` 分属两件事）与
+`MAP_FLOOR_POINT_NOT_FOUND`（404，「图在、点位表里没这个点」）。**不发字节、不落
+`t_exercise_command`、不写 `t_exercise_log`**（协议 `LogType` 无 `MOVE` 且已冻结）。
+新增已完成（**M4 读侧「当前演习日志流水」`GET /api/v1/exercise/current/logs`**，三段合一）：
+`ExerciseLifecycleService.currentLogs`（`sinceSeq` 为 null 走 `findLatest` 取最新一页、非 null 走
+`findByExerciseIdSince`；`t_exercise_log.seq` 全局自增，故换场次游标不回退）、
+`ExerciseController.listCurrentExerciseLogs` 去 501 并新增 `toLogEntry` 映射（两侧
+`ExerciseLogEntry` 同名不同形状）、`ExerciseLifecycleHttpIT` +1 端到端；**无演习进行中返回
+200 + 空页**（契约此端点无 404），`limit` 按契约 1..500 拦在参数校验层。详见 testing 第 20 节。
+未完成：全仓仍抛 501 的只剩 8 条——`DeviceController.getVestLink` 1 条，与 `ReplayController`
+全 7 条（`listReplays` / `getReplay` / `getReplayTimeline` / `getReplayStatistics` / `exportReplay` /
+`getExportTask` / `downloadExport`）；
+file / map 其余业务方法按 testing 第 3 节矩阵推进。
 Flutter工程尚无（Android 单兵端 / Windows 指挥端均未开工）。
 
 实际版本为Java21、Spring Boot **3.5.7**、MySQL本机8.4.11；
@@ -88,11 +106,17 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn test`：2026-10-27，**1077项，失败/错误/跳过均0**：
-protocol19 + gateway49 + core548 + api139 + app322（solver/domain无测试）。
-本段新增证据为 CAL-2（标定本体）共 3 段：core `UwbCalibrationServiceTest` 18 +
+**当前**全量`mvn test`：2026-10-28，**1087项，失败/错误/跳过均0**：
+protocol19 + gateway49 + core555 + api139 + app325（solver/domain无测试）。
+计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）取值；按 `target/surefire-reports/TEST-*.xml`
+累加会少 core 的 21 项（`@Nested` 内部类如 `TrackSamplingTest$Sampler`/`$Writer` 不落在外层类 XML 里），
+口径说明见 testing 第 20 节。
+M4 读侧「当前演习日志流水」新增证据：app `ExerciseLifecycleHttpIT` +1（原 2 → 3），详见 testing 第 20 节；
+本段新增证据为 `moveVest`（手动置位）三段：core `SituationStateServiceTest` +4、
+`MapLedgerServiceIT` +3，app `CommandHttpIT` +2（原 4 → 6），详见 testing 第 19 节；
+CAL-2 的证据见第 18 节：core `UwbCalibrationServiceTest` 18 +
 `BaseMapRepositoryIT` +2（CAL-2a/2c），app `MapBaseHttpIT` +1 与 `SituationStateIT` +1
-（CAL-2b/2c，真装配 + 真库底图 + 真成帧器端到端），详见 testing 第 18 节；
+（CAL-2b/2c，真装配 + 真库底图 + 真成帧器端到端）；
 CAL-1 的证据见第 17 节（core `IndoorPositionResolverTest` 12 + `SituationStateServiceTest` +4 +
 `SituationSessionBinderTest` +2，app `SituationStateIT` +2）；
 MR-3 的证据是 `ExerciseCommandExpiryTaskIT` 6 例，详见 testing 第 16 节；
@@ -118,7 +142,7 @@ API骨架使用standalone且只断言非404，不能证明真实Security或业�
 | R05 | signing=false时无token账号login返回401，目标404 |
 | R06 | 设备登录已按 D02 接线为**边缘本地签发**；只验签实例上该端点仍注册并抛500，是否改为条件注册属独立决策 |
 | R07 | **已闭合**：DeviceAuthService、SID单端在线与换绑清SID已实现；`device/me` 已接线，见 testing 第 13 节 |
-| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线（UWB 标定三端点已于 CAL-2 接线）；仅 `move`、`getVestLink` 与 replay 导出仍 501 |
+| R08 | **已闭合**：auth/device/exercise/command/situation/map/plan 业务方法均已接线（UWB 标定三端点已于 CAL-2 接线，COMMAND 第 8 条 `move` 与本轮「当前演习日志流水」均已接线）；仅 `getVestLink` 与 `ReplayController` 全 7 条仍 501 |
 
 R05 仍未修复；R06 的只验签分支待决策。R23数据库隔离子任务已完成；
 R18-R28其他风险仍待对应工作包验证。
@@ -187,6 +211,15 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 新增错误码 `DEVICE_LINK_NOT_OPEN`（409，只认 `LinkState.OPEN`）；
 `UwbCalibrationRequest.bs1ToBs3Cm` **保留契约字段名**（字面 bs1→bs3 是对角线），语义按描述解释为**宽度**。
 
+2026-10-28新增已确认（M3 COMMAND 第 8 条 `moveVest` 手动置位，见 testing 第 19 节）：
+403 判据为**本场 `BattleMode.BATTLE`**（新码 `COMMAND_MOVE_FORBIDDEN`，语义是「这场演习的模式不允许」，
+与 `AUTH_FORBIDDEN` 的「角色/权限不足」分工，不复用后者）；坐标**只能**取自
+本场底图的楼层点位表（未绑图 → 404 `MAP_NOT_FOUND`，图在但没这个点 → 404 `MAP_FLOOR_POINT_NOT_FOUND`，
+点位表内部的多种 miss 折叠成同一个码）；**写入口只投事件**，
+坐标由唯一写手线程写入（`PositionSource.MANUAL`），阵亡不绕冻结；
+**不发字节、不落队列、不写审计**（回执 `downlinkHex` 恒 null，协议 `LogType` 无 `MOVE`）；
+`accepted=false` 仅当态势侧已停止接收；`CommandService.moveVest` 不记操作员审计（控制器不加 `Jwt` 入参）。
+
 待确认：只验签实例的设备签发能力；权限与单兵可见性；UWB SERIAL/启停；
 容量、文件保留及RPO/RTO；`t_anchor` 与 `t_map.uwb_meta` 双源如何统一、
 “在建底图”定义及 `DIE` 在台账层的表示。不得默认同意推荐方案。
@@ -221,8 +254,11 @@ logout无请求体，撤账号全部refresh；access无主动撤销。
 
 未执行完整OpenAPI专业lint；未验证协议未来Git检出字节、物理硬件、Flutter或生产。
 链接目标存在不等于所有业务说明已通过验收；后续实现必须同步文档与真实测试证据。
-最新证据：M3 CAL-2（标定本体，含 CAL-2c）详见 testing 第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
+最新证据：M4 读侧「当前演习日志流水」（`listCurrentExerciseLogs`）详见 testing 第 20 节；
+M3 COMMAND 第 8 条 `moveVest`（手动置位）详见 testing 第 19 节；
+M3 CAL-2（标定本体，含 CAL-2c）详见第 18 节；M3 CAL-1（含 CAL-1c）详见第 17 节；
 COMMAND MR-3 详见第 16 节、MR-1/MR-2 详见第 15 节；
 T-STOP 详见第 14 节；DEVICE-SELF 详见第 13 节；M2 LEDGER 详见第 12 节；TEST-01 全量应用启动详见第 11 节。
-本快照已同步 1077 项测试、M3 CAL-2 交付（代码与文档已就位、待授权提交）与下一任务候选（`move` / EXPORT / Flutter），
+本快照已同步 1087 项测试、`moveVest` 与 M4 读侧日志流水交付（代码与文档已就位、**待授权提交**）
+与下一任务候选（`getVestLink` / REPLAY 全 7 条 / Flutter），
 不要求重做已完成 SEC/ERR/AUTH/LEDGER/PLAN/MAP-BASE/LIFE/STATE/PUSH/DEVICE-SELF/T-STOP/COMMAND/CAL-1/CAL-2。
