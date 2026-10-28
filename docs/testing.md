@@ -12,7 +12,7 @@
 > M5 REPLAY R1 复盘读侧（`listReplays` / `getReplay`）与1104项全量结果见第23节；
 > R2 轨迹分片（`getReplayTimeline`）与1112项全量结果见第24节；
 > R3 统计（`getReplayStatistics`）与1120项全量结果见第25节；
-> R4 导出与下载（`exportReplay` / `getExportTask` / `downloadExport`）与1136项全量结果见第26节。
+> R4 导出与下载（`exportReplay` / `getExportTask` / `downloadExport`）与1138项全量结果见第26节。
 
 ## 1. 本次自动化结果
 
@@ -1672,9 +1672,9 @@ IT 只跑隔离库 `scds_next_test`（`full-startup-test` profile + `.env.test`�
 | gateway | 49 | 0/0/0 | 未改动 |
 | core | 603 | 0/0/0 | 新增 `ExportTaskServiceIT` 16 条（587 → 603） |
 | api | 139 | 0/0/0 | 计数不变：`ApiSkeletonSmokeIT` 换替身/构造/路由值，`ApiExceptionHandlerBusinessTest` 换绊线码 |
-| app | 326 | 0/0/0 | 计数不变：`RoleWritePermissionIT` 补一个替身 Bean，`MvcProblemIT` 换绊线码 |
+| app | 328 | 0/0/0 | 新增 `ReplayExportHttpIT` 2 条（326 → 328）；`RoleWritePermissionIT` 补替身 Bean，`MvcProblemIT` 换绊线码 |
 | solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
-| 总计 | **1136** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
+| 总计 | **1138** | **0/0/0** | 全 reactor SUCCESS，`mvn_exit=0` |
 
 > 计数口径同第 20~25 节：按 Maven **模块级汇总**（`[INFO] Tests run:`）取值，
 > 按 `target/surefire-reports/TEST-*.xml` 累加会漏掉 `@Nested` 内部类。
@@ -1767,6 +1767,29 @@ app（`MvcProblemIT`，27 条，计数不变）：同源改动——`businessUnr
 app（`RoleWritePermissionIT`，65 条，计数不变）：`ReplayController` 构造需 `ExportTaskService`，
 测试上下文补一个 `stub(ExportTaskService.class)` Bean。
 
+app（`ReplayExportHttpIT`，新增 2 条，全走真 Boot + 真安全链 + 真 MySQL + 真落盘，
+落盘隔离用 `MapPropertySource` 覆写 `scds.files.root` 到 `target/replay-export-http-files/{uuid}`；
+**不**直接调 `tick()`，靠应用自己的 `@Scheduled` 执行器推进以证明端到端）：
+
+17. `xlsxExportOverRealHttp`——开演 → 停演（得到复盘）→ 进行中受理/详情都是 404 `REPLAY_NOT_FOUND`
+    → 停演后受理 202（PENDING、`fileName`/`downloadUrl`/`expireAt`/`errorMessage` 全 null）
+    → 等执行器渲染到 SUCCEEDED（`progressPct=100`、`fileName` 以 `.xlsx` 结尾、`expireAt` 在未来、
+    `downloadUrl` 以 `/api/v1/files?path=` 开头且含 `&exp=`/`&signature=`）
+    → 带 Bearer 下载 200、`Content-Type` 为 xlsx、`Content-Disposition` 为 `attachment` 且含文件名、
+    正文以 `PK\x03\x04` 开头；同一 `expireAt` 在两次查询间**定值**
+    → 用 `downloadUrl` **免 Bearer** 取回**同一份字节**且 `Content-Type` 为 `application/octet-stream`
+    （两条通道按不同口径判型：按域路由看后缀、签名路由嗅真实字节）
+    → 签名篡改 403 `FILE_URL_INVALID`、两条导出路由不带 Bearer 都是 401。
+18. `csvExpiryAndFailureOverRealHttp`——CSV 产物 `Content-Type` 为 `text/csv` 且以 UTF-8 BOM 开头；
+    把 `expire_at` 拨到过去后下载 409 `REPLAY_EXPORT_FAILED`；
+    受理后删掉复盘行 → 任务落 FAILED（`errorMessage` 含 `REPLAY_NOT_FOUND`），查询仍 200 而**下载**才 409；
+    拿另一条复盘的 id 查本任务 → 404（不串场次）；不存在的 taskId / 非 UUID 的 taskId / 不存在的复盘
+    一律 404 `REPLAY_NOT_FOUND`；缺 `format` 与枚举外的 `format` 都是 400 `VALIDATION_FAILED`。
+
+> 第 17 条**刻意不断言「二次受理合并到同一 taskId」**：应用内的 `@Scheduled` 可能恰在这两次请求之间
+> 把首个任务推到 SUCCEEDED，此后「再受理」本就该是一条新任务，断言相等会变成靠运气的用例；
+> 合并语义的确定性验证在 core 的 `ExportTaskServiceIT.request_secondCallMergesIntoTheActiveTask`。
+
 ### 26.3 边界与不变式
 
 **未改动的硬约束**：协议冻结字节、端口号（HTTP 11001 / UWB TCP 12001）、轮询周期（200ms）、
@@ -1778,9 +1801,10 @@ app（`RoleWritePermissionIT`，65 条，计数不变）：`ReplayController` �
 该码与 `REPLAY_NOT_FOUND` 早在 R1/R2 时已登记在 `ApiErrorCode` 与 `common.yaml` 的 `Problem.code` 描述里，
 **未改 openapi、未新增码**。
 
-**未交付边界**：R4 的三端点仅有 `ApiSkeletonSmokeIT`（路由注册）与 `ExportTaskServiceIT`（服务层）覆盖；
-**HTTP 端到端**（真 Boot + 真安全链 + 真落盘 + 签名 URL 取回）尚未有 `scds-app` 层用例——留作独立工作包，
-不得把本段的「服务层绿」当作「HTTP 闭环已验」。
+**端到端覆盖已补齐**：R4 的三端点既有 `ApiSkeletonSmokeIT`（路由注册）与 `ExportTaskServiceIT`（服务层），
+也有 `ReplayExportHttpIT`（真 Boot + 真安全链 + 真落盘 + 签名 URL 取回）。**仍未覆盖**的是
+`downloadUrl` 的**签名本身过期**（本段只验了产物 TTL 过期与签名被篡改两条，
+签名窗口到期的处置动作与「篡改」同为 403 `FILE_URL_INVALID`，由 core 的 `HmacFileUrlSignerTest` 覆盖）。
 
 本段为**代码验收**，不是生产发布批准。
 
