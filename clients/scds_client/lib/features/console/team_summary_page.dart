@@ -10,6 +10,9 @@ const Key kTeamSummaryRefreshCountKey = Key('teamSummary.refreshCount');
 const Key kTeamSummaryErrorKey = Key('teamSummary.error');
 const Key kTeamSummaryEmptyKey = Key('teamSummary.empty');
 
+/// 段 6 新增：进入「账号与会话」页的入口（未注入回调时整块不渲染）。
+const Key kTeamSummaryAccountEntryKey = Key('teamSummary.accountEntry');
+
 /// 按队伍取行键（`TeamSummary` 每队一行）。
 Key teamSummaryRowKey(Team team) => Key('teamSummary.row.${team.wire}');
 
@@ -33,6 +36,7 @@ class TeamSummaryPage extends StatefulWidget {
     required this.session,
     required this.fetch,
     this.interval = kTeamSummaryPollInterval,
+    this.onOpenAccount,
   });
 
   /// 已登录的账号会话（提供 `accessToken` 与身份快照）。
@@ -43,6 +47,9 @@ class TeamSummaryPage extends StatefulWidget {
 
   /// 轮询周期；默认 [kTeamSummaryPollInterval]。
   final Duration interval;
+
+  /// 段 6 新增：打开「账号与会话」页；为 `null` 时不渲染入口。
+  final VoidCallback? onOpenAccount;
 
   @override
   State<TeamSummaryPage> createState() => _TeamSummaryPageState();
@@ -69,7 +76,17 @@ class _TeamSummaryPageState extends State<TeamSummaryPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('队伍汇总')),
+      appBar: AppBar(
+        title: const Text('队伍汇总'),
+        actions: <Widget>[
+          if (widget.onOpenAccount != null)
+            TextButton(
+              key: kTeamSummaryAccountEntryKey,
+              onPressed: widget.onOpenAccount,
+              child: const Text('账号'),
+            ),
+        ],
+      ),
       body: SafeArea(
         child: ListenableBuilder(
           listenable: _poller,

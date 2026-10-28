@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:scds_client/app/console_app.dart';
 import 'package:scds_client/features/connection/connection_page.dart';
+import 'package:scds_client/features/console/account_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
@@ -68,11 +69,21 @@ void main() {
   AccountSession accountSession({
     String username = 'admin',
     List<String> roles = const <String>['OPERATOR'],
+    List<String> permissions = const <String>[],
+    String accessToken = 'access-1',
+    String? refreshToken,
+    DateTime? expiresAt,
   }) =>
       AccountSession(
-        accessToken: 'access-1',
-        expiresAt: DateTime.utc(2026, 10, 29),
-        user: AuthUser(userId: 'u-1', username: username, roles: roles),
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        expiresAt: expiresAt ?? DateTime.utc(2026, 10, 29),
+        user: AuthUser(
+          userId: 'u-1',
+          username: username,
+          roles: roles,
+          permissions: permissions,
+        ),
       );
 
   Future<void> pumpLogin(
@@ -100,6 +111,54 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// 段 6：造一个契约形状的 `ApiException`（Problem 必填字段齐全）。
+  ApiException apiFailure(int statusCode, String code) => ApiException(
+        statusCode: statusCode,
+        problem: ApiProblem(
+          type: null,
+          title: null,
+          status: statusCode,
+          code: code,
+          detail: null,
+          instance: null,
+          traceId: 'trace-$code',
+        ),
+      );
+
+  Future<void> pumpAccount(
+    WidgetTester tester, {
+    AccountSession? session,
+    AccountRefresh? refresh,
+    AccountReload? reload,
+    AccountLogout? logout,
+    SessionClearing? clearSession,
+    VoidCallback? onLoggedOut,
+  }) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AccountPage(
+          session: session ?? accountSession(),
+          refresh: refresh ?? (AccountSession current) async => accountSession(),
+          reload: reload ??
+              (AccountSession current) async => AuthUser(
+                    userId: 'u-1',
+                    username: 'admin',
+                    roles: const <String>['OPERATOR'],
+                  ),
+          logout: logout ?? (AccountSession current) async {},
+          clearSession: clearSession ?? () async {},
+          onLoggedOut: onLoggedOut,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> tapAccountButton(WidgetTester tester, Key key) async {
+    await tester.tap(find.byKey(key));
+    await tester.pumpAndSettle();
+  }
+
   TeamSummary teamSummary(
     Team team, {
     int? total = 6,
@@ -121,6 +180,7 @@ void main() {
     WidgetTester tester,
     Future<List<TeamSummary>> Function() fetch, {
     Duration interval = const Duration(milliseconds: 200),
+    VoidCallback? onOpenAccount,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -128,6 +188,7 @@ void main() {
           session: accountSession(),
           fetch: fetch,
           interval: interval,
+          onOpenAccount: onOpenAccount,
         ),
       ),
     );
@@ -573,6 +634,327 @@ void main() {
       expect(find.text('等待首帧…'), findsOneWidget);
 
       await unmount(tester);
+    });
+
+    testWidgets('提供账号入口时点击触发回调', (WidgetTester tester) async {
+      bool opened = false;
+      await pumpSummary(
+        tester,
+        () async => const <TeamSummary>[],
+        onOpenAccount: () => opened = true,
+      );
+
+      expect(find.byKey(kTeamSummaryAccountEntryKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kTeamSummaryAccountEntryKey));
+      await tester.pump();
+
+      expect(opened, isTrue);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入账号入口时不渲染该入口', (WidgetTester tester) async {
+      await pumpSummary(tester, () async => const <TeamSummary>[]);
+
+      expect(find.byKey(kTeamSummaryAccountEntryKey), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  group('指挥端账号与会话页', () {
+    testWidgets('展示当前身份、到期时刻与权限', (WidgetTester tester) async {
+      await pumpAccount(
+        tester,
+        session: accountSession(
+          username: 'duty',
+          roles: const <String>['DIRECTOR'],
+          permissions: const <String>['situation.read'],
+        ),
+      );
+
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountIdentityKey)).data,
+        'duty（DIRECTOR）',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountExpiryKey)).data,
+        contains('令牌到期'),
+      );
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountPermissionsKey)).data,
+        '权限：situation.read',
+      );
+      expect(find.byKey(kConsoleAccountErrorKey), findsNothing);
+    });
+
+    testWidgets('已过期：只读提示已过期，不自动发起续期', (WidgetTester tester) async {
+      int refreshCalls = 0;
+      await pumpAccount(
+        tester,
+        session: accountSession(
+          refreshToken: 'refresh-1',
+          expiresAt: DateTime.utc(2020, 1, 1),
+        ),
+        refresh: (AccountSession current) async {
+          refreshCalls++;
+          return accountSession();
+        },
+      );
+
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountExpiryKey)).data,
+        contains('已过期'),
+      );
+      expect(refreshCalls, 0);
+      expect(find.byKey(kConsoleAccountNoticeKey), findsNothing);
+    });
+
+    testWidgets('续期成功：会话被整体替换并给出新到期提示', (WidgetTester tester) async {
+      final List<String> used = <String>[];
+      await pumpAccount(
+        tester,
+        session: accountSession(refreshToken: 'refresh-1'),
+        refresh: (AccountSession current) async {
+          used.add(current.refreshToken ?? '');
+          return accountSession(
+            accessToken: 'access-2',
+            refreshToken: 'refresh-2',
+            expiresAt: DateTime.utc(2026, 10, 30, 12),
+          );
+        },
+      );
+
+      await tapAccountButton(tester, kConsoleAccountRefreshButtonKey);
+
+      expect(used, <String>['refresh-1']);
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountExpiryKey)).data,
+        contains('2026-10-30'),
+      );
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountNoticeKey)).data,
+        contains('已续期'),
+      );
+      expect(find.byKey(kConsoleAccountRefreshProgressKey), findsNothing);
+    });
+
+    testWidgets('续期进行中再次点击：不重复调用，按钮禁用', (WidgetTester tester) async {
+      int refreshCalls = 0;
+      final Completer<AccountSession> pending = Completer<AccountSession>();
+      await pumpAccount(
+        tester,
+        session: accountSession(refreshToken: 'refresh-1'),
+        refresh: (AccountSession current) {
+          refreshCalls++;
+          return pending.future;
+        },
+      );
+
+      await tester.tap(find.byKey(kConsoleAccountRefreshButtonKey));
+      await tester.pump();
+
+      expect(find.byKey(kConsoleAccountRefreshProgressKey), findsOneWidget);
+      expect(
+        tester.widget<FilledButton>(find.byKey(kConsoleAccountRefreshButtonKey)).onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.byKey(kConsoleAccountRefreshButtonKey), warnIfMissed: false);
+      await tester.pump();
+      expect(refreshCalls, 1);
+
+      pending.complete(accountSession(accessToken: 'access-2'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kConsoleAccountRefreshProgressKey), findsNothing);
+    });
+
+    testWidgets('会话没有刷新令牌：行内提示，不发续期请求', (WidgetTester tester) async {
+      int refreshCalls = 0;
+      await pumpAccount(
+        tester,
+        session: accountSession(),
+        refresh: (AccountSession current) async {
+          refreshCalls++;
+          return accountSession();
+        },
+      );
+
+      await tapAccountButton(tester, kConsoleAccountRefreshButtonKey);
+
+      expect(refreshCalls, 0);
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountErrorKey)).data,
+        contains('没有刷新令牌'),
+      );
+    });
+
+    testWidgets('401 AUTH_TOKEN_EXPIRED：提示刷新令牌已过期', (WidgetTester tester) async {
+      await pumpAccount(
+        tester,
+        session: accountSession(refreshToken: 'refresh-1'),
+        refresh: (AccountSession current) async =>
+            throw apiFailure(401, ApiErrorCode.authTokenExpired),
+      );
+
+      await tapAccountButton(tester, kConsoleAccountRefreshButtonKey);
+
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountErrorKey)).data,
+        '刷新令牌已过期，请重新登录',
+      );
+      expect(find.byKey(kConsoleAccountNoticeKey), findsNothing);
+    });
+
+    testWidgets('401 AUTH_TOKEN_INVALID：提示刷新令牌无效或已被撤销', (WidgetTester tester) async {
+      await pumpAccount(
+        tester,
+        session: accountSession(refreshToken: 'refresh-1'),
+        refresh: (AccountSession current) async =>
+            throw apiFailure(401, ApiErrorCode.authTokenInvalid),
+      );
+
+      await tapAccountButton(tester, kConsoleAccountRefreshButtonKey);
+
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountErrorKey)).data,
+        contains('无效或已被撤销'),
+      );
+    });
+
+    testWidgets('续期网络异常：显示可读错误，不冒泡', (WidgetTester tester) async {
+      await pumpAccount(
+        tester,
+        session: accountSession(refreshToken: 'refresh-1'),
+        refresh: (AccountSession current) async => throw StateError('connection refused'),
+      );
+
+      await tapAccountButton(tester, kConsoleAccountRefreshButtonKey);
+
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountErrorKey)).data,
+        contains('续期失败'),
+      );
+    });
+
+    testWidgets('重新载入身份：展示 me 返回的账号与权限', (WidgetTester tester) async {
+      final List<String> tokens = <String>[];
+      await pumpAccount(
+        tester,
+        reload: (AccountSession current) async {
+          tokens.add(current.accessToken);
+          return AuthUser(
+            userId: 'u-1',
+            username: 'duty',
+            roles: const <String>['ADMIN'],
+            permissions: const <String>['plan.write'],
+          );
+        },
+      );
+
+      await tapAccountButton(tester, kConsoleAccountReloadButtonKey);
+
+      expect(tokens, <String>['access-1']);
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountIdentityKey)).data,
+        'duty（ADMIN）',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountPermissionsKey)).data,
+        '权限：plan.write',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountNoticeKey)).data,
+        contains('已重新载入身份'),
+      );
+    });
+
+    testWidgets('身份重载失败：行内给出可读错误', (WidgetTester tester) async {
+      await pumpAccount(
+        tester,
+        reload: (AccountSession current) async =>
+            throw apiFailure(401, ApiErrorCode.authTokenExpired),
+      );
+
+      await tapAccountButton(tester, kConsoleAccountReloadButtonKey);
+
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountErrorKey)).data,
+        '身份重载失败：${ApiErrorCode.authTokenExpired}',
+      );
+    });
+
+    testWidgets('退出成功：清本地会话并回登录页', (WidgetTester tester) async {
+      int cleared = 0;
+      int loggedOut = 0;
+      await pumpAccount(
+        tester,
+        logout: (AccountSession current) async {},
+        clearSession: () async {
+          cleared++;
+        },
+        onLoggedOut: () => loggedOut++,
+      );
+
+      await tapAccountButton(tester, kConsoleAccountLogoutButtonKey);
+
+      expect(cleared, 1);
+      expect(loggedOut, 1);
+      expect(find.byKey(kConsoleAccountErrorKey), findsNothing);
+      expect(find.byKey(kConsoleAccountSignedOutKey), findsNothing);
+    });
+
+    testWidgets('退出服务端未确认：仍清本地会话，留在本页，点返回登录才导航', (WidgetTester tester) async {
+      int cleared = 0;
+      int loggedOut = 0;
+      await pumpAccount(
+        tester,
+        logout: (AccountSession current) async =>
+            throw apiFailure(401, ApiErrorCode.authTokenInvalid),
+        clearSession: () async {
+          cleared++;
+        },
+        onLoggedOut: () => loggedOut++,
+      );
+
+      await tapAccountButton(tester, kConsoleAccountLogoutButtonKey);
+
+      expect(cleared, 1);
+      expect(loggedOut, 0);
+      expect(find.byKey(kConsoleAccountSignedOutKey), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountErrorKey)).data,
+        contains('服务端未确认，已本地退出'),
+      );
+      expect(find.byKey(kConsoleAccountLogoutButtonKey), findsNothing);
+
+      await tapAccountButton(tester, kConsoleAccountReturnButtonKey);
+
+      expect(loggedOut, 1);
+    });
+
+    testWidgets('退出网络异常：同样清本地会话并留在本页', (WidgetTester tester) async {
+      int cleared = 0;
+      int loggedOut = 0;
+      await pumpAccount(
+        tester,
+        logout: (AccountSession current) async => throw StateError('connection refused'),
+        clearSession: () async {
+          cleared++;
+        },
+        onLoggedOut: () => loggedOut++,
+      );
+
+      await tapAccountButton(tester, kConsoleAccountLogoutButtonKey);
+
+      expect(cleared, 1);
+      expect(loggedOut, 0);
+      expect(
+        tester.widget<Text>(find.byKey(kConsoleAccountErrorKey)).data,
+        contains('服务端未确认，已本地退出'),
+      );
     });
   });
 }

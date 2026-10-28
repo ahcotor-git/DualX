@@ -31,7 +31,7 @@ typedef AccountLogin = Future<AccountSession> Function({
 /// - 提交期间禁用按钮，避免并发顶替自己。
 ///
 /// 本页**不实现** refresh 滚动续期与 logout（`POST /auth/logout` 无请求体）——
-/// 属 M6 CLIENT-WINDOWS 的后续段，见 `snapshot.md` 的段 5 局限。
+/// 段 6 起改由 [AccountPage]（`features/console/account_page.dart`）承担。
 class ConsoleLoginPage extends StatefulWidget {
   const ConsoleLoginPage({super.key, required this.login, this.onLoggedIn});
 
