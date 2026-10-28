@@ -2904,3 +2904,60 @@ WS 子协议协商、`Authorization: Bearer` 握手、服务端 30s 无上行断
 **未验项**：本段只做 `flutter analyze` + `flutter test`（脚本化桩），**未对着真实后端实例跑过真实续期 / 真实会话终结**；
 指挥端「全体态势」页**尚未接 `SituationFeed`**（段 D 后半）；WS 握手与 `close 4000` 的真实行为仍未在真实实例上验证。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 44. M6 CLIENT-RESILIENCE 段 D（后半）：指挥端「全体态势」页接 `SituationFeed`（WS + 10s 兜底 Poll 双通道）
+
+段 D 前半只做了**认证接线**；本段把段 A/B 的态势状态机（[SituationCache](clients/scds_client/lib/shared/state/situation_cache.dart) 同源归并 +
+[SituationFeed](clients/scds_client/lib/shared/state/situation_feed.dart) 双通道调度）**接进指挥端页面**：
+新增「全体态势」页逐单元展示统一态势流，WS 为**主通道**、HTTP 为**兜底轮询**（WS 在线仍须 ≤10s，硬约束），
+两条通道谁先到都喂同一份缓存（陈旧 / 重复帧自然被丢）。页面**自建并持有** `SituationFeed`——
+与单兵端自身态势页持有 `PollingFeed` 同构，缓存随页面生灭、**不跨会话泄漏**。
+
+**入口与边界**：入口挂在「队伍汇总」页 AppBar（「全体态势」/「账号」两个动作）；本页**不发队伍汇总**
+（那是「队伍汇总」页的职责，且增量帧的 `teamSummary` **恒为空**，必须直读 `GET /situation/teams/summary`）。
+指挥端是**唯一**接线方：WS 握手**只认账号令牌**（[03-auth.md](design/03-auth.md) Q7 / §4.7），
+单兵端**不接**（`DeviceSession` 无 `refreshToken`、设备令牌连 WS 会被 `403`）。
+
+### 44.1 交付物（1 笔 = 4 文件，1 新 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/overall_situation_page.dart`(新) | 「全体态势」页 `OverallSituationPage`（**与单兵端 `SituationPage` 重名，故取 `Overall*` 前缀**）：`initState` 自建 `SituationFeed(fetch, connect)..start()`、`dispose` 释放；`ListenableBuilder` 读 `feed.cache.units`，展示账号 / **通道状态**（WS 已连 → 实时 + 兜底 ≤10s；未连 → 每 2s） / 计数（单元 / 拉取次数 / WS 帧） / `lastError` / 单元行；AppBar「重新同步」→ `feed.requestResync()` |
+| `lib/features/console/team_summary_page.dart`(改) | 新增 `onOpenSituation` 回调与 `kTeamSummarySituationEntryKey` 入口（**未注入回调时整块不渲染**，与 `onOpenAccount` 同口径） |
+| `lib/app/console_app.dart`(改) | 新增 `_openOverallSituation()`：`fetch` → 已认证的 `SituationApi.getSituation(token: _account!.accessToken, sinceRevision:)`；`connect` → `connectSituationSocket(baseUri: client.baseUri, accessToken: _account!.accessToken, sinceRevision:)`；两者**每次取用时读 `_account`**（续期换令牌后自动生效）；登录后把入口接到汇总页 |
+| `test/console_widget_test.dart`(改) | 新增 `group('指挥端全体态势页（RES-D 后半）')` **5 例** + 汇总页入口 **2 例**；新增假连接 `TestSituationSocket`（单订阅控制器）与假连接器 `TestSituationConnector`（`silent` 档返回**永不落地** future，把用例按在「WS 未连」档） |
+
+### 44.2 用例与判据（7 例）
+
+| 用例 | 判据 |
+|---|---|
+| 首帧前提示等待；首帧到达后展示账号、通道状态与各单元 | 首帧前「等待首帧…」且 **空列表不误报**为「没有单元」；首帧后按 `vestNum` 升序展示单元行、账号与计数；通道显示「WS 未连（每 2s）」 |
+| WS 连上：通道切为实时，且收到的 WS 帧**同源归并**进单元列表 | 通道显示「WS 已连」；首个连接**不带** `sinceRevision` 取全量；WS 增量帧（`revision 11 > 10`）并入缓存 → 单元数 1 → 2 |
+| 重新同步按钮：WS 已连时上行 `RESYNC` 帧并带本地 `revision` | 点击后上行**恰一帧** `{"action":"RESYNC","sinceRevision":10}` |
+| 拉取失败：显示可读错误，**保留陈旧单元数据** | WS 未连 → 2s 档下一拍失败；置错误文案但**不清空**上一次成功的单元（保陈旧，不空屏） |
+| **缓存隔离**：重开页面为新会话，首拉仍取全量且不残留上一会话的单元 | 重开一页 → 新的 `feed`/`SituationCache`：首个请求 **仍为全量**（`sinceRevision == null`）、且**不出现**上一会话的单元、处于「等待首帧…」 |
+| 汇总页「全体态势」入口：点击触发回调 | 注入回调时渲染入口、点击回调被调用一次 |
+| 汇总页未注入「全体态势」回调：不渲染该入口 | 入口 `findsNothing`（与「账号」入口同口径） |
+
+### 44.3 口径要点
+
+- **WS 不得替代 HTTP 兜底轮询**：本页直接复用段的双通道调度，WS 连上后 HTTP 切到 **10s 兜底档**（`wsPollFloor`），
+  未连时为 **2s 档**（`pollInterval`）——两条定时器互斥切换，页面**不另写**第二套轮询。
+- **同源归并、旧帧不覆盖新状态**：WS 帧与 HTTP 响应都是同一个 `SituationEnvelope`，都喂 `SituationCache.apply`；
+  判据落在「WS 增量帧并入后单元数增加」而非「某通道赢」——这是 WS 不得替代 Poll 的另一种表述。
+- **缓存不跨会话泄漏**：页面**自建** `feed` 并在 `dispose` 释放，缓存随页面生灭；重新打开即一份**新缓存**
+  （首拉仍全量、无残留单元），无需额外 `reset()` 调用——这是「页面自建」相对「外壳持有」的关键收益。
+- **每原子任务 ≤3 文件的例外**：本原子任务共 **4 文件**（1 新 3 改），按既往「无人值守可突破 ≤3 文件」的授权执行。
+- **单元行只做呈现**：状态取契约字面量（`LIVE`/`DIE`/`OFFLINE`），HP 缺失如实显示破折号（**不臆造 0**）。
+
+### 44.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**195 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + **段 D 后半 7**）；`flutter analyze` → `No issues found! (ran in 2.6s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**全量）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（测试只用 `dart:io` + `flutter_test`，假连接器**不建真实连接**）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（假连接器 / 假 `fetch`），**未对着真实后端实例**跑过真实 WS 握手、
+真实 `close 4000` 超窗重连或真实增量归并；`console_app` 的 WS 闭包（`connectSituationSocket` + `client.baseUri`）
+在**真实实例**上的连通性也未验证（app 级用例只覆盖到「入口回调」）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。

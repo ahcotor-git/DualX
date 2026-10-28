@@ -1597,10 +1597,30 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**。证据见 [testin
 **未验项**：**未对着真实后端实例跑过真实续期 / 真实会话终结**；指挥端「全体态势」页**尚未接 `SituationFeed`**（段 D 后半）；
 WS 握手与 `close 4000` 的真实行为仍未验证。证据见 [testing](testing.md) **第 43 节**。
 
-**再下一段（候选）**：CLIENT-RESILIENCE 段 D **后半**（「全体态势」页接 `SituationFeed`——WS + 10s 兜底 Poll 双通道、
-本地缓存 `SituationCache` 接线与缓存隔离验证）；CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）；T-PROD 部署；平台安全存储（Android Keystore /
+**再下一段（CLIENT-RESILIENCE 段 D 后半）落地**：用户当次裁定「**继续**」，并在本段动手前经决策点确认两处口径——
+「**页面自建 `SituationFeed`（推荐）**」（内容＝**单元 + 连接状态 + 重同步**，**不含**队伍汇总）。落 **一笔**（4 文件 / 1 新 3 改）：
+- `lib/features/console/overall_situation_page.dart`（新）：「全体态势」页 `OverallSituationPage`（**与单兵端 `SituationPage` 重名，故取 `Overall*` 前缀**）；
+  `initState` 自建 `SituationFeed(fetch, connect)..start()`、`dispose` 释放；读 `feed.cache.units` 逐单元展示，
+  显示**通道状态**（WS 已连 → 实时 + 兜底 ≤10s；未连 → 每 2s）/ 计数 / `lastError`；AppBar「重新同步」→ `feed.requestResync()`；
+- `lib/features/console/team_summary_page.dart`（改）：新增 `onOpenSituation` 入口（未注入回调时整块不渲染）；
+- `lib/app/console_app.dart`（改）：新增 `_openOverallSituation()`——`fetch` → `SituationApi.getSituation(token:)`，
+  `connect` → `connectSituationSocket(baseUri: client.baseUri, accessToken:)`，两者每次取用时读 `_account`；
+- `test/console_widget_test.dart`（改）：`group('指挥端全体态势页（RES-D 后半）')` **5 例** + 汇总页入口 **2 例**，
+  新增假连接 `TestSituationSocket` / 假连接器 `TestSituationConnector`（不建真实连接）。
+
+**口径要点**：**WS 不得替代 HTTP 兜底轮询**（WS 连上 → 10s 兜底档、未连 → 2s 档，两条定时器互斥）；
+**缓存不跨会话泄漏**由「页面自建 feed、缓存随页面生灭」达成（重开即新缓存：首拉仍全量、无残留单元，无需额外 `reset()`）；
+指挥端是**唯一**接线方（WS 握手只认账号令牌，单兵端不接）。本原子任务 **4 文件**，按「无人值守可突破 ≤3 文件」授权执行。
+
+门禁：`flutter test` → `All tests passed!`（**195 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + **段 D 后半 7**）、`flutter analyze` → `No issues found! (ran in 2.6s)`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实 WS 握手 / `close 4000` 超窗重连 / 真实增量归并；`console_app` 的 WS 闭包在真实实例上的连通性未验证。
+证据见 [testing](testing.md) **第 44 节**。
+
+**再下一段（候选）**：CLIENT-WINDOWS 续段（指令、地图/标定、想定、复盘导出）；T-PROD 部署；平台安全存储（Android Keystore /
 Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐
-**Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（段 5/6 经授权放宽，后续恢复默认）。
+**Windows 原生构建验收**。各段仍守「每原子任务 ≤3 文件」（段 5/6 与段 D 后半经授权放宽，后续恢复默认）。
 
 
 
