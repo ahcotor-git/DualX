@@ -3204,3 +3204,62 @@ CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水
 **未验项**：本段只做 `flutter analyze` + `flutter test`（本机 `HttpServer` 打桩），**未对着真实后端实例**跑过真实想定 CRUD /
 真实 multipart 导入 / 真实模板下载 / 真实开演停演（真实 409 拦截链、真实 XLSX 字节、真实整文件校验未验证）。
 本段为**共享层契约验收**，不是生产发布批准；**UI 接线尚未落地**（想定管理页 / 开停演入口另开段）。
+
+## 49. M6 CLIENT-WINDOWS 续段（UI 接线）：exercise 域写端点——想定管理页（列表 / 新建 / 编辑 / 删除）
+
+承段 48「UI 接线另开段」，本段把 exercise 域的**想定子域**读/写端点接到指挥端 UI，并把 `ExerciseApi` 装进外壳。
+范围仅 **`/plans` 四端点**（`listPlans` / `createPlan` / `updatePlan` / `deletePlan`）；**编成编辑与开演/停演**、
+以及**模板下载 / multipart 导入**（需文件落盘与选文件依赖决策）**另开段**。
+
+### 49.1 交付物（1 笔 = 5 文件，1 新 + 4 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/plan_manager_page.dart`(新) | 想定管理页 `PlanManagerPage`：关键字搜索 + 列表 + 刷新 + 悬浮「新建」；新建 / 编辑共用 `_PlanFormDialog`（编辑**以服务端快照预填**）；删除二次确认；四个端口 typedef `PlanLister`/`PlanCreator`/`PlanUpdater`/`PlanRemover`；`_guard` 单飞 + `_describeFailure` 错误码映射 |
+| `lib/features/console/team_summary_page.dart`(改) | 新增可选端口 `onOpenPlans` 与入口键 `kTeamSummaryPlansEntryKey`（AppBar「想定」；为 `null` 时**整块不渲染**，既有只读用例渲染不变） |
+| `lib/app/console_app.dart`(改) | `onConnected` 装配 `ExerciseApi(transport)`；新增 `_openPlans(...)`——四端口闭包**每次取用读 `_account!.accessToken`**；`TeamSummaryPage` 接 `onOpenPlans` |
+| `lib/shared/api/exercise_api.dart`(改) | `startExercise` 文档注释订正：404 `PLAN_NOT_FOUND` → **`EXERCISE_PLAN_NOT_FOUND`**（与 §48 已订正的 docs 对齐；**仅注释，无行为变更**） |
+| `test/console_widget_test.dart`(改) | 新增 2 组共 **9 例**（想定管理页 7 + 指挥端想定管理接线 2）；新增 `planOf` / `planPageOf` / `pumpPlans` 助手 |
+
+### 49.2 用例与判据（新增 9 例）
+
+| 用例 | 判据 |
+|---|---|
+| 加载想定列表 | 首帧 `list(keyword: null)`（服务端「列出全部」口径）；账号文本 `admin（OPERATOR）`；空列表渲染 `kPlanManagerEmptyKey` |
+| 行文本 + 关键字搜索 | 行文本 `红方突袭｜模式 BATTLE｜底图 m-1｜编成 3`（可选字段缺失显示 `—`，不臆造 0）；输入 `" 红方 "` 搜索 → 第二次 `keyword == '红方'`（两侧空白被裁剪） |
+| 新建想定 | 表单 `name` 去空白后提交；请求体 `toJson()` 恰为 **全 4 键** `{name, mapId: null, battleMode: 'TRAIN', remark: null}`；成功后重拉列表并给回执 `已新建想定「新想定」` |
+| 编辑想定（整体替换回归） | 对话框三个 `TextField.controller.text` 等于服务端快照（`旧名` / `m-1` / `备注`）；**仅改名字**仍提交全 4 键 `{name:'新名', mapId:'m-1', battleMode:'BATTLE', remark:'备注'}` |
+| 想定名非法 | 名称为空白 → **不发请求**、对话框保留（`kPlanFormSaveKey` 仍在）、行内 `kPlanFormErrorKey` 出现 |
+| 删除想定 | 确认后 `remove('p-1')` 恰一次；列表重拉（`list` 调用数 `2` = 首帧 + 写后重拉）；回执 `已删除想定「红方突袭」` |
+| 契约错误码映射 | 409 `PLAN_IN_USE` → 页面顶部文案含「正在演习中」（不冒泡成红屏） |
+| 接线（从汇总页进入） | 队伍汇总页点「想定」→ `PlanManagerPage` 挂树；请求序列 `login → situation/teams/summary → GET /api/v1/plans`；列表请求带 `Authorization: Bearer access-1`；行文本含想定名 |
+| 未注入入口 | 未注入 `onOpenPlans` 时队伍汇总页**不渲染** `kTeamSummaryPlansEntryKey` |
+
+### 49.3 口径要点
+
+- **「整体替换」在 UI 层的兜底是「快照预填」**：`PUT /plans/{id}` 是整体替换（`PlanUpsertRequest.toJson()` 显式输出全 4 键，
+  `null` 即置空）。故编辑对话框**必须**以服务端回传的 `Plan` 快照预填，否则「只改想定名」会把 `mapId` / `remark` 一并置空。
+  这是段 48 遗留口径（`ExerciseController#draft` 把在场但为 null 的字段也当 `null` 落库）在 UI 层的落地，用例 4 即其回归判据。
+- **底图 / 备注留空 = 置 `null`**（解绑底图 / 清空备注），是**有意**的替换语义，不是缺省——表单标签已写明「留空即不绑定」。
+- **写后重拉列表**：写端点返回体只在契约层用，页面**不把它并进列表状态**，而是重拉 `GET /plans`；`_guard` 保证写与读**单飞**
+  （在途时按钮禁用），避免重复新建 / 重复删除。
+- **命名避让**：契约模型已有 `PlanPage`（分页结果），页面类故命名 **`PlanManagerPage`**，避免与模型同名冲突（同名会迫使调用方加前缀）。
+- **端口全闭包**：`_openPlans` 的四个端口都**每次取用读 `_account!.accessToken`**（续期换令牌后自动生效），且全部经同一条
+  `RefreshingApiTransport`——401 到期**自动续期并重试一次**，页面无需自管令牌或合并续期结果。
+- **入口可选注入**：`TeamSummaryPage.onOpenPlans` 为 `null` 时整块不渲染，与既有 `onOpenAccount` / `onOpenSituation` 同构，
+  既有只读用例渲染与行为**完全不变**。
+
+### 49.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**253 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + **本段 9**）；
+  `flutter analyze` → `No issues found! (ran in 3.9s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 5 文件**（1 新 + 4 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩），**未对着真实后端实例**跑过真实想定 CRUD
+（真实分页、真实 `PLAN_IN_USE` 拦截、真实唯一性 / 长度校验未验证）；集成层（`ExerciseApi` + 真实 `ApiClient` + 真实 HTTP）
+**未走通**；**模板下载 / multipart 导入**（需文件落盘与选文件依赖决策）、**编成编辑**与**开演/停演入口**的 UI **尚未接线**，另开段。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。

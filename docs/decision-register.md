@@ -1730,10 +1730,43 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 **未验项**：**未对着真实后端实例**跑真实想定 CRUD / 真实 multipart 导入 / 真实模板下载 / 真实开演停演（真实 409 拦截链、
 真实 XLSX 字节、真实整文件校验未验证）；**UI 尚未接线**（想定管理页 / 开停演入口另开段）。证据见 [testing](testing.md) **第 48 节**。
 
-**下一段（候选）**：CLIENT-WINDOWS 其余子域（想定管理页与开停演入口 —— exercise 域写端点 UI 接线；地图与标定 map 域；
-复盘与导出 replay 域；device 台账与链路域）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
-平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
-安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。后续恢复默认「每原子任务 ≤3 文件」。
+**下一段（CLIENT-WINDOWS 续段·UI 接线）落地**：承上段「**UI 接线另开段**」，本段把 exercise 域写端点里的
+`/plans` 四端点接进指挥端 UI——新增**想定管理页**（列表 / 新建 / 编辑 / 删除），**编成编辑、开演 / 停演入口、
+模板下载 / multipart 导入另开段**。落**一笔**（**5 文件 / 1 新 4 改**，**破「每原子任务 ≤3 文件」上限**，
+按无人值守授权**显式声明例外**）：
+- `lib/features/console/plan_manager_page.dart`（**新**）：`PlanManagerPage`（页面类命名**避让**契约模型
+  `PlanPage`）+ `_PlanFormDialog`；控件键族 `kPlanManager*` / `planManagerRowKey|EditKey|DeleteKey(planId)` /
+  `kPlanForm*` / `kPlanDeleteConfirm|CancelKey` 共 **21 键**；端口 typedef
+  `PlanLister` / `PlanCreator` / `PlanUpdater` / `PlanRemover`；`_guard` 读写**单飞**去重、`_describeFailure(ApiException)`
+  按 `ApiErrorCode` switch（`planNotFound` / `planInUse` / `validationFailed` / `instanceNotReady`）；
+- `lib/features/console/team_summary_page.dart`（改）：新增入口键 `kTeamSummaryPlansEntryKey` + 可选字段
+  `onOpenPlans`（`null` 时**整块不渲染**，既有只读用例渲染不变）+ `AppBar.actions` 首位「想定」`TextButton`；
+- `lib/app/console_app.dart`（改）：`onConnected` 内装配 `ExerciseApi(transport)`，把四端点闭包接到
+  `PlanManagerPage`（**全闭包读 `_account!.accessToken`**，续期换到的新令牌才会生效）+ 新增 `_openPlans` 方法；
+- `lib/shared/api/exercise_api.dart`（改，**仅注释**）：`startExercise` 文档注释由 `404 PLAN_NOT_FOUND` **订正**为
+  `404 EXERCISE_PLAN_NOT_FOUND`（开演专属码），与 `getPlan` / `updatePlan` 的 `PLAN_NOT_FOUND` 分属两码；
+- `test/console_widget_test.dart`（改）：新增助手 `planOf` / `planPageOf` / `pumpPlans` + 两组共 **9 例**
+  （`想定管理页（段 49）` 7 + `指挥端想定管理接线（段 49）` 2）。
+
+**口径要点**：**整体替换在 UI 层的兜底＝快照预填**——`PUT /plans` 是整体替换、服务端把**在场但为 null** 的字段也当
+`null` 落库，故编辑对话框 `initState` **以服务端回传快照预填**（`plan?.name/mapId/remark/battleMode`），并落一条
+**「仅改想定名仍提交全 4 键」回归用例**作判据；**留空即置 `null` 是有意语义**（解绑底图 / 清空备注），非误删；
+**写后重拉列表**（`GET /plans`）而非把写端点返回体并入列表状态；**端口全闭包读 `_account!.accessToken`**（不缓存快照令牌）；
+**入口可选注入**（未注入即不渲染，避免既有用例被迫造壳）。本原子任务 **5 文件**（1 新 4 改）**破上限已声明例外**；
+实现期修一处**编辑错位**（`console_app.dart` 首次插 `_openPlans` 时吃掉 `_openCommand` 的收尾与类尾 `}`，已补正并复核）。
+
+门禁：`flutter test` → `All tests passed!`（**253 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + **本段 9**）、
+`flutter analyze` → `No issues found! (ran in 3.9s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实想定 CRUD（真实 `PLAN_IN_USE` 拦截、真实分页 `/plans` 未验证）；
+**编成编辑**（`getRoster` / `replaceRoster`）与**开演 / 停演入口**（`startExercise` / `stopExercise`）UI **尚未接线**；
+**模板下载 / multipart 导入** UI（需文件落盘与选文件依赖决策）**尚未接线**。证据见 [testing](testing.md) **第 49 节**。
+
+**下一段（候选）**：CLIENT-WINDOWS 其余子域（**编成编辑 + 开演 / 停演入口**的 UI 接线 —— 接口已就绪，仅剩余下断面）；
+**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；地图与标定 **map 域**（约 14 端点，
+含 multipart 图片与校准异步）；复盘与导出 **replay 域**（约 7 端点）；**device 域**（约 15 端点 + `watchLinks` WS）；
+`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘
+（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。后续恢复默认「每原子任务 ≤3 文件」。
 
 
 
