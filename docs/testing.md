@@ -3263,3 +3263,62 @@ CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水
 （真实分页、真实 `PLAN_IN_USE` 拦截、真实唯一性 / 长度校验未验证）；集成层（`ExerciseApi` + 真实 `ApiClient` + 真实 HTTP）
 **未走通**；**模板下载 / multipart 导入**（需文件落盘与选文件依赖决策）、**编成编辑**与**开演/停演入口**的 UI **尚未接线**，另开段。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 50. M6 CLIENT-WINDOWS 续段（UI 接线）：exercise 域写端点——编成编辑页（`roster` 读写）
+
+承段 49「编成编辑与开演/停演另开段」，本段把 exercise 域的**编成子域**读/写端点接到指挥端 UI：
+`GET /plans/{planId}/roster`（`getRoster`）+ `PUT /plans/{planId}/roster`（`replaceRoster`，幂等全量替换）。
+**开演 / 停演入口**、以及**模板下载 / multipart 导入**（需文件落盘与选文件依赖决策）**另开段**。
+
+### 50.1 交付物（1 笔 = 4 文件，1 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/roster_editor_page.dart`(新) | 编成编辑页 `RosterEditorPage`：就地编辑**本地条目清单** + 悬浮「保存编成」（整体替换）+ AppBar「添加」/「刷新」；条目对话框 `_RosterEntryFormDialog`（编辑**以服务端快照预填**）；端口 typedef `RosterLoader`/`RosterSaver`；`_guard` 单飞 + `_describeFailure` 错误码映射 |
+| `lib/features/console/plan_manager_page.dart`(改) | 新增可选端口 `onOpenRoster` 与行内入口键 `planManagerRosterKey(planId)`（为 `null` 时**不渲染该按钮**，既有段 49 用例渲染不变） |
+| `lib/app/console_app.dart`(改) | 新增 `_openRoster(...)`——两端口闭包**每次取用读 `_account!.accessToken`**；`PlanManagerPage` 接 `onOpenRoster` |
+| `test/console_widget_test.dart`(改) | 新增 2 组共 **10 例**（编成编辑页 8 + 指挥端编成编辑接线 2）；新增 `rosterEntryOf` / `rosterOf` / `pumpRoster` 助手 |
+
+### 50.2 用例与判据（新增 10 例）
+
+| 用例 | 判据 |
+|---|---|
+| 加载编成 | 账号文本 `admin（OPERATOR）`；想定文本 `想定：红方突袭`；空编成渲染 `kRosterEditorEmptyKey` |
+| 行文本 | `#7｜BLUE｜张三｜HP 80｜弹 30/20｜MANUAL`；`#3｜RED｜—｜HP —｜弹 —/—｜—`（可选字段缺失显示 `—`，不臆造默认） |
+| 新增 + 保存 | 编号 / 姓名去空白后入列；保存 `toJson()` 恰为 `{planId:'p-1', entries:[{vestNum:7, team:'RED', name:'张三'}]}`——**空字段不发该键**；回执 `已保存编成（1 名成员）` |
+| 编辑（快照预填） | 对话框中 `vestNum` 文本 `7`、`hp` 文本 `80`（服务端快照）；改 `hp=50` 后保存，条目 `hp==50` 且 `team`/`mode` 原样保留 |
+| 编号非法 | 编号 `abc` → **不发请求**、对话框保留、行内 `kRosterEntryErrorKey` 出现；取消后回空态 |
+| 编号重复 | 已有 `#7` 再加 `#7` → 行内 `kRosterEntryErrorKey` 含「已在编成中」，不入列 |
+| 移除条目 | 确认后 `#7` 行消失、`#8` 仍在；保存提交的 entries 只剩 `8` |
+| 契约错误码映射 | 400 `VALIDATION_FAILED` → 页面顶部文案含「编成校验失败」（不冒泡成红屏） |
+| 接线（想定行「编成」） | 汇总页 → 想定管理页 → 行内「编成」→ `RosterEditorPage` 挂树；`GET /api/v1/plans/p-1/roster` 带 `Authorization: Bearer access-1`；`#7` 行渲染 |
+| 未注入入口 | 未注入 `onOpenRoster` 时想定管理页**不渲染** `planManagerRosterKey('p-1')` |
+
+### 50.3 口径要点
+
+- **就地编辑 + 一次整体替换**：编辑期间只改**本地清单**（新增 / 编辑 / 移除都不发请求），点「保存编成」才 `PUT` 一次
+  （幂等全量，空列表即清空）——「撤销」即返回上一页。与想定 `PUT` 的整体替换同构。
+- **条目序列化口径与想定相反**：`RosterEntry.toJson()` **只发非 null 键**（`hp`/`ammo1`/`ammo2`/`mode` 缺席即吃服务端契约默认
+  100/30/30/AUTO），故对话框**留空即不发该键**；而 `PlanUpsertRequest.toJson()` 是显式全键（`null` 即置空）。二者不可混淆。
+- **编辑以服务端快照预填**：与段 49 同源——不预填就会把没动的字段吃掉默认值（典型误伤：只改 HP，结果 `team` 被重置）。对话框
+  `initState` 从 `widget.entry` 预填全部字段，用例 4 即其判据。
+- **客户端只做能本地判定的校验**：编号为正整数、不重复（`takenNums` 排除自身）；设备台账存在性、不跨队等由服务端判定并按
+  400 `VALIDATION_FAILED` 回绝（**不产生部分写入**），本页只把错误透上去。
+- **端口全闭包**：`_openRoster` 的两个端口都**每次取用读 `_account!.accessToken`**，且全部经同一条 `RefreshingApiTransport`
+  ——401 到期**自动续期并重试一次**。
+- **入口可选注入**：`PlanManagerPage.onOpenRoster` 为 `null` 时**不渲染**行内「编成」，既有段 49 用例渲染与行为**完全不变**。
+
+### 50.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**263 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 +
+  **本段 10**）；`flutter analyze` → `No issues found! (ran in 2.8s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（1 新 + 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩），**未对着真实后端实例**跑过真实编成读写（真实
+`VALIDATION_FAILED` 的设备台账存在性 / 不跨队拦截、真实 `PLAN_IN_USE` 拦截未验证）；集成层（`RosterEditorPage` + `ExerciseApi`
++ 真实 `ApiClient` + 真实 HTTP）**未走通**；**开演 / 停演入口**与**模板下载 / multipart 导入**的 UI **尚未接线**，另开段。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。

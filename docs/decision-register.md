@@ -1762,7 +1762,37 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 **编成编辑**（`getRoster` / `replaceRoster`）与**开演 / 停演入口**（`startExercise` / `stopExercise`）UI **尚未接线**；
 **模板下载 / multipart 导入** UI（需文件落盘与选文件依赖决策）**尚未接线**。证据见 [testing](testing.md) **第 49 节**。
 
-**下一段（候选）**：CLIENT-WINDOWS 其余子域（**编成编辑 + 开演 / 停演入口**的 UI 接线 —— 接口已就绪，仅剩余下断面）；
+**下一段（CLIENT-WINDOWS 续段·UI 接线·编成）落地**：承上段「**编成编辑另开段**」，本段把 exercise 域**编成子域**的
+`GET` / `PUT /plans/{planId}/roster` 接进指挥端 UI——新增**编成编辑页**（就地编辑 + 保存即整体替换），
+**开演 / 停演入口**、**模板下载 / multipart 导入**仍另开段。落**一笔**（**4 文件 / 1 新 3 改**，**破「每原子任务 ≤3 文件」
+上限**，按无人值守授权**显式声明例外**）：
+- `lib/features/console/roster_editor_page.dart`（**新**）：`RosterEditorPage`（就地编辑本地条目清单 + FAB「保存编成」
+  整体替换 + AppBar「添加」/「刷新」）+ `_RosterEntryFormDialog`（编辑**以服务端快照预填**）；控件键族
+  `kRosterEditor*` / `rosterEditorRowKey|EditKey|RemoveKey(vestNum)` / `kRosterEntry*` / `kRosterRemoveConfirm|CancelKey`；
+  端口 typedef `RosterLoader` / `RosterSaver`；`_guard` 单飞去重、`_describeFailure(ApiException)` 按 `ApiErrorCode` switch
+  （`validationFailed` / `planNotFound` / `planInUse` / `instanceNotReady`）；
+- `lib/features/console/plan_manager_page.dart`（改）：新增可选端口 `onOpenRoster` + 行内入口键
+  `planManagerRosterKey(planId)`（`null` 时**不渲染**该按钮，既有段 49 用例渲染不变）；
+- `lib/app/console_app.dart`（改）：新增 `_openRoster`，把 `getRoster` / `replaceRoster` 闭包接到 `RosterEditorPage`
+  （**全闭包读 `_account!.accessToken`**，续期换到的新令牌才会生效）+ `PlanManagerPage` 接 `onOpenRoster`；
+- `test/console_widget_test.dart`（改）：新增助手 `rosterEntryOf` / `rosterOf` / `pumpRoster` + 两组共 **10 例**
+  （`编成编辑页（段 50）` 8 + `指挥端编成编辑接线（段 50）` 2）。
+
+**口径要点**：**就地编辑 + 一次整体替换**——编辑期间只改本地清单（增删改都不发请求），点「保存编成」才 `PUT` 一次
+（幂等全量，空列表即清空），「撤销」＝返回上一页；**条目序列化口径与想定相反**——`RosterEntry.toJson()` **只发非 null 键**，
+`hp` / `ammo1` / `ammo2` / `mode` 留空即吃服务端契约默认 100/30/30/AUTO，而 `PlanUpsertRequest.toJson()` 显式全键、`null` 即置空，
+二者不可混淆；**编辑以服务端快照预填**（同段 49 口径，避免「只改 HP 却把 `team` 重置」）；**客户端只做能本地判定的校验**
+（编号为正整数、不重复，`takenNums` 排除自身），设备台账存在性 / 不跨队由服务端判并按 400 `VALIDATION_FAILED` 回绝
+（**不产生部分写入**）。本原子任务 **4 文件**（1 新 3 改）**破上限已声明例外**；实现期无返工（首次 `analyze` / `test` 即全绿）。
+
+门禁：`flutter test` → `All tests passed!`（**263 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 + **本段 10**）、
+`flutter analyze` → `No issues found! (ran in 2.8s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实编成读写（真实 `VALIDATION_FAILED` 的设备台账存在性 / 不跨队拦截、真实
+`PLAN_IN_USE` 拦截未验证）；**开演 / 停演入口**（`startExercise` / `stopExercise`）与**模板下载 / multipart 导入** UI
+**尚未接线**。证据见 [testing](testing.md) **第 50 节**。
+
+**下一段（候选）**：CLIENT-WINDOWS 其余子域（**开演 / 停演入口**的 UI 接线 —— 接口已就绪，仅剩余下断面）；
 **模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；地图与标定 **map 域**（约 14 端点，
 含 multipart 图片与校准异步）；复盘与导出 **replay 域**（约 7 端点）；**device 域**（约 15 端点 + `watchLinks` WS）；
 `moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘
