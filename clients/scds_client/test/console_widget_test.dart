@@ -11,6 +11,7 @@ import 'package:scds_client/features/console/command_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
+import 'package:scds_client/features/console/roster_editor_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
 import 'package:scds_client/shared/api/api_client.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
@@ -357,6 +358,57 @@ void main() {
           update: update ??
               (String planId, PlanUpsertRequest request) async => fail('未预期的修改想定'),
           remove: remove ?? (String planId) async => fail('未预期的删除想定'),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 50：造一个契约形状的编成条目（必填仅 `vestNum` / `team`）。
+  RosterEntry rosterEntryOf(
+    int vestNum, {
+    Team team = Team.red,
+    String? name,
+    int? hp,
+    int? ammo1,
+    int? ammo2,
+    VestMode? mode,
+  }) =>
+      RosterEntry(
+        vestNum: vestNum,
+        team: team,
+        name: name,
+        hp: hp,
+        ammo1: ammo1,
+        ammo2: ammo2,
+        mode: mode,
+      );
+
+  Roster rosterOf(List<RosterEntry> entries, {String planId = 'p-1'}) =>
+      Roster(planId: planId, entries: entries);
+
+  /// 段 50：编成编辑页直接挂树——两个端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 视口放大到一屏容纳列表与悬浮保存按钮，免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpRoster(
+    WidgetTester tester, {
+    String planId = 'p-1',
+    String planName = '红方突袭',
+    RosterLoader? load,
+    RosterSaver? save,
+  }) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RosterEditorPage(
+          session: accountSession(),
+          planId: planId,
+          planName: planName,
+          load: load ?? () async => rosterOf(<RosterEntry>[]),
+          save: save ?? (Roster roster) async => fail('未预期的保存编成'),
         ),
       ),
     );
@@ -2017,6 +2069,300 @@ void main() {
       await pumpSummary(tester, () async => <TeamSummary>[]);
 
       expect(find.byKey(kTeamSummaryPlansEntryKey), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 50：编成编辑页——exercise 域 `roster` 读写端点的指挥端接线。
+  ///
+  /// 全部注入闭包桩，**不发真实请求**。判据三条：
+  /// 就地编辑本地清单、条目序列化口径（只发非 null 键）、保存即整体替换。
+  group('编成编辑页（段 50）', () {
+    testWidgets('加载编成：展示账号 / 想定名；空编成显示空态', (WidgetTester tester) async {
+      await pumpRoster(tester, load: () async => rosterOf(<RosterEntry>[]));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kRosterEditorAccountKey)).data,
+        'admin（OPERATOR）',
+      );
+      expect(tester.widget<Text>(find.byKey(kRosterEditorPlanKey)).data, '想定：红方突袭');
+      expect(find.byKey(kRosterEditorEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('行文本取契约字面量，缺失字段显示破折号', (WidgetTester tester) async {
+      await pumpRoster(
+        tester,
+        load: () async => rosterOf(<RosterEntry>[
+          rosterEntryOf(
+            7,
+            team: Team.blue,
+            name: '张三',
+            hp: 80,
+            ammo1: 30,
+            ammo2: 20,
+            mode: VestMode.manual,
+          ),
+          rosterEntryOf(3),
+        ]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(rosterEditorRowKey(7))).data,
+        '#7｜BLUE｜张三｜HP 80｜弹 30/20｜MANUAL',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(rosterEditorRowKey(3))).data,
+        '#3｜RED｜—｜HP —｜弹 —/—｜—',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('新增条目并保存：整体替换提交 planId 与全部条目，空字段不发该键',
+        (WidgetTester tester) async {
+      final List<Roster> saved = <Roster>[];
+      await pumpRoster(tester, save: (Roster roster) async {
+        saved.add(roster);
+        return roster;
+      });
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kRosterEditorAddButtonKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kRosterEntryVestNumKey), '7');
+      await tester.enterText(find.byKey(kRosterEntryNameKey), ' 张三 ');
+      await tester.tap(find.byKey(kRosterEntrySaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(rosterEditorRowKey(7)), findsOneWidget);
+
+      await tester.tap(find.byKey(kRosterEditorSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saved.single.toJson(), <String, Object?>{
+        'planId': 'p-1',
+        'entries': <Object>[
+          <String, Object?>{'vestNum': 7, 'team': 'RED', 'name': '张三'},
+        ],
+      });
+      expect(find.text('已保存编成（1 名成员）'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('编辑条目：以服务端快照预填，改生命值后保存', (WidgetTester tester) async {
+      final List<Roster> saved = <Roster>[];
+      await pumpRoster(
+        tester,
+        load: () async => rosterOf(<RosterEntry>[
+          rosterEntryOf(
+            7,
+            team: Team.blue,
+            name: '张三',
+            hp: 80,
+            ammo1: 30,
+            ammo2: 20,
+            mode: VestMode.manual,
+          ),
+        ]),
+        save: (Roster roster) async {
+          saved.add(roster);
+          return roster;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(rosterEditorEditKey(7)));
+      await tester.pumpAndSettle();
+
+      // 快照预填：不动的字段必须原样出现在表单里，否则整体替换会误伤它们。
+      expect(
+        tester.widget<TextField>(find.byKey(kRosterEntryVestNumKey)).controller!.text,
+        '7',
+      );
+      expect(
+        tester.widget<TextField>(find.byKey(kRosterEntryHpKey)).controller!.text,
+        '80',
+      );
+
+      await tester.enterText(find.byKey(kRosterEntryHpKey), '50');
+      await tester.tap(find.byKey(kRosterEntrySaveKey));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kRosterEditorSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saved.single.entries.single.hp, 50);
+      expect(saved.single.entries.single.team, Team.blue);
+      expect(saved.single.entries.single.mode, VestMode.manual);
+
+      await unmount(tester);
+    });
+
+    testWidgets('马甲编号非法：不发请求、对话框保留并显示行内错误', (WidgetTester tester) async {
+      await pumpRoster(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kRosterEditorAddButtonKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kRosterEntryVestNumKey), 'abc');
+      await tester.tap(find.byKey(kRosterEntrySaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kRosterEntryErrorKey), findsOneWidget);
+      expect(find.byKey(kRosterEntrySaveKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kRosterEntryCancelKey));
+      await tester.pumpAndSettle();
+      expect(find.byKey(kRosterEditorEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('重复马甲编号：行内错误且不提交', (WidgetTester tester) async {
+      await pumpRoster(
+        tester,
+        load: () async => rosterOf(<RosterEntry>[rosterEntryOf(7)]),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kRosterEditorAddButtonKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kRosterEntryVestNumKey), '7');
+      await tester.tap(find.byKey(kRosterEntrySaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kRosterEntryErrorKey), findsOneWidget);
+      expect(find.textContaining('已在编成中'), findsOneWidget);
+
+      await tester.tap(find.byKey(kRosterEntryCancelKey));
+      await tester.pumpAndSettle();
+      await unmount(tester);
+    });
+
+    testWidgets('移除条目：确认后从本地清单移除，保存提交剩余条目', (WidgetTester tester) async {
+      final List<Roster> saved = <Roster>[];
+      await pumpRoster(
+        tester,
+        load: () async => rosterOf(<RosterEntry>[rosterEntryOf(7), rosterEntryOf(8)]),
+        save: (Roster roster) async {
+          saved.add(roster);
+          return roster;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(rosterEditorRemoveKey(7)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kRosterRemoveConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(rosterEditorRowKey(7)), findsNothing);
+      expect(find.byKey(rosterEditorRowKey(8)), findsOneWidget);
+
+      await tester.tap(find.byKey(kRosterEditorSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saved.single.entries.single.vestNum, 8);
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射为现场文案（编成校验失败）', (WidgetTester tester) async {
+      await pumpRoster(
+        tester,
+        save: (Roster roster) async => throw apiFailure(400, ApiErrorCode.validationFailed),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kRosterEditorSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kRosterEditorErrorKey)).data,
+        contains('编成校验失败'),
+      );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 50：编成编辑接线——从想定管理页行内「编成」进入，`ExerciseApi` 挂同一条已认证传输。
+  group('指挥端编成编辑接线（段 50）', () {
+    testWidgets('想定行「编成」入口：进入编成编辑页并按登录令牌拉编成',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/plans':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'planId': 'p-1',
+                  'name': '红方突袭',
+                  'createdAt': '2026-10-29T00:00:00Z',
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'GET $kApiPrefix/plans/p-1/roster':
+            return jsonResponse(<String, dynamic>{
+              'planId': 'p-1',
+              'entries': <Object>[
+                <String, dynamic>{'vestNum': 7, 'team': 'BLUE'},
+              ],
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryPlansEntryKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(planManagerRosterKey('p-1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(RosterEditorPage), findsOneWidget);
+      final ScriptedCall rosterCall = transport.calls.lastWhere(
+        (ScriptedCall call) => call.key == 'GET $kApiPrefix/plans/p-1/roster',
+      );
+      expect(rosterCall.authorization, 'Bearer access-1');
+      expect(find.byKey(rosterEditorRowKey(7)), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：想定管理页不渲染「编成」按钮', (WidgetTester tester) async {
+      await pumpPlans(
+        tester,
+        list: ({String? keyword}) async => planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(planManagerRosterKey('p-1')), findsNothing);
 
       await unmount(tester);
     });

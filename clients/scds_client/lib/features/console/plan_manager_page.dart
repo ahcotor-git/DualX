@@ -20,6 +20,9 @@ Key planManagerRowKey(String planId) => Key('planManager.row.$planId');
 Key planManagerEditKey(String planId) => Key('planManager.edit.$planId');
 Key planManagerDeleteKey(String planId) => Key('planManager.delete.$planId');
 
+/// 段 50 新增：进入该想定「编成编辑」页的行内入口（未注入回调时不渲染该按钮）。
+Key planManagerRosterKey(String planId) => Key('planManager.roster.$planId');
+
 /// 新建 / 编辑想定对话框的控件键。
 const Key kPlanFormTitleKey = Key('planManager.form.title');
 const Key kPlanFormNameFieldKey = Key('planManager.form.name');
@@ -46,10 +49,11 @@ typedef PlanUpdater = Future<Plan> Function(String planId, PlanUpsertRequest req
 /// 删除想定端口（`DELETE /plans/{planId}`）。
 typedef PlanRemover = Future<void> Function(String planId);
 
-/// 想定管理页（M6 CLIENT-WINDOWS 段 49）——exercise 域写端点的指挥端接线。
+/// 想定管理页（M6 CLIENT-WINDOWS 段 49；段 50 增「编成」入口）——exercise 域写端点的指挥端接线。
 ///
-/// 覆盖「想定」子域的读/写：[PlanLister] / [PlanCreator] / [PlanUpdater] / [PlanRemover]。
-/// 编成编辑与开演/停演属同一域，但在后续段接线，本页不承载。
+/// 覆盖「想定」子域的读/写：[PlanLister] / [PlanCreator] / [PlanUpdater] / [PlanRemover]，
+/// 以及行内「编成」入口（[onOpenRoster]，段 50 接 [RosterEditorPage]）。
+/// 开演 / 停演属同一域，但在后续段接线，本页不承载。
 ///
 /// 口径：
 /// - **修改是整体替换**：契约 `PlanUpsertRequest` 的 `toJson` 显式输出全部四个键，
@@ -65,6 +69,7 @@ class PlanManagerPage extends StatefulWidget {
     required this.create,
     required this.update,
     required this.remove,
+    this.onOpenRoster,
   });
 
   /// 已登录的账号会话（提供身份快照）。
@@ -74,6 +79,9 @@ class PlanManagerPage extends StatefulWidget {
   final PlanCreator create;
   final PlanUpdater update;
   final PlanRemover remove;
+
+  /// 段 50 新增：打开该想定的「编成编辑」页；为 `null` 时不渲染行内「编成」按钮。
+  final void Function(Plan plan)? onOpenRoster;
 
   @override
   State<PlanManagerPage> createState() => _PlanManagerPageState();
@@ -237,6 +245,12 @@ class _PlanManagerPageState extends State<PlanManagerPage> {
             Expanded(
               child: Text(_describePlan(plan), key: planManagerRowKey(plan.planId)),
             ),
+            if (widget.onOpenRoster != null)
+              TextButton(
+                key: planManagerRosterKey(plan.planId),
+                onPressed: _busy ? null : () => widget.onOpenRoster!(plan),
+                child: const Text('编成'),
+              ),
             TextButton(
               key: planManagerEditKey(plan.planId),
               onPressed: _busy ? null : () => _openEdit(plan),

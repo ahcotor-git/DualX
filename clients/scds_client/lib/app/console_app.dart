@@ -6,6 +6,7 @@ import '../features/console/command_page.dart';
 import '../features/console/console_login_page.dart';
 import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
+import '../features/console/roster_editor_page.dart';
 import '../features/console/team_summary_page.dart';
 import '../shared/api/api_client.dart';
 import '../shared/api/auth_api.dart';
@@ -356,6 +357,48 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
           remove: (String planId) => exercises.deletePlan(
             token: _account!.accessToken,
             planId: planId,
+          ),
+          onOpenRoster: (Plan plan) => _openRoster(
+            navigator: navigator,
+            exercises: exercises,
+            plan: plan,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 50：打开编成编辑页（`GET` / `PUT /plans/{planId}/roster`）。
+  ///
+  /// 两个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
+  /// 令牌到期时自动续期并重试一次。
+  ///
+  /// 注：编成是**整体替换**（`PUT` 幂等全量），页面就地编辑本地清单、最后一次性提交。
+  void _openRoster({
+    required NavigatorState navigator,
+    required ExerciseApi exercises,
+    required Plan plan,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => RosterEditorPage(
+          session: session,
+          planId: plan.planId,
+          planName: plan.name,
+          load: () => exercises.getRoster(
+            token: _account!.accessToken,
+            planId: plan.planId,
+          ),
+          save: (Roster roster) => exercises.replaceRoster(
+            token: _account!.accessToken,
+            planId: plan.planId,
+            roster: roster,
           ),
         ),
       ),
