@@ -10,12 +10,14 @@ import 'package:scds_client/features/console/account_page.dart';
 import 'package:scds_client/features/console/command_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
+import 'package:scds_client/features/console/plan_manager_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
 import 'package:scds_client/shared/api/api_client.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
 import 'package:scds_client/shared/api/api_problem.dart';
 import 'package:scds_client/shared/api/auth_models.dart';
 import 'package:scds_client/shared/api/command_models.dart';
+import 'package:scds_client/shared/api/exercise_models.dart';
 import 'package:scds_client/shared/api/health_api.dart';
 import 'package:scds_client/shared/api/situation_models.dart';
 import 'package:scds_client/shared/auth/session_store.dart';
@@ -301,6 +303,60 @@ void main() {
           outOfRange: outOfRange ?? unexpectedCommand,
           reload: reload ?? (ReloadRequest _) => unexpectedCommand(),
           setConfig: setConfig ?? (VestConfigRequest _) => unexpectedCommand(),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 49：造一个契约形状的想定（必填仅 `planId` / `name` / `createdAt`）。
+  Plan planOf(
+    String planId, {
+    String name = '想定A',
+    String? mapId,
+    BattleMode? battleMode,
+    String? remark,
+    int? rosterCount,
+  }) =>
+      Plan(
+        planId: planId,
+        name: name,
+        createdAt: DateTime.utc(2026, 10, 29),
+        mapId: mapId,
+        battleMode: battleMode,
+        remark: remark,
+        rosterCount: rosterCount,
+      );
+
+  PlanPage planPageOf(List<Plan> items, {int? total}) => PlanPage(
+        items: items,
+        meta: PageMeta(page: 1, size: 20, total: total ?? items.length),
+      );
+
+  /// 段 49：想定管理页直接挂树——四个端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 未注入的写端口被触发即判失败（用例应只点注入过的动作）。
+  /// 视口放大到一屏容纳列表与悬浮新建按钮，免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpPlans(
+    WidgetTester tester, {
+    PlanLister? list,
+    PlanCreator? create,
+    PlanUpdater? update,
+    PlanRemover? remove,
+  }) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PlanManagerPage(
+          session: accountSession(),
+          list: list ?? ({String? keyword}) async => planPageOf(<Plan>[]),
+          create: create ?? (PlanUpsertRequest request) async => fail('未预期的新建想定'),
+          update: update ??
+              (String planId, PlanUpsertRequest request) async => fail('未预期的修改想定'),
+          remove: remove ?? (String planId) async => fail('未预期的删除想定'),
         ),
       ),
     );
@@ -1687,6 +1743,280 @@ void main() {
       await tester.tap(find.byKey(kReloadAllCancelKey));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 49：想定管理页——exercise 域写端点的指挥端接线（列表 / 新建 / 编辑 / 删除）。
+  ///
+  /// 全部注入闭包桩，**不发真实请求**。判据两条：
+  /// 序列化口径（`PUT` 是整体替换，四键全发）与写后重拉列表。
+  group('想定管理页（段 49）', () {
+    testWidgets('加载想定列表：展示账号与每行契约字段；空列表显示空态', (WidgetTester tester) async {
+      final List<String?> keywords = <String?>[];
+      await pumpPlans(tester, list: ({String? keyword}) async {
+        keywords.add(keyword);
+        return planPageOf(<Plan>[]);
+      });
+      await tester.pumpAndSettle();
+
+      // 首帧不带关键字（服务端「列出全部」口径）。
+      expect(keywords, <String?>[null]);
+      expect(tester.widget<Text>(find.byKey(kPlanManagerAccountKey)).data, 'admin（OPERATOR）');
+      expect(find.byKey(kPlanManagerEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('行文本取契约字面量；搜索按关键字重拉（两侧空白被裁剪）', (WidgetTester tester) async {
+      final List<String?> keywords = <String?>[];
+      await pumpPlans(tester, list: ({String? keyword}) async {
+        keywords.add(keyword);
+        return planPageOf(<Plan>[
+          planOf(
+            'p-1',
+            name: '红方突袭',
+            mapId: 'm-1',
+            battleMode: BattleMode.battle,
+            rosterCount: 3,
+          ),
+        ]);
+      });
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(planManagerRowKey('p-1'))).data,
+        '红方突袭｜模式 BATTLE｜底图 m-1｜编成 3',
+      );
+
+      await tester.enterText(find.byKey(kPlanManagerKeywordFieldKey), ' 红方 ');
+      await tester.tap(find.byKey(kPlanManagerSearchButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(keywords, <String?>[null, '红方']);
+
+      await unmount(tester);
+    });
+
+    testWidgets('新建想定：提交整体替换四键，空底图 / 备注置 null', (WidgetTester tester) async {
+      final List<PlanUpsertRequest> created = <PlanUpsertRequest>[];
+      await pumpPlans(tester, create: (PlanUpsertRequest request) async {
+        created.add(request);
+        return planOf('p-9', name: request.name);
+      });
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kPlanManagerCreateButtonKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kPlanFormNameFieldKey), ' 新想定 ');
+      await tester.tap(find.byKey(kPlanFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(created.single.toJson(), <String, Object?>{
+        'name': '新想定',
+        'mapId': null,
+        'battleMode': 'TRAIN',
+        'remark': null,
+      });
+      expect(find.text('已新建想定「新想定」'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('编辑想定：以服务端快照预填，仅改名字仍提交全部四键（整体替换回归）',
+        (WidgetTester tester) async {
+      final List<PlanUpsertRequest> updated = <PlanUpsertRequest>[];
+      await pumpPlans(
+        tester,
+        list: ({String? keyword}) async => planPageOf(<Plan>[
+          planOf(
+            'p-1',
+            name: '旧名',
+            mapId: 'm-1',
+            battleMode: BattleMode.battle,
+            remark: '备注',
+          ),
+        ]),
+        update: (String planId, PlanUpsertRequest request) async {
+          updated.add(request);
+          return planOf(planId, name: request.name);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(planManagerEditKey('p-1')));
+      await tester.pumpAndSettle();
+
+      // 快照预填：不动的字段必须原样出现在表单里，否则整体替换会误伤它们。
+      expect(
+        tester.widget<TextField>(find.byKey(kPlanFormNameFieldKey)).controller!.text,
+        '旧名',
+      );
+      expect(
+        tester.widget<TextField>(find.byKey(kPlanFormMapIdFieldKey)).controller!.text,
+        'm-1',
+      );
+      expect(
+        tester.widget<TextField>(find.byKey(kPlanFormRemarkFieldKey)).controller!.text,
+        '备注',
+      );
+
+      await tester.enterText(find.byKey(kPlanFormNameFieldKey), '新名');
+      await tester.tap(find.byKey(kPlanFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(updated.single.toJson(), <String, Object?>{
+        'name': '新名',
+        'mapId': 'm-1',
+        'battleMode': 'BATTLE',
+        'remark': '备注',
+      });
+
+      await unmount(tester);
+    });
+
+    testWidgets('想定名非法：不发请求、对话框保留并显示行内错误', (WidgetTester tester) async {
+      await pumpPlans(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kPlanManagerCreateButtonKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kPlanFormNameFieldKey), '   ');
+      await tester.tap(find.byKey(kPlanFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kPlanFormErrorKey), findsOneWidget);
+      expect(find.byKey(kPlanFormSaveKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kPlanFormCancelKey));
+      await tester.pumpAndSettle();
+
+      await unmount(tester);
+    });
+
+    testWidgets('删除想定：确认后调用删除端口并重拉列表', (WidgetTester tester) async {
+      final List<String> removed = <String>[];
+      int listCalls = 0;
+      await pumpPlans(
+        tester,
+        list: ({String? keyword}) async {
+          listCalls++;
+          return planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]);
+        },
+        remove: (String planId) async => removed.add(planId),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(planManagerDeleteKey('p-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kPlanDeleteConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(removed, <String>['p-1']);
+      // 首帧一次 + 删除后重拉一次。
+      expect(listCalls, 2);
+      expect(find.text('已删除想定「红方突袭」'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射为现场文案（想定被引用）', (WidgetTester tester) async {
+      await pumpPlans(
+        tester,
+        list: ({String? keyword}) async => planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]),
+        remove: (String planId) async => throw apiFailure(409, ApiErrorCode.planInUse),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(planManagerDeleteKey('p-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kPlanDeleteConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kPlanManagerErrorKey)).data,
+        contains('正在演习中'),
+      );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 49：想定管理页接线——从队伍汇总页进入，`ExerciseApi` 挂同一条已认证传输。
+  group('指挥端想定管理接线（段 49）', () {
+    Future<void> signIn(WidgetTester tester, ScriptedTransport transport) async {
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+    }
+
+    testWidgets('队伍汇总页「想定」入口：进入想定管理页并按登录令牌拉列表',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/plans':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'planId': 'p-1',
+                  'name': '红方突袭',
+                  'createdAt': '2026-10-29T00:00:00Z',
+                  'battleMode': 'BATTLE',
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await signIn(tester, transport);
+      await tester.tap(find.byKey(kTeamSummaryPlansEntryKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PlanManagerPage), findsOneWidget);
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/plans',
+        ]),
+      );
+      final ScriptedCall listCall = transport.calls
+          .lastWhere((ScriptedCall call) => call.key == 'GET $kApiPrefix/plans');
+      expect(listCall.authorization, 'Bearer access-1');
+      expect(
+        tester.widget<Text>(find.byKey(planManagerRowKey('p-1'))).data,
+        contains('红方突袭'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：队伍汇总页不渲染「想定」入口', (WidgetTester tester) async {
+      await pumpSummary(tester, () async => <TeamSummary>[]);
+
+      expect(find.byKey(kTeamSummaryPlansEntryKey), findsNothing);
 
       await unmount(tester);
     });

@@ -172,9 +172,12 @@ class ExerciseApi {
   /// 开始演习：`POST /api/v1/exercise/current`（201）。
   ///
   /// 前置条件全部在写库之前判定（「请求内容问题先报、运行环境前置后报」）：
-  /// 503 `INSTANCE_NOT_READY` → 404 `PLAN_NOT_FOUND` → 400 `EXERCISE_ROSTER_EMPTY` →
+  /// 503 `INSTANCE_NOT_READY` → 404 `EXERCISE_PLAN_NOT_FOUND` → 400 `EXERCISE_ROSTER_EMPTY` →
   /// 409 `DEVICE_LINK_NOT_OPEN` → 409 `EXERCISE_ALREADY_RUNNING`。
   /// 被判据拒下的请求不留半启动状态。
+  ///
+  /// 注：想定不存在时这里是 **`EXERCISE_PLAN_NOT_FOUND`**（开演专属码），
+  /// 与 `getPlan` / `updatePlan` 的 `PLAN_NOT_FOUND` 分属两码，勿混。
   Future<Exercise> startExercise({
     required String token,
     required StartExerciseRequest request,

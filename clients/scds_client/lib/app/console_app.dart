@@ -5,12 +5,15 @@ import '../features/console/account_page.dart';
 import '../features/console/command_page.dart';
 import '../features/console/console_login_page.dart';
 import '../features/console/overall_situation_page.dart';
+import '../features/console/plan_manager_page.dart';
 import '../features/console/team_summary_page.dart';
 import '../shared/api/api_client.dart';
 import '../shared/api/auth_api.dart';
 import '../shared/api/auth_models.dart';
 import '../shared/api/command_api.dart';
 import '../shared/api/command_models.dart';
+import '../shared/api/exercise_api.dart';
+import '../shared/api/exercise_models.dart';
 import '../shared/api/health_api.dart';
 import '../shared/api/situation_api.dart';
 import '../shared/auth/refreshing_api_transport.dart';
@@ -135,6 +138,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
               final AuthApi auth = AuthApi(transport);
               final SituationApi situations = SituationApi(transport);
               final CommandApi command = CommandApi(transport);
+              final ExerciseApi exercises = ExerciseApi(transport);
 
               navigator.push(
                 MaterialPageRoute<void>(
@@ -172,6 +176,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                               baseUri: baseUri,
                               situations: situations,
                               command: command,
+                            ),
+                            onOpenPlans: () => _openPlans(
+                              navigator: navigator,
+                              exercises: exercises,
                             ),
                           ),
                         ),
@@ -305,6 +313,49 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             vestNum: vestNum,
             request: request,
             token: _account!.accessToken,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 49：打开想定管理页（列表 / 新建 / 编辑 / 删除）。
+  ///
+  /// 四个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
+  /// 令牌到期时自动续期并重试一次。
+  ///
+  /// 注：修改想定是**整体替换**（`PlanUpsertRequest` 显式输出全部键），
+  /// 页面以服务端回传快照预填表单，故这里只管透传请求体。
+  void _openPlans({
+    required NavigatorState navigator,
+    required ExerciseApi exercises,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => PlanManagerPage(
+          session: session,
+          list: ({String? keyword}) => exercises.listPlans(
+            token: _account!.accessToken,
+            keyword: keyword,
+          ),
+          create: (PlanUpsertRequest request) => exercises.createPlan(
+            token: _account!.accessToken,
+            request: request,
+          ),
+          update: (String planId, PlanUpsertRequest request) => exercises.updatePlan(
+            token: _account!.accessToken,
+            planId: planId,
+            request: request,
+          ),
+          remove: (String planId) => exercises.deletePlan(
+            token: _account!.accessToken,
+            planId: planId,
           ),
         ),
       ),
