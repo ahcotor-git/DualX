@@ -4,6 +4,7 @@ import '../features/connection/connection_page.dart';
 import '../features/console/account_page.dart';
 import '../features/console/command_page.dart';
 import '../features/console/console_login_page.dart';
+import '../features/console/exercise_control_page.dart';
 import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
 import '../features/console/roster_editor_page.dart';
@@ -179,6 +180,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                               command: command,
                             ),
                             onOpenPlans: () => _openPlans(
+                              navigator: navigator,
+                              exercises: exercises,
+                            ),
+                            onOpenExercise: () => _openExercise(
                               navigator: navigator,
                               exercises: exercises,
                             ),
@@ -400,6 +405,42 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             planId: plan.planId,
             roster: roster,
           ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 51：打开演习控制页（开演 / 停演）。
+  ///
+  /// 四个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
+  /// 令牌到期时自动续期并重试一次。
+  ///
+  /// 注：开演请求体的演习模式**缺席即沿用想定**（`StartExerciseRequest.toJson` 只发非 null 键），
+  /// 故页面「沿用想定」选项就是不传该键；开演前置条件由服务端判定并回错误码。
+  void _openExercise({
+    required NavigatorState navigator,
+    required ExerciseApi exercises,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => ExerciseControlPage(
+          session: session,
+          load: () => exercises.getCurrentExercise(token: _account!.accessToken),
+          listPlans: ({String? keyword}) => exercises.listPlans(
+            token: _account!.accessToken,
+            keyword: keyword,
+          ),
+          start: (StartExerciseRequest request) => exercises.startExercise(
+            token: _account!.accessToken,
+            request: request,
+          ),
+          stop: () => exercises.stopExercise(token: _account!.accessToken),
         ),
       ),
     );

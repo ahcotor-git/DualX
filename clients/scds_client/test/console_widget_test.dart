@@ -9,6 +9,7 @@ import 'package:scds_client/features/connection/connection_page.dart';
 import 'package:scds_client/features/console/account_page.dart';
 import 'package:scds_client/features/console/command_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
+import 'package:scds_client/features/console/exercise_control_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
 import 'package:scds_client/features/console/roster_editor_page.dart';
@@ -417,6 +418,59 @@ void main() {
 
   /// 卸载整棵树：汇总页 `dispose` 会取消周期定时器，避免测试结束时残留 timer。
   Future<void> unmount(WidgetTester tester) => tester.pumpWidget(const SizedBox());
+
+  /// 段 51：造一个契约形状的当前演习状态（必填仅 `running`）。
+  Exercise exerciseOf({
+    bool running = false,
+    String? exerciseId,
+    String? planId,
+    String? planName,
+    String? mapId,
+    BattleMode? battleMode,
+    int? elapsedSeconds,
+    int? rosterCount,
+    int? onlineCount,
+  }) =>
+      Exercise(
+        running: running,
+        exerciseId: exerciseId,
+        planId: planId,
+        planName: planName,
+        mapId: mapId,
+        battleMode: battleMode,
+        elapsedSeconds: elapsedSeconds,
+        rosterCount: rosterCount,
+        onlineCount: onlineCount,
+      );
+
+  /// 段 51：演习控制页直接挂树——四个端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 视口放大到一屏容纳表单与按钮，免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpExercise(
+    WidgetTester tester, {
+    CurrentExerciseLoader? load,
+    PlanLister? listPlans,
+    ExerciseStarter? start,
+    ExerciseStopper? stop,
+  }) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ExerciseControlPage(
+          session: accountSession(),
+          load: load ?? () async => exerciseOf(),
+          listPlans:
+              listPlans ?? ({String? keyword}) async => planPageOf(<Plan>[]),
+          start: start ?? (StartExerciseRequest request) async => fail('未预期的开演'),
+          stop: stop ?? () async => fail('未预期的停演'),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
 
   group('指挥端外壳装配', () {
     testWidgets('启动即进入连接配置页，预填契约默认地址且带健康诊断入口', (WidgetTester tester) async {
@@ -2363,6 +2417,343 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(planManagerRosterKey('p-1')), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  group('演习控制页（段 51）', () {
+    testWidgets('无演习进行中：显示空态与开演表单，默认选中首个想定', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(),
+        listPlans: ({String? keyword}) async =>
+            planPageOf(<Plan>[planOf('p-1', name: '红方突袭', rosterCount: 5)]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlAccountKey)).data,
+        'admin（OPERATOR）',
+      );
+      expect(find.byKey(kExerciseControlIdleKey), findsOneWidget);
+      expect(
+        tester
+            .widget<DropdownButton<String>>(find.byKey(kExerciseControlPlanFieldKey))
+            .value,
+        'p-1',
+      );
+      expect(find.byKey(kExerciseControlStartButtonKey), findsOneWidget);
+      expect(find.byKey(kExerciseControlStopButtonKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('进行中：显示场次摘要与停演按钮', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(
+          running: true,
+          exerciseId: 'ex-1',
+          planId: 'p-1',
+          planName: '红方突袭',
+          battleMode: BattleMode.battle,
+          elapsedSeconds: 120,
+          rosterCount: 5,
+          onlineCount: 4,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlRunningKey)).data,
+        '进行中：想定 红方突袭｜模式 BATTLE｜已进行 120s｜参演 5｜在线 4',
+      );
+      expect(find.byKey(kExerciseControlStopButtonKey), findsOneWidget);
+      expect(find.byKey(kExerciseControlIdleKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('开演默认沿用想定：请求体只发 planId（不发 battleMode），成功后转为进行中',
+        (WidgetTester tester) async {
+      final List<StartExerciseRequest> started = <StartExerciseRequest>[];
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(),
+        listPlans: ({String? keyword}) async =>
+            planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]),
+        start: (StartExerciseRequest request) async {
+          started.add(request);
+          return exerciseOf(
+            running: true,
+            exerciseId: 'ex-1',
+            planId: request.planId,
+            planName: '红方突袭',
+          );
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(started.single.toJson(), <String, Object?>{'planId': 'p-1'});
+      expect(find.byKey(kExerciseControlRunningKey), findsOneWidget);
+      expect(find.text('已开演：想定「红方突袭」'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('开演选演习模式：请求体带上契约字面量', (WidgetTester tester) async {
+      final List<StartExerciseRequest> started = <StartExerciseRequest>[];
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(),
+        listPlans: ({String? keyword}) async =>
+            planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]),
+        start: (StartExerciseRequest request) async {
+          started.add(request);
+          return exerciseOf(running: true, exerciseId: 'ex-1', planName: '红方突袭');
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlBattleModeKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('BATTLE').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(started.single.toJson(), <String, Object?>{
+        'planId': 'p-1',
+        'battleMode': 'BATTLE',
+      });
+
+      await unmount(tester);
+    });
+
+    testWidgets('无想定：开演触发本地校验、不发请求', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        listPlans: ({String? keyword}) async => planPageOf(<Plan>[]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('暂无想定，请先在想定管理中创建'), findsOneWidget);
+
+      await tester.tap(find.byKey(kExerciseControlStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlErrorKey)).data,
+        '请先选择想定再开演',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('停演：二次确认后提交，以服务端状态回切到开演态并提示复盘编号',
+        (WidgetTester tester) async {
+      bool running = true;
+      int stopCalls = 0;
+      await pumpExercise(
+        tester,
+        load: () async => running
+            ? exerciseOf(running: true, exerciseId: 'ex-1', planName: '红方突袭')
+            : exerciseOf(),
+        listPlans: ({String? keyword}) async =>
+            planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]),
+        stop: () async {
+          stopCalls++;
+          running = false;
+          return StopExerciseResult(
+            exerciseId: 'ex-1',
+            endedAt: DateTime.utc(2026, 10, 31),
+            replayId: 'ex-1',
+          );
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlStopButtonKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kExerciseStopConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(stopCalls, 1);
+      expect(find.byKey(kExerciseControlIdleKey), findsOneWidget);
+      expect(find.text('已停演，复盘编号 ex-1'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('停演取消：不提交、仍停在运行态', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(running: true, exerciseId: 'ex-1', planName: '红方突袭'),
+        stop: () async => fail('取消后不应停演'),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlStopButtonKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kExerciseStopCancelKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kExerciseControlRunningKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射：链路未开启', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        listPlans: ({String? keyword}) async =>
+            planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]),
+        start: (StartExerciseRequest request) async =>
+            throw apiFailure(409, ApiErrorCode.deviceLinkNotOpen),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlErrorKey)).data,
+        contains('马甲串口链路未开启'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射：编成为空', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        listPlans: ({String? keyword}) async =>
+            planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]),
+        start: (StartExerciseRequest request) async =>
+            throw apiFailure(400, ApiErrorCode.exerciseRosterEmpty),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlErrorKey)).data,
+        contains('编成为空'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射：已有演习进行中', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        listPlans: ({String? keyword}) async =>
+            planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]),
+        start: (StartExerciseRequest request) async =>
+            throw apiFailure(409, ApiErrorCode.exerciseAlreadyRunning),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlErrorKey)).data,
+        contains('已有演习进行中'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射：停演时无进行中演习', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(running: true, exerciseId: 'ex-1', planName: '红方突袭'),
+        stop: () async => throw apiFailure(409, ApiErrorCode.exerciseNotRunning),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kExerciseControlStopButtonKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kExerciseStopConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlErrorKey)).data,
+        contains('当前没有进行中的演习'),
+      );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 51：演习控制接线——从队伍汇总页「演习」入口进入，`ExerciseApi` 挂同一条已认证传输。
+  group('指挥端演习控制接线（段 51）', () {
+    testWidgets('汇总页「演习」入口：进入演习控制页并按登录令牌拉当前演习与想定',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/exercise/current':
+            return jsonResponse(<String, dynamic>{'running': false});
+          case 'GET $kApiPrefix/plans':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'planId': 'p-1',
+                  'name': '红方突袭',
+                  'createdAt': '2026-10-29T00:00:00Z',
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryExerciseEntryKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ExerciseControlPage), findsOneWidget);
+      final ScriptedCall currentCall = transport.calls.lastWhere(
+        (ScriptedCall call) => call.key == 'GET $kApiPrefix/exercise/current',
+      );
+      expect(currentCall.authorization, 'Bearer access-1');
+      expect(find.byKey(kExerciseControlIdleKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：汇总页不渲染「演习」按钮', (WidgetTester tester) async {
+      await pumpSummary(tester, () async => <TeamSummary>[]);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kTeamSummaryExerciseEntryKey), findsNothing);
 
       await unmount(tester);
     });

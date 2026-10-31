@@ -19,6 +19,9 @@ const Key kTeamSummarySituationEntryKey = Key('teamSummary.situationEntry');
 /// 段 49 新增：进入「想定管理」页的入口（未注入回调时整块不渲染）。
 const Key kTeamSummaryPlansEntryKey = Key('teamSummary.plansEntry');
 
+/// 段 51 新增：进入「演习控制」页（开演 / 停演）的入口（未注入回调时整块不渲染）。
+const Key kTeamSummaryExerciseEntryKey = Key('teamSummary.exerciseEntry');
+
 /// 按队伍取行键（`TeamSummary` 每队一行）。
 Key teamSummaryRowKey(Team team) => Key('teamSummary.row.${team.wire}');
 
@@ -45,6 +48,7 @@ class TeamSummaryPage extends StatefulWidget {
     this.onOpenAccount,
     this.onOpenSituation,
     this.onOpenPlans,
+    this.onOpenExercise,
   });
 
   /// 已登录的账号会话（提供 `accessToken` 与身份快照）。
@@ -64,6 +68,9 @@ class TeamSummaryPage extends StatefulWidget {
 
   /// 段 49 新增：打开「想定管理」页（exercise 域写端点接线）；为 `null` 时不渲染入口。
   final VoidCallback? onOpenPlans;
+
+  /// 段 51 新增：打开「演习控制」页（开演 / 停演）；为 `null` 时不渲染入口。
+  final VoidCallback? onOpenExercise;
 
   @override
   State<TeamSummaryPage> createState() => _TeamSummaryPageState();
@@ -93,6 +100,12 @@ class _TeamSummaryPageState extends State<TeamSummaryPage> {
       appBar: AppBar(
         title: const Text('队伍汇总'),
         actions: <Widget>[
+          if (widget.onOpenExercise != null)
+            TextButton(
+              key: kTeamSummaryExerciseEntryKey,
+              onPressed: widget.onOpenExercise,
+              child: const Text('演习'),
+            ),
           if (widget.onOpenPlans != null)
             TextButton(
               key: kTeamSummaryPlansEntryKey,
