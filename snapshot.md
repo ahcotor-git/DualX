@@ -1,7 +1,28 @@
 # scds-next 交接快照
 
 > 更新：2026-10-29，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M6 CLIENT-WINDOWS 续段（UI 接线）——exercise 域写端点：编成编辑页（`/plans/{planId}/roster` 读写）（testing 第 50 节）**——
+> 当前任务：**M6 CLIENT-WINDOWS 续段（UI 接线）——exercise 域写端点：演习控制页（开演 / 停演）（testing 第 51 节）**——
+> 承段 50「**开演 / 停演入口**、**模板下载 / multipart 导入**另开段」，把 exercise 域的**场次生命周期**接进指挥端 UI；
+> **模板下载 / multipart 导入**另开段。
+> **一笔**（**4 文件** / **1 新 3 改**）：`lib/features/console/exercise_control_page.dart`（**新**：`ExerciseControlPage`——
+> 顶部拉 `GET /exercise/current` 判态；**无演习 → 开演表单**（想定下拉 + 演习模式下拉 + 「开演」）、**进行中 → 场次摘要 +
+> 「停演」**（二次确认）；控件键族 `kExerciseControl*` / `kExerciseStopConfirm|CancelKey`；三端口 typedef
+> `CurrentExerciseLoader`/`ExerciseStarter`/`ExerciseStopper`（`listPlans` 复用 `PlanLister`）；默认选中首个想定；
+> `_guard` 单飞；`_describeFailure` 按 `ApiErrorCode` switch（`exerciseAlreadyRunning`/`exerciseNotRunning`/
+> `exercisePlanNotFound`/`exerciseRosterEmpty`/`deviceLinkNotOpen`/`validationFailed`/`instanceNotReady`））
+> ＋ `lib/features/console/team_summary_page.dart`（改：`kTeamSummaryExerciseEntryKey` + 可选 `onOpenExercise`（`null` 不渲染）
+> + AppBar「演习」入口）＋ `lib/app/console_app.dart`（改：`_openExercise` push `ExerciseControlPage`——闭包读
+> `_account!.accessToken` 调 `exercises.getCurrentExercise`/`listPlans`/`startExercise`/`stopExercise`）＋
+> `test/console_widget_test.dart`（改，**+13 例**：`演习控制页（段 51）` 11 + `指挥端演习控制接线（段 51）` 2）。
+> **口径要点**：**无演习不是错误**（契约 `GET /exercise/current` 无演习回 **200 + `running=false`**，页面据此切「开演」态，
+> 不把 200 当异常、不解引用 `planId`/`startedAt` 等可空字段）；**开演请求体「可选缺省」**（`StartExerciseRequest.toJson()`
+> **只发非 null 键**，选「沿用想定」即**不发 `battleMode`**，与 `RosterEntry` 同源、与 `PlanUpsertRequest` 整体替换口径 **相反**）；
+> **开演前置条件由服务端判定**（400 `EXERCISE_ROSTER_EMPTY` / 409 `DEVICE_LINK_NOT_OPEN` / 409 `EXERCISE_ALREADY_RUNNING`），
+> 本页只把错误码映射成现场文案、不本地预判；**停演后以服务端为准**（`stop` 成功后**重拉一次** `current`，回执带 `replayId`）。
+> **本原子任务 4 文件，破「≤3 文件」上限，已按无人值守授权显式声明例外**。
+> 门禁 `flutter test` → **276 例全绿**、`flutter analyze` → `No issues found! (ran in 3.6s)`；Maven 侧 **0/0/0**（基准 1151 项）。
+> **未验项**：**未对着真实后端实例**跑过真实开演 / 停演（真实链路门禁 / 编成校验 / 并发拦截未验）；**模板下载 / multipart 导入** UI **尚未接线**。
+> 本任务紧接 **M6 CLIENT-WINDOWS 续段（UI 接线）——exercise 域写端点：编成编辑页（`/plans/{planId}/roster` 读写）（testing 第 50 节）**——
 > 承段 49「**编成编辑**、**开演 / 停演入口**、**模板下载 / multipart 导入**另开段」，把 exercise 域写端点里的**编成两端点**
 > 接进指挥端 UI；**开演 / 停演入口**（`startExercise`/`stopExercise`）与**模板下载 / multipart 导入**另开段。
 > **一笔**（**4 文件** / **1 新 3 改**）：`lib/features/console/roster_editor_page.dart`（**新**：`RosterEditorPage`——
@@ -325,11 +346,14 @@ WS 窄端口 `SituationSocket`（子协议 `scds.situation.v1`、close `4000`）
 **M6 CLIENT-WINDOWS 续段（UI 接线：exercise 域写端点——编成编辑页 `RosterEditorPage`（`/plans/{planId}/roster` 读写）；
 就地编辑本地清单 + 一次 `PUT` 整体替换、条目序列化只发非 null 键（与想定相反）、编辑以服务端快照预填；
 想定管理页行内「编成」入口（可选注入）；10 例，累计 263 例。本原子任务 4 文件（1 新 3 改），
-破「≤3 文件」上限并经无人值守授权显式声明例外）**。
+破「≤3 文件」上限并经无人值守授权显式声明例外）**、
+**M6 CLIENT-WINDOWS 续段（UI 接线：exercise 域写端点——演习控制页 `ExerciseControlPage`（开演 / 停演）；
+无演习回 200 + `running=false` 判态、开演请求体只发非 null 键（「沿用想定」即不发 `battleMode`）、
+停演后重拉 `current` 以服务端为准；队伍汇总页「演习」入口（可选注入）；13 例，累计 276 例。
+本原子任务 4 文件（1 新 3 改），破「≤3 文件」上限并经无人值守授权显式声明例外）**。
 
-下一原子任务的候选：**CLIENT-WINDOWS 其余子域（exercise 域剩余 UI 接线——开演 / 停演入口；
-模板下载 / multipart 导入 UI（需文件落盘与选文件依赖决策）；地图与标定 map 域；
-复盘与导出 replay 域、设备 device 域）**；**`moveVest` 手动置位 UI（视联调需要再定）**；
+下一原子任务的候选：**CLIENT-WINDOWS 其余子域（模板下载 / multipart 导入 UI（需文件落盘与选文件依赖决策）；
+地图与标定 map 域；复盘与导出 replay 域、设备 device 域）**；**`moveVest` 手动置位 UI（视联调需要再定）**；
 **T-PROD 部署**；
 以及**平台安全存储（Android Keystore / Windows DPAPI）+ 连接配置落盘（需另授权引依赖）**；
 另有**安装 Visual Studio C++ 工作负载（需另授权）以补齐 Windows 原生构建验收**。

@@ -3322,3 +3322,65 @@ CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水
 `VALIDATION_FAILED` 的设备台账存在性 / 不跨队拦截、真实 `PLAN_IN_USE` 拦截未验证）；集成层（`RosterEditorPage` + `ExerciseApi`
 + 真实 `ApiClient` + 真实 HTTP）**未走通**；**开演 / 停演入口**与**模板下载 / multipart 导入**的 UI **尚未接线**，另开段。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 51. M6 CLIENT-WINDOWS 续段（UI 接线）：exercise 域写端点——演习控制页（开演 / 停演）
+
+承段 50「开演 / 停演入口另开段」，本段把 exercise 域的**场次生命周期**接到指挥端 UI：
+`GET /exercise/current`（`getCurrentExercise`，**无演习时也回 200 + `running=false`**）+ `POST /exercise/current`（`startExercise`，201）+
+`DELETE /exercise/current`（`stopExercise`）。**模板下载 / multipart 导入**（需文件落盘与选文件依赖决策）**另开段**。
+
+### 51.1 交付物（1 笔 = 4 文件，1 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/exercise_control_page.dart`(新) | 演习控制页 `ExerciseControlPage`：顶部拉当前场次；**无演习 → 开演表单**（想定下拉 + 演习模式下拉 + 「开演」）、**进行中 → 场次摘要 + 「停演」**（二次确认）；端口 typedef `CurrentExerciseLoader`/`ExerciseStarter`/`ExerciseStopper`（`listPlans` 复用 `PlanLister`）；默认选中首个想定；`_guard` 单飞 + `_describeFailure` 错误码映射 |
+| `lib/features/console/team_summary_page.dart`(改) | 新增可选入口 `onOpenExercise` + 入口键 `kTeamSummaryExerciseEntryKey`（为 `null` 时**不渲染**，既有用例渲染不变） |
+| `lib/app/console_app.dart`(改) | 新增 `_openExercise(...)`——四端口闭包**每次取用读 `_account!.accessToken`**；`TeamSummaryPage` 接 `onOpenExercise` |
+| `test/console_widget_test.dart`(改) | 新增 2 组共 **13 例**（演习控制页 11 + 指挥端演习控制接线 2）；新增 `exerciseOf` / `pumpExercise` 助手 |
+
+### 51.2 用例与判据（新增 13 例）
+
+| 用例 | 判据 |
+|---|---|
+| 无演习进行中 | 账号文本 `admin（OPERATOR）`；渲染 `kExerciseControlIdleKey`；想定下拉 `value=='p-1'`（默认选中首个）；有「开演」、无「停演」 |
+| 进行中 | `kExerciseControlRunningKey` 文本 `进行中：想定 红方突袭｜模式 BATTLE｜已进行 120s｜参演 5｜在线 4`；有「停演」、无空态 |
+| 开演默认沿用想定 | 「沿用想定」下点开演，`StartExerciseRequest.toJson()` **恰为** `{planId:'p-1'}`（**不发 `battleMode`**）；成功后转为进行中并回执 `已开演：想定「红方突袭」` |
+| 开演选模式 | 下拉选 `BATTLE` 后点开演，`toJson()` 为 `{planId:'p-1', battleMode:'BATTLE'}`（契约字面量） |
+| 无想定 | 列表空 → 文案 `暂无想定，请先在想定管理中创建`；点开演 → **不发请求**、行内 `kExerciseControlErrorKey` 为 `请先选择想定再开演` |
+| 停演 | 二次确认后 `stop` 调用 1 次；重拉 `current` 切回空态；回执 `已停演，复盘编号 ex-1` |
+| 停演取消 | 点取消 → **不调用** `stop`、仍停在 `kExerciseControlRunningKey` |
+| 错误码映射（链路未开启） | 409 `DEVICE_LINK_NOT_OPEN` → 顶部文案含「马甲串口链路未开启」 |
+| 错误码映射（编成为空） | 400 `EXERCISE_ROSTER_EMPTY` → 顶部文案含「编成为空」 |
+| 错误码映射（已有进行中） | 409 `EXERCISE_ALREADY_RUNNING` → 顶部文案含「已有演习进行中」 |
+| 错误码映射（停演无进行中） | 409 `EXERCISE_NOT_RUNNING` → 顶部文案含「当前没有进行中的演习」 |
+| 接线（汇总页「演习」入口） | 汇总页 → 「演习」→ `ExerciseControlPage` 挂树；`GET /api/v1/exercise/current` 带 `Authorization: Bearer access-1`；空态渲染 |
+| 未注入入口 | 未注入 `onOpenExercise` 时汇总页**不渲染** `kTeamSummaryExerciseEntryKey` |
+
+### 51.3 口径要点
+
+- **无演习不是错误**：契约规定 `GET /exercise/current` 在无演习进行中时回 **HTTP 200 + `running=false`**（其余业务字段缺席），
+  页面据此切到「开演」态，**不把 200 当异常**，也不解引用 `planId`/`startedAt` 等可空字段。
+- **开演请求体「可选缺省」**：`StartExerciseRequest.toJson()` **只发非 null 键**——演习模式选「沿用想定」即**不发 `battleMode`**，
+  由服务端沿用想定里的模式。这与 `RosterEntry` 同源、与 `PlanUpsertRequest` 的整体替换口径**相反**。
+- **开演前置条件由服务端判定**：编成非空、马甲串口链路 `OPEN` 等由服务端按 400 `EXERCISE_ROSTER_EMPTY` / 409
+  `DEVICE_LINK_NOT_OPEN` / 409 `EXERCISE_ALREADY_RUNNING` 回绝；本页只把**错误码**映射成现场文案，不本地预判。
+- **停演后以服务端为准**：`stop` 成功后**重拉一次** `current`（而非本地臆造空态）再提示，页面自然切回「开演」态；回执带
+  `replayId`（即本场 `exerciseId`，可直接跳复盘）。
+- **端口全闭包**：`_openExercise` 的四个端口都**每次取用读 `_account!.accessToken`**，且全部经同一条 `RefreshingApiTransport`
+  ——401 到期**自动续期并重试一次**。
+- **入口可选注入**：`TeamSummaryPage.onOpenExercise` 为 `null` 时**不渲染**「演习」入口，既有汇总页用例渲染与行为**完全不变**。
+
+### 51.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**276 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 +
+  段 50 10 + **本段 13**）；`flutter analyze` → `No issues found! (ran in 3.6s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（1 新 + 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩），**未对着真实后端实例**跑过真实开演 / 停演（真实 409
+`DEVICE_LINK_NOT_OPEN` 链路门禁、真实 `EXERCISE_ROSTER_EMPTY` 编成校验、真实 `EXERCISE_ALREADY_RUNNING` 并发拦截未验证）；
+集成层（`ExerciseControlPage` + `ExerciseApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**模板下载 / multipart 导入**的 UI
+**尚未接线**，另开段。本段为**实测前置的客户端骨架验收**，不是生产发布批准。

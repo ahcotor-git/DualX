@@ -1792,11 +1792,43 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 `PLAN_IN_USE` 拦截未验证）；**开演 / 停演入口**（`startExercise` / `stopExercise`）与**模板下载 / multipart 导入** UI
 **尚未接线**。证据见 [testing](testing.md) **第 50 节**。
 
-**下一段（候选）**：CLIENT-WINDOWS 其余子域（**开演 / 停演入口**的 UI 接线 —— 接口已就绪，仅剩余下断面）；
-**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；地图与标定 **map 域**（约 14 端点，
-含 multipart 图片与校准异步）；复盘与导出 **replay 域**（约 7 端点）；**device 域**（约 15 端点 + `watchLinks` WS）；
-`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘
-（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。后续恢复默认「每原子任务 ≤3 文件」。
+**下一段（CLIENT-WINDOWS 续段·UI 接线·演习场次）落地**：承上段「**开演 / 停演入口另开段**」，本段把 exercise 域的
+**场次生命周期**接进指挥端 UI——新增**演习控制页**（`GET /exercise/current` 判态 + `POST /exercise/current` 开演 +
+`DELETE /exercise/current` 停演），**模板下载 / multipart 导入**仍另开段。落**一笔**（**4 文件 / 1 新 3 改**，
+**破「每原子任务 ≤3 文件」上限**，按无人值守授权**显式声明例外**）：
+- `lib/features/console/exercise_control_page.dart`（**新**）：`ExerciseControlPage`（顶部拉当前场次；**无演习 → 开演表单**
+  （想定下拉 + 演习模式下拉 + 「开演」）、**进行中 → 场次摘要 + 「停演」**（二次确认））+ 控件键族 `kExerciseControl*` /
+  `kExerciseStopConfirm|CancelKey`；端口 typedef `CurrentExerciseLoader` / `ExerciseStarter` / `ExerciseStopper`
+  （`listPlans` 复用 `PlanLister`）；默认选中首个想定；`_guard` 单飞去重、`_describeFailure(ApiException)` 按 `ApiErrorCode` switch
+  （`exerciseAlreadyRunning` / `exerciseNotRunning` / `exercisePlanNotFound` / `exerciseRosterEmpty` / `deviceLinkNotOpen` /
+  `validationFailed` / `instanceNotReady`）；
+- `lib/features/console/team_summary_page.dart`（改）：新增可选入口 `onOpenExercise` + 入口键 `kTeamSummaryExerciseEntryKey`
+  （`null` 时**不渲染**，既有用例渲染不变）；
+- `lib/app/console_app.dart`（改）：新增 `_openExercise`，把 `getCurrentExercise` / `listPlans` / `startExercise` / `stopExercise`
+  闭包接到 `ExerciseControlPage`（**全闭包读 `_account!.accessToken`**，续期换到的新令牌才会生效）+ `TeamSummaryPage` 接 `onOpenExercise`；
+- `test/console_widget_test.dart`（改）：新增助手 `exerciseOf` / `pumpExercise` + 两组共 **13 例**
+  （`演习控制页（段 51）` 11 + `指挥端演习控制接线（段 51）` 2）。
+
+**口径要点**：**无演习不是错误**——契约规定 `GET /exercise/current` 无演习时回 **HTTP 200 + `running=false`**（其余业务字段缺席），
+页面据此切「开演」态，**不把 200 当异常**、也不解引用 `planId` / `startedAt` 等可空字段；**开演请求体「可选缺省」**——
+`StartExerciseRequest.toJson()` **只发非 null 键**，选「沿用想定」即**不发 `battleMode`**（与 `RosterEntry` 同源、与
+`PlanUpsertRequest` 的整体替换口径**相反**）；**开演前置条件由服务端判定**（400 `EXERCISE_ROSTER_EMPTY` / 409
+`DEVICE_LINK_NOT_OPEN` / 409 `EXERCISE_ALREADY_RUNNING`），本页只把**错误码**映射成现场文案、不本地预判；**停演后以服务端为准**——
+`stop` 成功后**重拉一次** `current`（而非本地臆造空态）再提示，回执带 `replayId`（即本场 `exerciseId`）。本原子任务 **4 文件**
+（1 新 3 改）**破上限已声明例外**；实现期无返工（首次 `analyze` / `test` 即全绿）。
+
+门禁：`flutter test` → `All tests passed!`（**276 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 + 段 6 15 +
+段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 + 段 50 10 +
+**本段 13**）、`flutter analyze` → `No issues found! (ran in 3.6s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**
+（未改 Java / 契约，故未重跑）。**未验项**：**未对着真实后端实例**跑真实开演 / 停演（真实 409 `DEVICE_LINK_NOT_OPEN` 链路门禁、
+真实 `EXERCISE_ROSTER_EMPTY` 编成校验、真实 `EXERCISE_ALREADY_RUNNING` 并发拦截未验证）；**模板下载 / multipart 导入** UI
+**尚未接线**。证据见 [testing](testing.md) **第 51 节**。
+
+**下一段（候选）**：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
+地图与标定 **map 域**（约 14 端点，含 multipart 图片与校准异步）；复盘与导出 **replay 域**（约 7 端点）；
+**device 域**（约 15 端点 + `watchLinks` WS）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储
+（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）
+以补齐 **Windows 原生构建验收**。后续恢复默认「每原子任务 ≤3 文件」。
 
 
 
