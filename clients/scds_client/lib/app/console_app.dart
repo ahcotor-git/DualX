@@ -11,6 +11,7 @@ import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
 import '../features/console/replay_list_page.dart';
 import '../features/console/replay_player_page.dart';
+import '../features/console/replay_statistics_page.dart';
 import '../features/console/roster_editor_page.dart';
 import '../features/console/team_summary_page.dart';
 import '../features/console/uwb_calibration_page.dart';
@@ -617,7 +618,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
   ///
   /// `list` 是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
   /// （续期换到的新令牌才生效）；令牌到期由装饰器自动续期并重试一次。
-  /// 行内「回放」→ [_openReplayPlayer]。
+  /// 行内「回放」→ [_openReplayPlayer]、「统计」→ [_openReplayStatistics]。
   ///
   /// 注：`replayId` 就是演习编号（停演时把本场态势落库为一条同 ID 的复盘记录）。
   void _openReplays({
@@ -653,6 +654,11 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             replays: replays,
             replay: replay,
           ),
+          onOpenStatistics: (Replay replay) => _openReplayStatistics(
+            navigator: navigator,
+            replays: replays,
+            replay: replay,
+          ),
         ),
       ),
     );
@@ -681,6 +687,35 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             token: _account!.accessToken,
             replayId: replay.replayId,
             cursor: cursor,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 57：打开复盘统计面板（`GET /replays/{replayId}/statistics`）。
+  ///
+  /// 端口**只接 `timelineBuckets`**（存活曲线采样段数，10..500）；留空即不传该键，
+  /// 由服务端走默认值——本层不臆造缺省。统计里的 `t` 亦为**相对开演的毫秒偏移**。
+  void _openReplayStatistics({
+    required NavigatorState navigator,
+    required ReplayApi replays,
+    required Replay replay,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => ReplayStatisticsPage(
+          session: session,
+          replay: replay,
+          load: ({int? timelineBuckets}) => replays.getReplayStatistics(
+            token: _account!.accessToken,
+            replayId: replay.replayId,
+            timelineBuckets: timelineBuckets,
           ),
         ),
       ),

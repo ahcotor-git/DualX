@@ -20,9 +20,10 @@ const Key kReplayListPageKey = Key('replayList.page');
 const Key kReplayListPrevButtonKey = Key('replayList.prevButton');
 const Key kReplayListNextButtonKey = Key('replayList.nextButton');
 
-/// 按复盘编号取行文本与行内「回放」入口键。
+/// 按复盘编号取行文本与行内「回放」/「统计」入口键。
 Key replayListRowKey(String replayId) => Key('replayList.row.$replayId');
 Key replayListPlayKey(String replayId) => Key('replayList.play.$replayId');
+Key replayListStatisticsKey(String replayId) => Key('replayList.statistics.$replayId');
 
 /// 复盘列表端口（`GET /replays`）——按结束时间倒序。
 ///
@@ -41,13 +42,16 @@ typedef ReplayLister = Future<ReplayPage> Function({
 /// 打开某场复盘回放器的入口；为 `null` 时不渲染行内「回放」。
 typedef ReplayOpener = void Function(Replay replay);
 
+/// 打开某场复盘统计面板的入口；为 `null` 时不渲染行内「统计」。
+typedef ReplayStatisticsOpener = void Function(Replay replay);
+
 /// 本页固定每页条数（契约 `size` 1..200）。
 const int kReplayListPageSize = 20;
 
 /// 复盘列表页（M6 CLIENT-WINDOWS 段 57·UI 接线）——replay 域只读面（列表 + 概览）的指挥端接线。
 ///
-/// 承载 `GET /replays`；行内「回放」经 [onOpenReplay] 交给调用方 push 回放器页面
-/// （未注入端口则不渲染该按钮）。
+/// 承载 `GET /replays`；行内「回放」/「统计」经 [onOpenReplay] / [onOpenStatistics]
+/// 交给调用方 push 对应页面（未注入端口则不渲染该按钮）。
 ///
 /// 口径：
 /// - **`replayId` 就是演习编号**（停演时把本场态势落库为一条同 ID 的复盘记录），
@@ -62,6 +66,7 @@ class ReplayListPage extends StatefulWidget {
     required this.session,
     required this.list,
     this.onOpenReplay,
+    this.onOpenStatistics,
   });
 
   /// 已登录的账号会话（提供身份快照）。
@@ -71,6 +76,9 @@ class ReplayListPage extends StatefulWidget {
 
   /// 打开该场复盘回放器的入口；为 `null` 时不渲染行内「回放」。
   final ReplayOpener? onOpenReplay;
+
+  /// 打开该场复盘统计面板的入口；为 `null` 时不渲染行内「统计」。
+  final ReplayStatisticsOpener? onOpenStatistics;
 
   @override
   State<ReplayListPage> createState() => _ReplayListPageState();
@@ -183,6 +191,12 @@ class _ReplayListPageState extends State<ReplayListPage> {
                 key: replayListPlayKey(replay.replayId),
                 onPressed: _busy ? null : () => widget.onOpenReplay!(replay),
                 child: const Text('回放'),
+              ),
+            if (widget.onOpenStatistics != null)
+              TextButton(
+                key: replayListStatisticsKey(replay.replayId),
+                onPressed: _busy ? null : () => widget.onOpenStatistics!(replay),
+                child: const Text('统计'),
               ),
           ],
         ),

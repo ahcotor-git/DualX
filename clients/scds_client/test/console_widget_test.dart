@@ -16,6 +16,7 @@ import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
 import 'package:scds_client/features/console/replay_list_page.dart';
 import 'package:scds_client/features/console/replay_player_page.dart';
+import 'package:scds_client/features/console/replay_statistics_page.dart';
 import 'package:scds_client/features/console/roster_editor_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
 import 'package:scds_client/features/console/uwb_calibration_page.dart';
@@ -738,6 +739,75 @@ void main() {
           replay: replay ?? replayOf('r-1'),
           loadTimeline: loadTimeline ??
               ({String? cursor}) async => const TimelineChunk(samples: <TrackSample>[]),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 57：造队伍战损汇总（契约五项计数皆非必填，默认留空验「破折号」）。
+  TeamSummary teamSummaryOf(
+    Team team, {
+    int? total,
+    int? live,
+    int? dead,
+    int? offline,
+    int? hitsDealt,
+  }) =>
+      TeamSummary(
+        team: team,
+        total: total,
+        live: live,
+        dead: dead,
+        offline: offline,
+        hitsDealt: hitsDealt,
+      );
+
+  /// 段 57：造命中排行条目（字段皆非必填）。
+  TopShooter shooterOf({int? vestNum, String? name, int? hitsDealt, int? kills}) =>
+      TopShooter(vestNum: vestNum, name: name, hitsDealt: hitsDealt, kills: kills);
+
+  /// 段 57：造命中部位分布条目。
+  HitPartCount hitPartCountOf({HitPart? hitPart, int? count}) =>
+      HitPartCount(hitPart: hitPart, count: count);
+
+  /// 段 57：造存活曲线采样段（`t` 为**相对开演的毫秒偏移**）。
+  TimelineBucket bucketOf({int? t, Map<String, int>? liveByTeam}) =>
+      TimelineBucket(t: t, liveByTeam: liveByTeam);
+
+  /// 段 57：造契约形状的复盘统计（必填仅 `replayId`）。
+  ReplayStatistics statsOf(
+    String replayId, {
+    List<TeamSummary> teams = const <TeamSummary>[],
+    List<TopShooter> topShooters = const <TopShooter>[],
+    List<HitPartCount> hitPartDistribution = const <HitPartCount>[],
+    List<TimelineBucket> timeline = const <TimelineBucket>[],
+  }) =>
+      ReplayStatistics(
+        replayId: replayId,
+        teams: teams,
+        topShooters: topShooters,
+        hitPartDistribution: hitPartDistribution,
+        timeline: timeline,
+      );
+
+  /// 段 57：复盘统计面板直接挂树——`load` 是闭包桩，**不发真实请求**。
+  Future<void> pumpReplayStatistics(
+    WidgetTester tester, {
+    Replay? replay,
+    ReplayStatisticsLoader? load,
+  }) async {
+    tester.view.physicalSize = const Size(1400, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReplayStatisticsPage(
+          session: accountSession(),
+          replay: replay ?? replayOf('r-1'),
+          load: load ??
+              ({int? timelineBuckets}) async => statsOf('r-1'),
         ),
       ),
     );
@@ -4495,6 +4565,218 @@ void main() {
     });
   });
 
+  /// 段 57：复盘统计面板——replay 域 statistics 端点的指挥端接线。
+  group('复盘统计页（段 57）', () {
+    testWidgets('已加载：四段如实渲染，采样段数留空即不传该键', (WidgetTester tester) async {
+      final List<int?> buckets = <int?>[];
+      await pumpReplayStatistics(
+        tester,
+        load: ({int? timelineBuckets}) async {
+          buckets.add(timelineBuckets);
+          return statsOf(
+            'r-1',
+            teams: <TeamSummary>[
+              teamSummaryOf(Team.red, total: 12, live: 5, dead: 3, offline: 4, hitsDealt: 20),
+            ],
+            topShooters: <TopShooter>[
+              shooterOf(vestNum: 3, name: 'admin', hitsDealt: 12, kills: 4),
+            ],
+            hitPartDistribution: <HitPartCount>[
+              hitPartCountOf(hitPart: HitPart.head, count: 3),
+            ],
+            timeline: <TimelineBucket>[
+              bucketOf(t: 1500, liveByTeam: <String, int>{'RED': 5, 'BLUE': 3}),
+            ],
+          );
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kReplayStatisticsAccountKey)).data,
+        'admin（OPERATOR）',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(kReplayStatisticsSummaryKey)).data,
+        '想定A｜模式 —｜开始 2026-10-01T08:00:00.000Z｜时长 —｜参演 —｜命中 —｜阵亡 —',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(replayStatisticsTeamRowKey('RED'))).data,
+        'RED｜总 12｜存活 5｜阵亡 3｜离线 4｜命中 20',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(replayStatisticsShooterRowKey(1))).data,
+        '第 1 名｜admin｜编号 3｜命中 12｜击杀 4',
+      );
+      expect(tester.widget<Text>(find.byKey(replayStatisticsHitPartRowKey(0))).data, 'HEAD｜3');
+      // 曲线的时间轴是**相对开演的毫秒偏移**（1500ms → 00:01.5），不是时刻。
+      expect(
+        tester.widget<Text>(find.byKey(replayStatisticsBucketRowKey(0))).data,
+        '00:01.5｜RED 5 / BLUE 3',
+      );
+      // 留空即**不传该键**，由服务端走默认值。
+      expect(buckets, <int?>[null]);
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约可选字段缺失：计数 / 排行 / 曲线显示破折号，不臆造 0', (WidgetTester tester) async {
+      await pumpReplayStatistics(
+        tester,
+        load: ({int? timelineBuckets}) async => statsOf(
+          'r-1',
+          teams: <TeamSummary>[teamSummaryOf(Team.blue)],
+          topShooters: <TopShooter>[shooterOf()],
+          hitPartDistribution: <HitPartCount>[hitPartCountOf()],
+          timeline: <TimelineBucket>[bucketOf()],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(replayStatisticsTeamRowKey('BLUE'))).data,
+        'BLUE｜总 —｜存活 —｜阵亡 —｜离线 —｜命中 —',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(replayStatisticsShooterRowKey(1))).data,
+        '第 1 名｜（未登记）｜编号 —｜命中 —｜击杀 —',
+      );
+      expect(tester.widget<Text>(find.byKey(replayStatisticsHitPartRowKey(0))).data, '—｜—');
+      expect(tester.widget<Text>(find.byKey(replayStatisticsBucketRowKey(0))).data, '—｜—');
+
+      await unmount(tester);
+    });
+
+    testWidgets('采样段数合法：随重载请求送出', (WidgetTester tester) async {
+      final List<int?> buckets = <int?>[];
+      await pumpReplayStatistics(
+        tester,
+        load: ({int? timelineBuckets}) async {
+          buckets.add(timelineBuckets);
+          return statsOf('r-1');
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kReplayStatisticsBucketsKey), ' 60 ');
+      await tester.tap(find.byKey(kReplayStatisticsReloadButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(buckets, <int?>[null, 60]);
+      expect(find.byKey(kReplayStatisticsFormErrorKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('采样段数非整数：本地拦下、不发请求，且不清空已装载数据', (WidgetTester tester) async {
+      int calls = 0;
+      await pumpReplayStatistics(
+        tester,
+        load: ({int? timelineBuckets}) async {
+          calls++;
+          return statsOf('r-1', teams: <TeamSummary>[teamSummaryOf(Team.red, total: 2)]);
+        },
+      );
+      await tester.pumpAndSettle();
+      expect(calls, 1);
+
+      await tester.enterText(find.byKey(kReplayStatisticsBucketsKey), 'abc');
+      await tester.tap(find.byKey(kReplayStatisticsReloadButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(calls, 1);
+      expect(
+        tester.widget<Text>(find.byKey(kReplayStatisticsFormErrorKey)).data,
+        '采样段数需为 10..500 的整数（留空走服务端默认）',
+      );
+      expect(find.byKey(replayStatisticsTeamRowKey('RED')), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('采样段数越界（9 / 501）：本地拦下、不发请求', (WidgetTester tester) async {
+      int calls = 0;
+      await pumpReplayStatistics(
+        tester,
+        load: ({int? timelineBuckets}) async {
+          calls++;
+          return statsOf('r-1');
+        },
+      );
+      await tester.pumpAndSettle();
+
+      for (final String text in <String>['9', '501']) {
+        await tester.enterText(find.byKey(kReplayStatisticsBucketsKey), text);
+        await tester.tap(find.byKey(kReplayStatisticsReloadButtonKey));
+        await tester.pumpAndSettle();
+        expect(find.byKey(kReplayStatisticsFormErrorKey), findsOneWidget);
+      }
+      expect(calls, 1);
+
+      await unmount(tester);
+    });
+
+    testWidgets('复盘不存在（404 REPLAY_NOT_FOUND）：映射为文案', (WidgetTester tester) async {
+      await pumpReplayStatistics(
+        tester,
+        load: ({int? timelineBuckets}) async =>
+            throw apiFailure(404, ApiErrorCode.replayNotFound),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kReplayStatisticsErrorKey)).data,
+        '复盘不存在（REPLAY_NOT_FOUND）',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('无权查看（403 AUTH_FORBIDDEN）：映射为文案', (WidgetTester tester) async {
+      await pumpReplayStatistics(
+        tester,
+        load: ({int? timelineBuckets}) async =>
+            throw apiFailure(403, ApiErrorCode.authForbidden),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kReplayStatisticsErrorKey)).data,
+        '当前账号无权查看该复盘（AUTH_FORBIDDEN）',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('实例未就绪（503 INSTANCE_NOT_READY）：映射为文案', (WidgetTester tester) async {
+      await pumpReplayStatistics(
+        tester,
+        load: ({int? timelineBuckets}) async =>
+            throw apiFailure(503, ApiErrorCode.instanceNotReady),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kReplayStatisticsErrorKey)).data,
+        '实例尚未就绪，请稍后重试（INSTANCE_NOT_READY）',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('四段皆空：各段分别显示空态', (WidgetTester tester) async {
+      await pumpReplayStatistics(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kReplayStatisticsTeamsEmptyKey), findsOneWidget);
+      expect(find.byKey(kReplayStatisticsShootersEmptyKey), findsOneWidget);
+      expect(find.byKey(kReplayStatisticsHitPartsEmptyKey), findsOneWidget);
+      expect(find.byKey(kReplayStatisticsTimelineEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
   /// 段 57：复盘接线——汇总页「复盘」入口进入，列表 + 回放器挂同一条已认证传输。
   group('指挥端复盘接线（段 57）', () {
     testWidgets('「复盘」入口：进入列表页并按登录令牌拉第一页，行内「回放」进入回放器',
@@ -4585,6 +4867,104 @@ void main() {
           .lastWhere((ScriptedCall call) => call.key == 'GET $kApiPrefix/replays/r-1/timeline');
       expect(timelineCall.authorization, 'Bearer access-1');
       expect(find.byKey(kReplayPlayerEndKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('行内「统计」：按登录令牌拉该复盘统计（采样段数留空即不传）',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/replays':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'replayId': 'r-1',
+                  'planName': '红方突袭',
+                  'startedAt': '2026-10-01T08:00:00Z',
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'GET $kApiPrefix/replays/r-1/statistics':
+            return jsonResponse(<String, dynamic>{
+              'replayId': 'r-1',
+              'teams': <Object>[
+                <String, dynamic>{
+                  'team': 'RED',
+                  'total': 12,
+                  'live': 5,
+                  'dead': 3,
+                  'offline': 4,
+                  'hitsDealt': 20,
+                },
+              ],
+              'topShooters': <Object>[
+                <String, dynamic>{'vestNum': 3, 'name': 'admin', 'hitsDealt': 12, 'kills': 4},
+              ],
+              'hitPartDistribution': <Object>[
+                <String, dynamic>{'hitPart': 'HEAD', 'count': 3},
+              ],
+              'timeline': <Object>[
+                <String, dynamic>{
+                  't': 1500,
+                  'liveByTeam': <String, int>{'RED': 5, 'BLUE': 3},
+                },
+              ],
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryReplaysEntryKey));
+      await tester.pumpAndSettle();
+
+      // 行内「统计」→ 统计面板，按同一令牌拉该复盘统计。
+      await tester.tap(find.byKey(replayListStatisticsKey('r-1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReplayStatisticsPage), findsOneWidget);
+      final ScriptedCall statsCall = transport.calls.lastWhere(
+        (ScriptedCall call) => call.key == 'GET $kApiPrefix/replays/r-1/statistics',
+      );
+      expect(statsCall.authorization, 'Bearer access-1');
+      expect(
+        tester.widget<Text>(find.byKey(replayStatisticsTeamRowKey('RED'))).data,
+        'RED｜总 12｜存活 5｜阵亡 3｜离线 4｜命中 20',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(replayStatisticsBucketRowKey(0))).data,
+        '00:01.5｜RED 5 / BLUE 3',
+      );
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/replays',
+          'GET $kApiPrefix/replays/r-1/statistics',
+        ]),
+      );
 
       await unmount(tester);
     });
