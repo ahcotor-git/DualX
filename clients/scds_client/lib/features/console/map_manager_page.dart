@@ -28,6 +28,9 @@ Key mapManagerPreviewKey(String mapId) => Key('mapManager.preview.$mapId');
 /// 行内「标定」入口（未注入 [MapManagerPage.onOpenCalibration] 时不渲染）。
 Key mapManagerCalibrationKey(String mapId) => Key('mapManager.calibration.$mapId');
 
+/// 行内「点位」入口（未注入 [MapManagerPage.onOpenFloorPoints] 时不渲染）。
+Key mapManagerFloorPointsKey(String mapId) => Key('mapManager.floorPoints.$mapId');
+
 /// 新建 / 编辑底图对话框的控件键。
 const Key kMapFormTitleKey = Key('mapManager.form.title');
 const Key kMapFormNameFieldKey = Key('mapManager.form.name');
@@ -72,6 +75,11 @@ typedef MapImagePicker = Future<PickedImage?> Function();
 /// 标定页由调用方（`app/console_app.dart`）构造并 push，本页只负责给出行内入口。
 typedef MapCalibrationOpener = void Function(MapDetail map);
 
+/// 打开某底图的楼层点位编辑页端口（段 55）。
+///
+/// 点位页由调用方（`app/console_app.dart`）构造并 push，本页只负责给出行内入口。
+typedef MapFloorPointsOpener = void Function(MapDetail map);
+
 /// 待上传的底图图片：文件名 + 原始字节 + 声明的内容类型。
 ///
 /// 服务端按**真实图片头**判定类型（仅 PNG / JPEG / WebP），[contentType] 只是如实声明，
@@ -97,7 +105,8 @@ class PickedImage {
 ///
 /// 覆盖底图的读 / 写：[MapLister] / [MapCreator] / [MapUpdater] / [MapRemover]，
 /// 以及图片的上传（[uploadImage] + [pickImage]）与下载预览（[downloadImage]）。
-/// 楼层点位编辑与 UWB 标定属同域，但在后续段接线，本页不承载。
+/// 楼层点位编辑（[onOpenFloorPoints]）与 UWB 标定（[onOpenCalibration]）属同域，
+/// 各由独立页面承载，本页只给出行内入口（未注入端口则不渲染）。
 ///
 /// 口径：
 /// - **修改是整体替换**：契约 `MapUpsertRequest` 的 `toJson` 显式输出 `name` / `type`
@@ -120,6 +129,7 @@ class MapManagerPage extends StatefulWidget {
     this.downloadImage,
     this.pickImage,
     this.onOpenCalibration,
+    this.onOpenFloorPoints,
   });
 
   /// 已登录的账号会话（提供身份快照）。
@@ -141,6 +151,9 @@ class MapManagerPage extends StatefulWidget {
 
   /// 打开该底图 UWB 标定面板的入口；为 `null` 时不渲染行内「标定」。
   final MapCalibrationOpener? onOpenCalibration;
+
+  /// 打开该底图楼层点位编辑页的入口；为 `null` 时不渲染行内「点位」。
+  final MapFloorPointsOpener? onOpenFloorPoints;
 
   @override
   State<MapManagerPage> createState() => _MapManagerPageState();
@@ -379,6 +392,12 @@ class _MapManagerPageState extends State<MapManagerPage> {
                 key: mapManagerCalibrationKey(map.mapId),
                 onPressed: _busy ? null : () => widget.onOpenCalibration!(map),
                 child: const Text('标定'),
+              ),
+            if (widget.onOpenFloorPoints != null)
+              TextButton(
+                key: mapManagerFloorPointsKey(map.mapId),
+                onPressed: _busy ? null : () => widget.onOpenFloorPoints!(map),
+                child: const Text('点位'),
               ),
             TextButton(
               key: mapManagerEditKey(map.mapId),

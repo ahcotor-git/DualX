@@ -5,6 +5,7 @@ import '../features/console/account_page.dart';
 import '../features/console/command_page.dart';
 import '../features/console/console_login_page.dart';
 import '../features/console/exercise_control_page.dart';
+import '../features/console/floor_points_page.dart';
 import '../features/console/map_manager_page.dart';
 import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
@@ -509,6 +510,11 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             maps: maps,
             map: map,
           ),
+          onOpenFloorPoints: (MapDetail map) => _openFloorPoints(
+            navigator: navigator,
+            maps: maps,
+            map: map,
+          ),
         ),
       ),
     );
@@ -555,6 +561,43 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
           clearCalibration: () => maps.clearUwbCalibration(
             token: _account!.accessToken,
             mapId: map.mapId,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 55：打开某底图的楼层点位编辑页（map 域最后 2 端点——点位表读 / 整体替换）。
+  ///
+  /// 两个端口都走同一条 [RefreshingApiTransport]，**全闭包读 `_account!.accessToken`**
+  /// （续期换到的新令牌才生效）；令牌到期由装饰器自动续期并重试一次。
+  void _openFloorPoints({
+    required NavigatorState navigator,
+    required MapApi maps,
+    required MapDetail map,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => FloorPointsPage(
+          session: session,
+          mapId: map.mapId,
+          mapName: map.name,
+          floorCount: map.floorCount,
+          loadPoints: (int floorNum) => maps.listFloorPoints(
+            token: _account!.accessToken,
+            mapId: map.mapId,
+            floorNum: floorNum,
+          ),
+          savePoints: (int floorNum, FloorPointsRequest request) => maps.replaceFloorPoints(
+            token: _account!.accessToken,
+            mapId: map.mapId,
+            floorNum: floorNum,
+            request: request,
           ),
         ),
       ),

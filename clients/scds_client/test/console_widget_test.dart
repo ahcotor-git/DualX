@@ -10,6 +10,7 @@ import 'package:scds_client/features/console/account_page.dart';
 import 'package:scds_client/features/console/command_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/exercise_control_page.dart';
+import 'package:scds_client/features/console/floor_points_page.dart';
 import 'package:scds_client/features/console/map_manager_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
@@ -525,6 +526,7 @@ void main() {
     MapImageDownloader? downloadImage,
     MapImagePicker? pickImage,
     MapCalibrationOpener? onOpenCalibration,
+    MapFloorPointsOpener? onOpenFloorPoints,
   }) async {
     tester.view.physicalSize = const Size(1400, 2000);
     tester.view.devicePixelRatio = 1.0;
@@ -543,6 +545,7 @@ void main() {
           downloadImage: downloadImage,
           pickImage: pickImage,
           onOpenCalibration: onOpenCalibration,
+          onOpenFloorPoints: onOpenFloorPoints,
         ),
       ),
     );
@@ -596,6 +599,41 @@ void main() {
               startCalibration ?? (UwbCalibrationRequest? request) async => fail('未预期的启动校准'),
           pollCalibration: pollCalibration ?? () async => fail('未预期的查询校准状态'),
           clearCalibration: clearCalibration ?? () async => fail('未预期的清除校准'),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 55：造一个契约形状的楼层点位（坐标是归一化百分比 0~1，原点左上）。
+  FloorPoint floorPointOf({int posNum = 1, double x = 0.1, double y = 0.2, String? label}) =>
+      FloorPoint(posNum: posNum, xPct: x, yPct: y, label: label);
+
+  /// 段 55：楼层点位编辑页直接挂树——两个端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 视口放大到一屏容纳楼层号行与多行点位，免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpFloor(
+    WidgetTester tester, {
+    String mapId = 'm-1',
+    String mapName = '演训场',
+    int? floorCount,
+    FloorPointsLoader? loadPoints,
+    FloorPointsSaver? savePoints,
+  }) async {
+    tester.view.physicalSize = const Size(1400, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FloorPointsPage(
+          session: accountSession(),
+          mapId: mapId,
+          mapName: mapName,
+          floorCount: floorCount,
+          loadPoints: loadPoints ?? (int floorNum) async => fail('未预期的读取楼层点位'),
+          savePoints: savePoints ??
+              (int floorNum, FloorPointsRequest request) async => fail('未预期的保存楼层点位'),
         ),
       ),
     );
@@ -3588,6 +3626,343 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(mapManagerCalibrationKey('m-1')), findsNothing);
+      expect(find.byKey(mapManagerEditKey('m-1')), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 55：楼层点位编辑页——map 域最后 2 端点（点位表读 / 整体替换）。
+  group('楼层点位编辑页（段 55）', () {
+    testWidgets('已加载：状态文案给出楼层与点位数，表单以服务端快照整表预填', (WidgetTester tester) async {
+      final List<int> loaded = <int>[];
+      await pumpFloor(
+        tester,
+        floorCount: 3,
+        loadPoints: (int floorNum) async {
+          loaded.add(floorNum);
+          return FloorPointsRequest(points: <FloorPoint>[
+            floorPointOf(posNum: 1, x: 0.1, y: 0.2, label: '门口'),
+            floorPointOf(posNum: 2, x: 0.5, y: 1),
+          ]);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(loaded, <int>[1]);
+      expect(tester.widget<Text>(find.byKey(kFloorPointsStatusKey)).data, '楼层 1｜共 2 个点位');
+      expect(
+        tester.widget<Text>(find.byKey(kFloorPointsAccountKey)).data,
+        'admin（OPERATOR）',
+      );
+
+      // 整体替换回归：不动的字段必须原样出现在表单里，否则保存会误伤它们。
+      expect(fieldText(tester, kFloorPointsFloorNumKey), '1');
+      expect(fieldText(tester, floorPointsPosNumKey(0)), '1');
+      expect(fieldText(tester, floorPointsXKey(0)), '0.1');
+      expect(fieldText(tester, floorPointsYKey(0)), '0.2');
+      expect(fieldText(tester, floorPointsLabelKey(0)), '门口');
+      expect(fieldText(tester, floorPointsPosNumKey(1)), '2');
+      expect(fieldText(tester, floorPointsXKey(1)), '0.5');
+      expect(fieldText(tester, floorPointsYKey(1)), '1');
+      expect(fieldText(tester, floorPointsLabelKey(1)), '');
+
+      await unmount(tester);
+    });
+
+    testWidgets('空楼层：显示空态，新增一行后空态消失', (WidgetTester tester) async {
+      await pumpFloor(
+        tester,
+        loadPoints: (int floorNum) async => const FloorPointsRequest(points: <FloorPoint>[]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(kFloorPointsStatusKey)).data, '楼层 1｜共 0 个点位');
+      expect(find.byKey(kFloorPointsEmptyKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kFloorPointsAddButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kFloorPointsEmptyKey), findsNothing);
+      expect(find.byKey(floorPointsPosNumKey(0)), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('删行后保存：整表替换为空数组（合法清空）', (WidgetTester tester) async {
+      final List<FloorPointsRequest> saved = <FloorPointsRequest>[];
+      await pumpFloor(
+        tester,
+        loadPoints: (int floorNum) async =>
+            FloorPointsRequest(points: <FloorPoint>[floorPointOf(posNum: 9, x: 0.3, y: 0.4)]),
+        savePoints: (int floorNum, FloorPointsRequest request) async {
+          saved.add(request);
+          return request;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(floorPointsRemoveKey(0)));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Text>(find.byKey(kFloorPointsStatusKey)).data, '楼层 1｜共 0 个点位');
+
+      await tester.tap(find.byKey(kFloorPointsSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saved.single.toJson(), <String, Object?>{'points': <Object>[]});
+      expect(find.text('已保存楼层 1 的 0 个点位'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('保存是整体替换：新增行与既有行四键全提交（label 留空显式 null）', (WidgetTester tester) async {
+      final List<int> savedFloors = <int>[];
+      final List<FloorPointsRequest> saved = <FloorPointsRequest>[];
+      await pumpFloor(
+        tester,
+        loadPoints: (int floorNum) async => FloorPointsRequest(
+          points: <FloorPoint>[floorPointOf(posNum: 1, x: 0.1, y: 0.2, label: '门口')],
+        ),
+        savePoints: (int floorNum, FloorPointsRequest request) async {
+          savedFloors.add(floorNum);
+          saved.add(request);
+          return request;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kFloorPointsAddButtonKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(floorPointsPosNumKey(1)), '7');
+      await tester.enterText(find.byKey(floorPointsXKey(1)), '0.9');
+      await tester.enterText(find.byKey(floorPointsYKey(1)), '0.8');
+      await tester.enterText(find.byKey(floorPointsLabelKey(1)), '空地');
+      // 既有行的备注清空——整体替换下这就是「置空」，必须显式发 null。
+      await tester.enterText(find.byKey(floorPointsLabelKey(0)), '');
+
+      await tester.tap(find.byKey(kFloorPointsSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(savedFloors, <int>[1]);
+      expect(saved.single.toJson(), <String, Object?>{
+        'points': <Object>[
+          <String, Object?>{'posNum': 1, 'xPct': 0.1, 'yPct': 0.2, 'label': null},
+          <String, Object?>{'posNum': 7, 'xPct': 0.9, 'yPct': 0.8, 'label': '空地'},
+        ],
+      });
+      expect(find.text('已保存楼层 1 的 2 个点位'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('posNum 留空：不发请求、显示行内校验错误', (WidgetTester tester) async {
+      int saveCalls = 0;
+      await pumpFloor(
+        tester,
+        loadPoints: (int floorNum) async =>
+            FloorPointsRequest(points: <FloorPoint>[floorPointOf()]),
+        savePoints: (int floorNum, FloorPointsRequest request) async {
+          saveCalls++;
+          return request;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(floorPointsPosNumKey(0)), '');
+      await tester.tap(find.byKey(kFloorPointsSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saveCalls, 0);
+      expect(
+        tester.widget<Text>(find.byKey(kFloorPointsFormErrorKey)).data,
+        '第 1 行点位号需为整数',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('坐标越界 1.2：不发请求、显示行内校验错误', (WidgetTester tester) async {
+      int saveCalls = 0;
+      await pumpFloor(
+        tester,
+        loadPoints: (int floorNum) async =>
+            FloorPointsRequest(points: <FloorPoint>[floorPointOf()]),
+        savePoints: (int floorNum, FloorPointsRequest request) async {
+          saveCalls++;
+          return request;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(floorPointsXKey(0)), '1.2');
+      await tester.tap(find.byKey(kFloorPointsSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saveCalls, 0);
+      expect(
+        tester.widget<Text>(find.byKey(kFloorPointsFormErrorKey)).data,
+        '第 1 行 xPct 需为 0~1 的数值（归一化百分比）',
+      );
+      expect(tester.widget<Text>(find.byKey(kFloorPointsStatusKey)).data, '楼层 1｜共 1 个点位');
+
+      await unmount(tester);
+    });
+
+    testWidgets('坐标边界 0 与 1 合法：照常提交', (WidgetTester tester) async {
+      final List<FloorPointsRequest> saved = <FloorPointsRequest>[];
+      await pumpFloor(
+        tester,
+        loadPoints: (int floorNum) async =>
+            FloorPointsRequest(points: <FloorPoint>[floorPointOf()]),
+        savePoints: (int floorNum, FloorPointsRequest request) async {
+          saved.add(request);
+          return request;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(floorPointsXKey(0)), '0');
+      await tester.enterText(find.byKey(floorPointsYKey(0)), '1');
+      await tester.tap(find.byKey(kFloorPointsSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saved.single.points.single.xPct, 0.0);
+      expect(saved.single.points.single.yPct, 1.0);
+
+      await unmount(tester);
+    });
+
+    testWidgets('改了楼层号未重新加载即保存：挡下，不把本层清单写到新楼层', (WidgetTester tester) async {
+      final List<int> loaded = <int>[];
+      int saveCalls = 0;
+      await pumpFloor(
+        tester,
+        loadPoints: (int floorNum) async {
+          loaded.add(floorNum);
+          return FloorPointsRequest(points: <FloorPoint>[floorPointOf(posNum: floorNum)]);
+        },
+        savePoints: (int floorNum, FloorPointsRequest request) async {
+          saveCalls++;
+          return request;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kFloorPointsFloorNumKey), '2');
+      await tester.tap(find.byKey(kFloorPointsSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saveCalls, 0);
+      expect(
+        tester.widget<Text>(find.byKey(kFloorPointsFormErrorKey)).data,
+        '楼层号已改，请先「加载」该楼层再保存',
+      );
+
+      // 重新「加载」后才切到第 2 层，且整表以第 2 层的快照重建。
+      await tester.tap(find.byKey(kFloorPointsLoadButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(loaded, <int>[1, 2]);
+      expect(tester.widget<Text>(find.byKey(kFloorPointsStatusKey)).data, '楼层 2｜共 1 个点位');
+      expect(fieldText(tester, floorPointsPosNumKey(0)), '2');
+
+      await unmount(tester);
+    });
+
+    testWidgets('底图不存在（404 MAP_NOT_FOUND）：错误落到页面顶部而非行内', (WidgetTester tester) async {
+      await pumpFloor(
+        tester,
+        loadPoints: (int floorNum) async => throw apiFailure(404, ApiErrorCode.mapNotFound),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kFloorPointsErrorKey)).data,
+        '底图不存在（MAP_NOT_FOUND）',
+      );
+      expect(find.byKey(kFloorPointsFormErrorKey), findsNothing);
+      expect(tester.widget<Text>(find.byKey(kFloorPointsStatusKey)).data, '未加载');
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 55：楼层点位接线——底图行「点位」入口进入，两个端口挂同一条已认证传输。
+  group('指挥端楼层点位接线（段 55）', () {
+    testWidgets('底图行「点位」入口：进入点位页并按登录令牌拉第 1 层点位表',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/maps':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{'mapId': 'm-1', 'name': '演训场', 'type': 'INDOOR'},
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'GET $kApiPrefix/maps/m-1/floors/1/points':
+            return jsonResponse(<String, dynamic>{
+              'points': <Object>[
+                <String, dynamic>{'posNum': 1, 'xPct': 0.25, 'yPct': 0.75, 'label': '门口'},
+              ],
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryMapsEntryKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(mapManagerFloorPointsKey('m-1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(FloorPointsPage), findsOneWidget);
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/maps',
+          'GET $kApiPrefix/maps/m-1/floors/1/points',
+        ]),
+      );
+      final ScriptedCall pointsCall = transport.calls.lastWhere(
+        (ScriptedCall call) => call.key == 'GET $kApiPrefix/maps/m-1/floors/1/points',
+      );
+      expect(pointsCall.authorization, 'Bearer access-1');
+      expect(tester.widget<Text>(find.byKey(kFloorPointsStatusKey)).data, '楼层 1｜共 1 个点位');
+      expect(fieldText(tester, floorPointsPosNumKey(0)), '1');
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：底图行不渲染「点位」按钮', (WidgetTester tester) async {
+      await pumpMaps(
+        tester,
+        list: () async => mapPageOf(<MapDetail>[mapOf('m-1', name: '演训场')]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(mapManagerFloorPointsKey('m-1')), findsNothing);
       expect(find.byKey(mapManagerEditKey('m-1')), findsOneWidget);
 
       await unmount(tester);
