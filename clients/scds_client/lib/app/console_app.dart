@@ -5,6 +5,7 @@ import '../features/console/account_page.dart';
 import '../features/console/command_page.dart';
 import '../features/console/console_login_page.dart';
 import '../features/console/exercise_control_page.dart';
+import '../features/console/map_manager_page.dart';
 import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
 import '../features/console/roster_editor_page.dart';
@@ -17,6 +18,8 @@ import '../shared/api/command_models.dart';
 import '../shared/api/exercise_api.dart';
 import '../shared/api/exercise_models.dart';
 import '../shared/api/health_api.dart';
+import '../shared/api/map_api.dart';
+import '../shared/api/map_models.dart';
 import '../shared/api/situation_api.dart';
 import '../shared/auth/refreshing_api_transport.dart';
 import '../shared/auth/session_store.dart';
@@ -141,6 +144,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
               final SituationApi situations = SituationApi(transport);
               final CommandApi command = CommandApi(transport);
               final ExerciseApi exercises = ExerciseApi(transport);
+              final MapApi maps = MapApi(transport);
 
               navigator.push(
                 MaterialPageRoute<void>(
@@ -186,6 +190,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                             onOpenExercise: () => _openExercise(
                               navigator: navigator,
                               exercises: exercises,
+                            ),
+                            onOpenMaps: () => _openMaps(
+                              navigator: navigator,
+                              maps: maps,
                             ),
                           ),
                         ),
@@ -441,6 +449,60 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             request: request,
           ),
           stop: () => exercises.stopExercise(token: _account!.accessToken),
+        ),
+      ),
+    );
+  }
+
+  /// 段 53：打开底图管理页（底图列表 / 新建 / 编辑 / 删除 + 图片上传与预览）。
+  ///
+  /// 各端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
+  /// 令牌到期时自动续期并重试一次。
+  ///
+  /// 注：`pickImage` 是**选文件端口**——Flutter 桌面 / Android 没有内置选文件 API，
+  /// 本段**刻意不引第三方依赖**（`file_picker` 等需单独授权），故生产端先接一个
+  /// 「未选择」占位（恒回 `null`，等同系统文件对话框里按取消），真实选文件待后续接入；
+  /// 数据链路（[MapImageUploader]）已按契约接齐，测试用注入假件驱动全流程。
+  void _openMaps({
+    required NavigatorState navigator,
+    required MapApi maps,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => MapManagerPage(
+          session: session,
+          list: () => maps.listMaps(token: _account!.accessToken),
+          create: (MapUpsertRequest request) => maps.createMap(
+            token: _account!.accessToken,
+            request: request,
+          ),
+          update: (String mapId, MapUpsertRequest request) => maps.updateMap(
+            token: _account!.accessToken,
+            mapId: mapId,
+            request: request,
+          ),
+          remove: (String mapId) => maps.deleteMap(
+            token: _account!.accessToken,
+            mapId: mapId,
+          ),
+          uploadImage: (String mapId, PickedImage image) => maps.uploadMapImage(
+            token: _account!.accessToken,
+            mapId: mapId,
+            filename: image.filename,
+            bytes: image.bytes,
+            contentType: image.contentType,
+          ),
+          downloadImage: (String mapId) => maps.downloadMapImage(
+            token: _account!.accessToken,
+            mapId: mapId,
+          ),
+          pickImage: () async => null,
         ),
       ),
     );

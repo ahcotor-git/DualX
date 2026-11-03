@@ -10,6 +10,7 @@ import 'package:scds_client/features/console/account_page.dart';
 import 'package:scds_client/features/console/command_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/exercise_control_page.dart';
+import 'package:scds_client/features/console/map_manager_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
 import 'package:scds_client/features/console/roster_editor_page.dart';
@@ -21,6 +22,7 @@ import 'package:scds_client/shared/api/auth_models.dart';
 import 'package:scds_client/shared/api/command_models.dart';
 import 'package:scds_client/shared/api/exercise_models.dart';
 import 'package:scds_client/shared/api/health_api.dart';
+import 'package:scds_client/shared/api/map_models.dart';
 import 'package:scds_client/shared/api/situation_models.dart';
 import 'package:scds_client/shared/auth/session_store.dart';
 import 'package:scds_client/shared/config/connection_config.dart';
@@ -466,6 +468,74 @@ void main() {
               listPlans ?? ({String? keyword}) async => planPageOf(<Plan>[]),
           start: start ?? (StartExerciseRequest request) async => fail('未预期的开演'),
           stop: stop ?? () async => fail('未预期的停演'),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 53：造一个契约形状的底图（必填仅 `mapId` / `name` / `type`）。
+  MapDetail mapOf(
+    String mapId, {
+    String name = '底图A',
+    MapType type = MapType.indoor,
+    String? imageUrl,
+    int? imageWidth,
+    int? imageHeight,
+    int? floorCount,
+    bool? calibrated,
+  }) =>
+      MapDetail(
+        mapId: mapId,
+        name: name,
+        type: type,
+        imageUrl: imageUrl,
+        imageWidth: imageWidth,
+        imageHeight: imageHeight,
+        floorCount: floorCount,
+        calibrated: calibrated,
+      );
+
+  MapPage mapPageOf(List<MapDetail> items, {int? total}) => MapPage(
+        items: items,
+        meta: PageMeta(page: 1, size: 20, total: total ?? items.length),
+      );
+
+  /// 段 53：1×1 透明 PNG（真实图片头）——驱动 `Image.memory` 走正常解码路径。
+  final List<int> tinyPng = base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  );
+
+  /// 段 53：底图管理页直接挂树——四个必填端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 上传 / 预览 / 选文件三个端口可选：不注入即不渲染对应行内按钮（既有只读用例不受影响）。
+  /// 视口放大到一屏容纳列表与悬浮新建按钮，免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpMaps(
+    WidgetTester tester, {
+    MapLister? list,
+    MapCreator? create,
+    MapUpdater? update,
+    MapRemover? remove,
+    MapImageUploader? uploadImage,
+    MapImageDownloader? downloadImage,
+    MapImagePicker? pickImage,
+  }) async {
+    tester.view.physicalSize = const Size(1400, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MapManagerPage(
+          session: accountSession(),
+          list: list ?? () async => mapPageOf(<MapDetail>[]),
+          create: create ?? (MapUpsertRequest request) async => fail('未预期的新建底图'),
+          update: update ??
+              (String mapId, MapUpsertRequest request) async => fail('未预期的修改底图'),
+          remove: remove ?? (String mapId) async => fail('未预期的删除底图'),
+          uploadImage: uploadImage,
+          downloadImage: downloadImage,
+          pickImage: pickImage,
         ),
       ),
     );
@@ -2754,6 +2824,356 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(kTeamSummaryExerciseEntryKey), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 53：底图管理页——map 域底图子域的指挥端接线。
+  ///
+  /// 全部注入闭包桩，**不发真实请求**。判据四条：
+  /// 列表契约字段呈现、写端点整体替换口径、图片上传（选文件端口）与下载预览、
+  /// 未注入可选端口时对应行内按钮不渲染。
+  group('底图管理页（段 53）', () {
+    testWidgets('加载底图列表：展示账号；空列表显示空态', (WidgetTester tester) async {
+      int listCalls = 0;
+      await pumpMaps(tester, list: () async {
+        listCalls++;
+        return mapPageOf(<MapDetail>[]);
+      });
+      await tester.pumpAndSettle();
+
+      expect(listCalls, 1);
+      expect(tester.widget<Text>(find.byKey(kMapManagerAccountKey)).data, 'admin（OPERATOR）');
+      expect(find.byKey(kMapManagerEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('行文本取契约字面量；缺字段如实显示破折号', (WidgetTester tester) async {
+      await pumpMaps(
+        tester,
+        list: () async => mapPageOf(<MapDetail>[
+          mapOf(
+            'm-1',
+            name: '演训场',
+            type: MapType.outdoor,
+            imageWidth: 1920,
+            imageHeight: 1080,
+            calibrated: true,
+          ),
+          mapOf('m-2', name: '室内馆'),
+        ]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(mapManagerRowKey('m-1'))).data,
+        '演训场｜类型 OUTDOOR｜图片 1920×1080｜标定 已标定',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(mapManagerRowKey('m-2'))).data,
+        '室内馆｜类型 INDOOR｜图片 无｜标定 —',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('新建底图：提交整体替换二键（名称 + 类型字面量）', (WidgetTester tester) async {
+      final List<MapUpsertRequest> created = <MapUpsertRequest>[];
+      await pumpMaps(tester, create: (MapUpsertRequest request) async {
+        created.add(request);
+        return mapOf('m-9', name: request.name);
+      });
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kMapManagerCreateButtonKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kMapFormNameFieldKey), ' 新底图 ');
+      await tester.tap(find.byKey(kMapFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(created.single.toJson(), <String, Object?>{
+        'name': '新底图',
+        'type': 'INDOOR',
+      });
+      expect(find.text('已新建底图「新底图」'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('编辑底图：以服务端快照预填，仅改名字仍提交全部二键（整体替换回归）',
+        (WidgetTester tester) async {
+      final List<MapUpsertRequest> updated = <MapUpsertRequest>[];
+      await pumpMaps(
+        tester,
+        list: () async => mapPageOf(<MapDetail>[
+          mapOf('m-1', name: '旧名', type: MapType.outdoor),
+        ]),
+        update: (String mapId, MapUpsertRequest request) async {
+          updated.add(request);
+          return mapOf(mapId, name: request.name);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(mapManagerEditKey('m-1')));
+      await tester.pumpAndSettle();
+
+      // 快照预填：不动的字段必须原样出现在表单里，否则整体替换会误伤它们。
+      expect(
+        tester.widget<TextField>(find.byKey(kMapFormNameFieldKey)).controller!.text,
+        '旧名',
+      );
+      expect(
+        tester.widget<DropdownButton<MapType>>(find.byKey(kMapFormTypeKey)).value,
+        MapType.outdoor,
+      );
+
+      await tester.enterText(find.byKey(kMapFormNameFieldKey), '新名');
+      await tester.tap(find.byKey(kMapFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(updated.single.toJson(), <String, Object?>{
+        'name': '新名',
+        'type': 'OUTDOOR',
+      });
+
+      await unmount(tester);
+    });
+
+    testWidgets('底图名非法：不发请求、对话框保留并显示行内错误', (WidgetTester tester) async {
+      await pumpMaps(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kMapManagerCreateButtonKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kMapFormNameFieldKey), '   ');
+      await tester.tap(find.byKey(kMapFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kMapFormErrorKey), findsOneWidget);
+      expect(find.byKey(kMapFormSaveKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kMapFormCancelKey));
+      await tester.pumpAndSettle();
+
+      await unmount(tester);
+    });
+
+    testWidgets('删除底图：确认后调用删除端口并重拉列表', (WidgetTester tester) async {
+      final List<String> removed = <String>[];
+      int listCalls = 0;
+      await pumpMaps(
+        tester,
+        list: () async {
+          listCalls++;
+          return mapPageOf(<MapDetail>[mapOf('m-1', name: '演训场')]);
+        },
+        remove: (String mapId) async => removed.add(mapId),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(mapManagerDeleteKey('m-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kMapDeleteConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(removed, <String>['m-1']);
+      // 首帧一次 + 删除后重拉一次。
+      expect(listCalls, 2);
+      expect(find.text('已删除底图「演训场」'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射为现场文案（底图被想定引用）', (WidgetTester tester) async {
+      await pumpMaps(
+        tester,
+        list: () async => mapPageOf(<MapDetail>[mapOf('m-1', name: '演训场')]),
+        remove: (String mapId) async => throw apiFailure(409, ApiErrorCode.mapInUse),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(mapManagerDeleteKey('m-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kMapDeleteConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kMapManagerErrorKey)).data,
+        contains('已被想定引用'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('上传图片：选文件返回图片即调用上传端口并重拉列表', (WidgetTester tester) async {
+      final List<String> uploadTargets = <String>[];
+      final List<PickedImage> uploaded = <PickedImage>[];
+      int listCalls = 0;
+      await pumpMaps(
+        tester,
+        list: () async {
+          listCalls++;
+          return mapPageOf(<MapDetail>[mapOf('m-1', name: '演训场')]);
+        },
+        pickImage: () async => const PickedImage(
+          filename: 'plan.png',
+          bytes: <int>[137, 80, 78, 71],
+          contentType: 'image/png',
+        ),
+        uploadImage: (String mapId, PickedImage image) async {
+          uploadTargets.add(mapId);
+          uploaded.add(image);
+          return mapOf(mapId, name: '演训场');
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(mapManagerUploadKey('m-1')));
+      await tester.pumpAndSettle();
+
+      expect(uploadTargets, <String>['m-1']);
+      expect(uploaded.single.filename, 'plan.png');
+      expect(uploaded.single.contentType, 'image/png');
+      expect(listCalls, 2);
+      expect(find.text('已上传底图「演训场」的图片'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('选文件取消（回 null）：不调用上传端口', (WidgetTester tester) async {
+      int uploadCalls = 0;
+      await pumpMaps(
+        tester,
+        list: () async => mapPageOf(<MapDetail>[mapOf('m-1', name: '演训场')]),
+        pickImage: () async => null,
+        uploadImage: (String mapId, PickedImage image) async {
+          uploadCalls++;
+          return mapOf(mapId, name: '演训场');
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(mapManagerUploadKey('m-1')));
+      await tester.pumpAndSettle();
+
+      expect(uploadCalls, 0);
+
+      await unmount(tester);
+    });
+
+    testWidgets('预览图片：按原格式下载字节并打开预览对话框', (WidgetTester tester) async {
+      int downloadCalls = 0;
+      await pumpMaps(
+        tester,
+        list: () async => mapPageOf(<MapDetail>[mapOf('m-1', name: '演训场')]),
+        downloadImage: (String mapId) async {
+          downloadCalls++;
+          return ApiResponse(statusCode: 200, contentType: 'image/png', body: tinyPng);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(mapManagerPreviewKey('m-1')));
+      await tester.pumpAndSettle();
+
+      expect(downloadCalls, 1);
+      expect(find.byKey(kMapImagePreviewKey), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(kMapImagePreviewInfoKey)).data,
+        '类型 image/png｜${tinyPng.length} 字节',
+      );
+
+      await tester.tap(find.byKey(kMapImagePreviewCloseKey));
+      await tester.pumpAndSettle();
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入上传 / 预览端口：不渲染对应行内按钮', (WidgetTester tester) async {
+      await pumpMaps(
+        tester,
+        list: () async => mapPageOf(<MapDetail>[mapOf('m-1', name: '演训场')]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(mapManagerUploadKey('m-1')), findsNothing);
+      expect(find.byKey(mapManagerPreviewKey('m-1')), findsNothing);
+      expect(find.byKey(mapManagerEditKey('m-1')), findsOneWidget);
+      expect(find.byKey(mapManagerDeleteKey('m-1')), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 53：底图管理页接线——从队伍汇总页进入，`MapApi` 挂同一条已认证传输。
+  group('指挥端底图管理接线（段 53）', () {
+    testWidgets('汇总页「底图」入口：进入底图管理页并按登录令牌拉列表',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/maps':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{'mapId': 'm-1', 'name': '演训场', 'type': 'INDOOR'},
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryMapsEntryKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MapManagerPage), findsOneWidget);
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/maps',
+        ]),
+      );
+      final ScriptedCall listCall = transport.calls
+          .lastWhere((ScriptedCall call) => call.key == 'GET $kApiPrefix/maps');
+      expect(listCall.authorization, 'Bearer access-1');
+      expect(
+        tester.widget<Text>(find.byKey(mapManagerRowKey('m-1'))).data,
+        contains('演训场'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：汇总页不渲染「底图」按钮', (WidgetTester tester) async {
+      await pumpSummary(tester, () async => <TeamSummary>[]);
+
+      expect(find.byKey(kTeamSummaryMapsEntryKey), findsNothing);
 
       await unmount(tester);
     });

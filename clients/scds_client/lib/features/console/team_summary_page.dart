@@ -22,6 +22,9 @@ const Key kTeamSummaryPlansEntryKey = Key('teamSummary.plansEntry');
 /// 段 51 新增：进入「演习控制」页（开演 / 停演）的入口（未注入回调时整块不渲染）。
 const Key kTeamSummaryExerciseEntryKey = Key('teamSummary.exerciseEntry');
 
+/// 段 53 新增：进入「底图管理」页的入口（未注入回调时整块不渲染）。
+const Key kTeamSummaryMapsEntryKey = Key('teamSummary.mapsEntry');
+
 /// 按队伍取行键（`TeamSummary` 每队一行）。
 Key teamSummaryRowKey(Team team) => Key('teamSummary.row.${team.wire}');
 
@@ -49,6 +52,7 @@ class TeamSummaryPage extends StatefulWidget {
     this.onOpenSituation,
     this.onOpenPlans,
     this.onOpenExercise,
+    this.onOpenMaps,
   });
 
   /// 已登录的账号会话（提供 `accessToken` 与身份快照）。
@@ -71,6 +75,9 @@ class TeamSummaryPage extends StatefulWidget {
 
   /// 段 51 新增：打开「演习控制」页（开演 / 停演）；为 `null` 时不渲染入口。
   final VoidCallback? onOpenExercise;
+
+  /// 段 53 新增：打开「底图管理」页（map 域底图子域）；为 `null` 时不渲染入口。
+  final VoidCallback? onOpenMaps;
 
   @override
   State<TeamSummaryPage> createState() => _TeamSummaryPageState();
@@ -111,6 +118,12 @@ class _TeamSummaryPageState extends State<TeamSummaryPage> {
               key: kTeamSummaryPlansEntryKey,
               onPressed: widget.onOpenPlans,
               child: const Text('想定'),
+            ),
+          if (widget.onOpenMaps != null)
+            TextButton(
+              key: kTeamSummaryMapsEntryKey,
+              onPressed: widget.onOpenMaps,
+              child: const Text('底图'),
             ),
           if (widget.onOpenSituation != null)
             TextButton(
