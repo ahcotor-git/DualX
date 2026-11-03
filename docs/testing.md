@@ -3533,3 +3533,65 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 集成层（`MapManagerPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端选文件端口为占位**
 （恒回 `null`，真实文件选择器**未接**）；**楼层点位编辑页**与 **UWB 标定面板**（读 / 写锚点标的 + 启动标定 + 轮询进度 + 清除）
 **尚未接线**，另开段。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 54. M6 CLIENT-WINDOWS 续段（UI 接线）：map 域——UWB 标定面板
+
+承段 53「**楼层点位编辑**与 **UWB 标定面板**仍留后段」，本段只落 **map 域 UWB 标定子域的指挥端接线**
+（`uwb_calibration_page.dart` + 底图管理页行内入口 + 外壳装配），**楼层点位编辑**仍留后段。范围＝ `docs/api/paths/map.yaml`
+14 端点中的 **UWB 标定子域 5 端点**（`uwb-meta` 读 / 写 + `uwb-calibration` 启动 / 轮询 / 清除）。
+切入点与入口经用户当次裁定：**切入点＝UWB 标定面板先行（Recommended）**；**入口＝底图管理页行内入口（Recommended）**。
+
+### 54.1 交付物（1 笔 = 4 文件，1 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/uwb_calibration_page.dart`(新) | `UwbCalibrationPage`——标定参数（`uwb-meta` 读 / 写）＋ 中心基准校准（启动 / 轮询 / 清除）；**控件键**（`kUwbCalibrationAccount\|ErrorKey` / `kUwbMetaStatus\|ReloadButton\|SaveButton\|RealLength\|RealWidth\|FormErrorKey` / `uwbMetaXKey\|YKey(index)` 1..8 / `kUwbCalibrationState\|Message\|SampleFrames\|StartButton\|ClearButtonKey`）；五端口 typedef `UwbMetaLoader` / `UwbMetaSaver` / `UwbCalibrationStarter` / `UwbCalibrationPoller` / `UwbCalibrationClearer`；`_loadMeta` 把 404 `MAP_NOT_CALIBRATED` 切「未标定」态而不报错、真错误才落顶部；`_fillMeta` 以服务端快照预填；`_readMeta` 校验（bs1~bs4 必填、bs5~bs8 两空或两值全、长宽正整数厘米）；`_readCalibrationRequest` 留空即 `null`（不发该键）；`_syncPollTimer` 仅 `RUNNING` 起 1s 轮询、终态即停表 |
+| `lib/features/console/map_manager_page.dart`(改) | 新增行键 `mapManagerCalibrationKey(mapId)` + typedef `MapCalibrationOpener` + 可选端口 `onOpenCalibration`（`null` 时**不渲染**「标定」按钮）；行内动作顺序＝上传图片 / 预览 / **标定** / 编辑 / 删除 |
+| `lib/app/console_app.dart`(改) | 新增 import `uwb_calibration_page.dart` + `MapManagerPage` 接 `onOpenCalibration` + `_openUwbCalibration`（push 页面，五端口**全闭包读 `_account!.accessToken`**，续期换到的新令牌才生效） |
+| `test/console_widget_test.dart`(改) | 新增助手 `fieldText` / `uwbMetaOf` / `pumpUwb` + 两组共 **11 例**（`UWB 标定面板（段 54）` 9 + `指挥端 UWB 标定接线（段 54）` 2） |
+
+### 54.2 用例与判据（新增 11 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 标定面板(9) | 已标定 | 状态文案 `已标定｜长 600cm｜宽 400cm`；校准 `IDLE`；表单按快照预填（bs1=`0` / bs2 x=`600` / bs5=`12`,`34` / bs6 空 / 长宽=`600`,`400`） |
+| | 未标定（404 `MAP_NOT_CALIBRATED`） | 状态切 `未标定`；**错误键不出现**；bs1 留空待填 |
+| | 底图不存在（404 `MAP_NOT_FOUND`） | 顶部错误键文案含 `MAP_NOT_FOUND` |
+| | 保存（整体替换十键） | 提交 JSON **恰为**十键：bs1~bs4 有值、bs5 有值、bs6~bs8 显式 `null`、长宽基准；SnackBar「已保存 UWB 标定参数」 |
+| | bs1 留空 | `saveMeta` 调用 **0 次**；行内错误含「基站 1 为必填」 |
+| | 启动校准 + 轮询推进 | 端口收到 `{sampleFrames:120}`；受理即 `RUNNING`；1s 拍推进到 `RUNNING｜进度 40%｜已采样 80 帧`；再过 1s 命中 `SUCCEEDED｜进度 100%｜已采样 200 帧`；再推 5s **轮询次数不变**（终态停表） |
+| | 留空采样帧 | 端口收到 **`null`**（不发请求体，服务端取默认）；SnackBar「已受理 UWB 校准」 |
+| | 清除校准 | `clearCalibration` 恰 1 次；状态回到 `未查询`；SnackBar「已清除 UWB 校准结果」 |
+| | 契约错误码映射 | 启动 409 `DEVICE_LINK_NOT_OPEN` → 顶部含该码；保存 400 `MAP_UWB_META_INCOMPLETE` → 顶部含该码 |
+| 指挥端标定接线(2) | 底图行「标定」入口 | 点入即 `UwbCalibrationPage`；请求序列 `containsAllInOrder([login, situation/teams/summary, GET /api/v1/maps, GET /api/v1/maps/m-1/uwb-meta, GET /api/v1/maps/m-1/uwb-calibration])` 且 `uwb-meta` 请求 `authorization == 'Bearer access-1'`；状态文案 `已标定｜长 600cm｜宽 400cm` |
+| | 未注入入口 | 底图行不渲染「标定」按钮，编辑仍在（入口可选注入） |
+
+### 54.3 口径要点
+
+- **未标定不是错误**：契约用 404 **分码**区分「图在、但还没标定」（`MAP_NOT_CALIBRATED`）与「id 打错了」（`MAP_NOT_FOUND`），
+  现场处置动作不同（去标定 vs 换图）；本页只把 `MAP_NOT_CALIBRATED` 切「未标定」态、表单可填，**其余 404 才落顶部提示**。
+- **整体替换二度回归**：`UwbMeta` 恒发**十键**（bs5~bs8 缺席即显式 `null`），故表单以服务端快照预填、保存时十键全提交——
+  落「bs5 有值、bs6~bs8 置 null」用例作判据。
+- **校准是异步的、前置由服务端判**：`POST /uwb-calibration` 回 202 仅受理（**不等于在跑**），**只有 `RUNNING` 才起 1s 轮询**，
+  其余状态即停表；冲突（409 `MAP_CALIBRATION_IN_PROGRESS`）与链路未开（409 `DEVICE_LINK_NOT_OPEN`）都**只映射为现场文案**，
+  不做本地预判。
+- **轮询不占单飞闸**：`_poll` 不置 `_busy`，避免把「启动 / 清除」一并锁死；轮询失败即停表并把错误落页面。
+- **留空＝不发该键**：`UwbCalibrationRequest` 是**可选缺省**口径，采样帧留空回 `null`（服务端 `sampleFrames` 默认 200），
+  **不臆造默认值**。
+- **两套坐标系不可混用**：本页锚点是**底图像素** `xPx`/`yPx`（原点左上），与楼层点位的**归一化百分比** `xPct`/`yPct` 不同口径。
+- **入口可选注入**：`onOpenCalibration == null` 时整块不渲染，既有段 53 用例渲染不变（沿用段 49~53 同口径）。
+
+### 54.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**327 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 +
+  段 50 10 + 段 51 13 + 段 52 27 + 段 53 13 + **本段 11**，较段 53 的 316 例 +11）；`flutter analyze` → `No issues found! (ran in 4.0s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（1 新 + 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（`pubspec.yaml` 未动）；共享层（`map_api.dart` / `map_models.dart`）**无需改动**（段 52 已就绪）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩 + 假传输），**未对着真实后端实例**跑真实
+`uwb-meta` 读写 / 校准启动轮询清除（真实的 `MAP_UWB_META_INCOMPLETE` 几何校验、409 链路未开拦截、异步进度与真机标定系数
+均未验证）；集成层（`UwbCalibrationPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**楼层点位编辑页**
+（归一化百分比坐标系 `xPct`/`yPct`，2 端点）**尚未接线**，另开段。本段为**实测前置的客户端骨架验收**，不是生产发布批准。

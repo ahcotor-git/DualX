@@ -1898,5 +1898,49 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 连接配置落盘（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；安装 Visual Studio C++
 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
 
+**下一段（CLIENT-WINDOWS 续段·UI 接线·UWB 标定面板）落地**：承接段 53「UWB 标定面板别开段」的候选，用户当次裁定切入点
+「**UWB 标定面板先行（Recommended）**」＋入口「**底图管理页行内入口（Recommended）**」。本段只落 **map 域 UWB 标定子域**的
+指挥端接线（范围＝ `map.yaml` 14 端点中的 **UWB 标定子域 5 端点**＝`uwb-meta` 读 / 写 ＋ `uwb-calibration` 启动 / 轮询 / 清除），
+**楼层点位编辑**另开段。落**一笔**（**4 文件 / 1 新 3 改**，**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**）：
+- `lib/features/console/uwb_calibration_page.dart`（**新**）：`UwbCalibrationPage`——标定参数（`uwb-meta` 读 / 写）＋
+  中心基准校准（启动 / 轮询 / 清除）；控件键 `kUwbCalibrationAccount|ErrorKey` / `kUwbMetaStatus|ReloadButton|SaveButton|`
+  `RealLength|RealWidth|FormErrorKey` / `uwbMetaXKey|YKey(index)`（1..8）/ `kUwbCalibrationState|Message|SampleFrames|`
+  `StartButton|ClearButtonKey`；五端口 typedef `UwbMetaLoader` / `UwbMetaSaver` / `UwbCalibrationStarter` /
+  `UwbCalibrationPoller` / `UwbCalibrationClearer`；`_loadMeta` 把 404 `MAP_NOT_CALIBRATED` 切「未标定」态而不报错、
+  真错误才落顶部；`_fillMeta` 以服务端快照预填；`_readMeta` 校验（bs1~bs4 必填、bs5~bs8 两空或两值全、长宽正整数厘米）；
+  `_readCalibrationRequest` 留空即 `null`（不发该键）；`_syncPollTimer` 仅 `RUNNING` 起 1s 轮询、终态即停表；
+  `_guard` 单飞（**轮询不占闸**）；`_describeFailure(ApiException)` 按 `ApiErrorCode` switch（`mapNotFound` /
+  `mapNotCalibrated` / `mapUwbMetaIncomplete` / `mapCalibrationInProgress` / `deviceLinkNotOpen` / `validationFailed` /
+  `instanceNotReady`，兜底显示原码）；
+- `lib/features/console/map_manager_page.dart`（**改**）：新增行键 `mapManagerCalibrationKey(mapId)` ＋ typedef
+  `MapCalibrationOpener` ＋ 可选端口 `onOpenCalibration`（`null` 时**不渲染**「标定」按钮，既有段 53 用例渲染不变）；
+  行内动作顺序＝上传图片 / 预览 / **标定** / 编辑 / 删除；
+- `lib/app/console_app.dart`（**改**）：新增 import `uwb_calibration_page.dart` ＋ `MapManagerPage` 接 `onOpenCalibration` ＋
+  `_openUwbCalibration`（push 页面，五端口**全闭包读 `_account!.accessToken`**，续期换到的新令牌才生效）；
+- `test/console_widget_test.dart`（**改**）：新增助手 `fieldText` / `uwbMetaOf`（bs1~bs4 矩形四角 + bs5 可选 + 长宽基准）/
+  `pumpUwb` + 两组共 **11 例**（`UWB 标定面板（段 54）` **9** + `指挥端 UWB 标定接线（段 54）` **2**）。
+
+**口径要点**：**未标定不是错误**——契约 404 **分码**区分 `MAP_NOT_CALIBRATED`（图在、没标定 → 切「未标定」态、表单可填）
+与 `MAP_NOT_FOUND`（id 打错 → 落顶部提示），现场处置动作不同；**整体替换二度回归**——`UwbMeta` 恒发**十键**
+（bs5~bs8 缺席即显式 `null`），故表单**以服务端快照预填**、保存时**十键全提交**（落「bs5 有值、bs6~bs8 置 null」用例
+作判据）；**校准异步且前置由服务端判**——`POST /uwb-calibration` 回 202 仅受理（**不等于在跑**）、**只有 `RUNNING` 才起
+1s 轮询**、其余状态即停表，409 `MAP_CALIBRATION_IN_PROGRESS` / `DEVICE_LINK_NOT_OPEN` 与 400 `MAP_UWB_META_INCOMPLETE`
+都**只映射为现场文案**、不做本地预判；**轮询不占单飞闸**（`_poll` 不置 `_busy`，免得把「启动 / 清除」一并锁死）；
+**留空＝不发该键**（`UwbCalibrationRequest` 为可选缺省口径，采样帧留空回 `null`，服务端默认 200，**不臆造默认值**）；
+**两套坐标系不可混用**（本页是**底图像素** `xPx`/`yPx`，非楼层点位的**归一化百分比** `xPct`/`yPct`）；**入口可选注入**。
+
+门禁：`flutter test` → `All tests passed!`（**327 例**，较段 53 的 316 例 **+11**）、`flutter analyze` →
+`No issues found! (ran in 4.0s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实 `uwb-meta` 读写 / 校准启动轮询清除（真实的 `MAP_UWB_META_INCOMPLETE` 几何校验、
+409 链路未开拦截、异步进度与真机标定系数未验证）；集成层（`UwbCalibrationPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）
+**未走通**；**楼层点位编辑页** 尚未接线。证据见 [testing](testing.md) **第 54 节**。
+
+**下一段（候选）**：**map 域收口**——**楼层点位编辑页**（归一化百分比坐标系 `xPct`/`yPct`，2 端点：`mapFloorPoints`
+读 / 写，属 map 域最后一子域）；收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，
+属独立决策点）；复盘与导出 **replay 域**（约 7 端点，可同样「共享层先行」）；**device 域**（约 15 端点 + `watchLinks` WS）；
+`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘
+（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）
+以补齐 **Windows 原生构建验收**。
+
 
 
