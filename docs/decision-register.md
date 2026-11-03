@@ -1942,5 +1942,41 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 （需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）
 以补齐 **Windows 原生构建验收**。
 
+**下一段（CLIENT-WINDOWS 续段·UI 接线·楼层点位编辑页）落地**：承接段 54「**map 域收口——楼层点位编辑页**」的候选，用户当次裁定切入点
+「**map 域收口：楼层点位编辑页（Recommended）**」。本段只落 **map 域楼层点位子域**的指挥端接线（范围＝ `docs/api/paths/map.yaml` 14 端点中的
+**楼层点位子域 2 端点**＝ `GET` / `PUT /maps/{mapId}/floors/{floorNum}/points`），**map 域 14 端点至此全部接线**
+（底图 5 + 底图图片 2 + 楼层点位 2 + UWB 标定 5）。落**一笔**（**4 文件 / 1 新 3 改**，**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**）：
+- `lib/features/console/floor_points_page.dart`（**新**）：`FloorPointsPage`——楼层号输入 + 「加载」 + 点位行表（点位号 / 归一化横纵坐标 /
+  备注 / 删行）+「新增点位」+「保存」；控件键 `kFloorPointsAccount|Error|FloorNum|LoadButton|SaveButton|AddButton|Status|Empty|FormErrorKey` /
+  `floorPointsPosNum|X|Y|Label|RemoveKey(index)`（行号 0 起）；两端口 typedef `FloorPointsLoader` / `FloorPointsSaver`；内部 `_PointRow`
+  四个 `TextEditingController` + `factory _PointRow.of(FloorPoint)`；`_save` **先校验「楼层号未变」** 挡整体替换误伤；`_readRows` 本地校验
+  （`posNum` 整数、`xPct`/`yPct` 0~1）镜像服务端；`_guard` 单飞；`_describeFailure(ApiException)` 按 `ApiErrorCode` switch
+  （`mapNotFound` / `validationFailed` / `authForbidden` / `instanceNotReady`）；写后以服务端回传重填 + SnackBar；
+- `lib/features/console/map_manager_page.dart`（**改**）：新增行键 `mapManagerFloorPointsKey(mapId)` ＋ typedef `MapFloorPointsOpener` ＋
+  可选端口 `onOpenFloorPoints`（`null` 时**不渲染**「点位」按钮，既有段 53/54 用例渲染不变）；行内动作顺序＝上传图片 / 预览 / 标定 / **点位** / 编辑 / 删除；
+- `lib/app/console_app.dart`（**改**）：新增 import `floor_points_page.dart` ＋ `MapManagerPage` 接 `onOpenFloorPoints` ＋
+  `_openFloorPoints`（push 页面，两端口**全闭包读 `_account!.accessToken`**，续期换到的新令牌才生效）；
+- `test/console_widget_test.dart`（**改**）：新增助手 `floorPointOf` / `pumpFloor`（放大视口 `Size(1400, 2400)`）+ 两组共 **11 例**
+  （`楼层点位编辑页（段 55）` **9** + `指挥端楼层点位接线（段 55）` **2**）。
+
+**口径要点**：**坐标是归一化百分比**——`xPct`/`yPct` 取 0~1（原点左上，室内映射由服务端做、前端**不得 y 翻转**），与 UWB 标定参数的
+**底图像素** `xPx`/`yPx` 是**两套口径、不可混用**；**写是整体替换**——`FloorPoint.toJson` 恒发**四键**（`posNum`/`xPct`/`yPct`/`label`，
+`label` 缺席即显式 `null`），`PUT` 落库就是这一份清单，表单以**服务端快照预填**、保存时**四键全提交**，**空列表即清空该楼层（合法）**；
+**先「加载」再「保存」**——楼层号可改，改后**必须重新加载才能保存**，否则会把上一层清单**整体写到新楼层上**（整体替换误伤），
+本页据此在 `_save` 前置校验挡下（错误文案「楼层号已改，请先「加载」该楼层再保存」）；**未录点位不是错误**——服务端该楼层没录过点位表时
+`MapLedgerService.floorPoints` 返回 `null`、API 层折叠为**空列表**（`FloorPointsResponse`），契约 404 留给「底图不存在」；
+**本地校验镜像服务端**（`posNum` 只校验整数（契约 `@NotNull Integer`）、`xPct`/`yPct` 校验 0~1（镜像 `@DecimalMin("0") @DecimalMax("1")`））；
+**`MAP_FLOOR_POINT_NOT_FOUND` 不在本页**——该码由 `CommandService`（`moveVest` 手动置位）抛出，本页两端点不产生；**入口可选注入**（延续段 49~54 同口径）。
+
+门禁：`flutter test` → `All tests passed!`（**338 例**，较段 54 的 327 例 **+11**）、`flutter analyze` →
+`No issues found! (ran in 2.3s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实楼层点位表读写（真实底图不存在 404、服务端几何校验、点位表与 `moveVest` 手动置位联动未验证）；
+集成层（`FloorPointsPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**map 域 UI 至此全部接线**。证据见 [testing](testing.md) **第 55 节**。
+
+**下一段（候选）**：**map 域 UI 已收口**，可转他域——收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，
+属独立决策点）；复盘与导出 **replay 域**（约 7 端点，可同样「共享层先行」）；**device 域**（约 15 端点 + `watchLinks` WS）；
+`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘
+（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）
+以补齐 **Windows 原生构建验收**。
 
 

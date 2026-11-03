@@ -3595,3 +3595,66 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 `uwb-meta` 读写 / 校准启动轮询清除（真实的 `MAP_UWB_META_INCOMPLETE` 几何校验、409 链路未开拦截、异步进度与真机标定系数
 均未验证）；集成层（`UwbCalibrationPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**楼层点位编辑页**
 （归一化百分比坐标系 `xPct`/`yPct`，2 端点）**尚未接线**，另开段。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 55. M6 CLIENT-WINDOWS 续段（UI 接线）：map 域收口——楼层点位编辑页
+
+承段 54「**楼层点位编辑**仍留后段」，本段落 **map 域楼层点位子域的指挥端接线**（`floor_points_page.dart` + 底图管理页行内入口 + 外壳装配），
+**map 域 14 端点至此全部接线**（底图 5 + 图片 2 + 楼层点位 2 + UWB 标定 5）。范围＝ `docs/api/paths/map.yaml`
+楼层点位子域 **2 端点**（`GET` / `PUT /maps/{mapId}/floors/{floorNum}/points`）。
+切入点沿用段 54 口径（**底图行内入口**）；**楼层号来源**为页面内输入（默认 1，`MapDetail.floorCount` 仅作提示、不本地强校验）。
+
+### 55.1 交付物（1 笔 = 4 文件，1 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/floor_points_page.dart`(新) | `FloorPointsPage`——楼层点位表读 / **整体替换**写；**控件键**（`kFloorPointsAccount\|Error\|FloorNum\|LoadButton\|SaveButton\|AddButton\|Status\|Empty\|FormErrorKey` / `floorPointsPosNum\|X\|Y\|Label\|RemoveKey(index)`，行号 0 起）；两端口 typedef `FloorPointsLoader` / `FloorPointsSaver`；`_fillRows` 以服务端快照整表重建（释放旧控制器）；`_readRows` 校验（`posNum` 整数、`xPct`/`yPct` 0~1）；`_readFloorNum` + **`_loadedFloorNum` 前置校验**（改了楼层号未重新加载即保存 → 挡下） |
+| `lib/features/console/map_manager_page.dart`(改) | 新增行键 `mapManagerFloorPointsKey(mapId)` + typedef `MapFloorPointsOpener` + 可选端口 `onOpenFloorPoints`（`null` 时**不渲染**「点位」按钮）；行内动作顺序＝上传图片 / 预览 / 标定 / **点位** / 编辑 / 删除 |
+| `lib/app/console_app.dart`(改) | 新增 import `floor_points_page.dart` + `MapManagerPage` 接 `onOpenFloorPoints` + `_openFloorPoints`（push 页面，两端口**全闭包读 `_account!.accessToken`**，续期换到的新令牌才生效） |
+| `test/console_widget_test.dart`(改) | 新增助手 `floorPointOf` / `pumpFloor`、`pumpMaps` 增 `onOpenFloorPoints` 参数 + 两组共 **11 例**（`楼层点位编辑页（段 55）` 9 + `指挥端楼层点位接线（段 55）` 2） |
+
+### 55.2 用例与判据（新增 11 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 点位编辑页(9) | 已加载 | 状态文案 `楼层 1｜共 2 个点位`；`loadPoints` 收到 `1`；表单按快照整表预填（posNum `1`/`2`、xPct `0.1`/`0.5`、yPct `0.2`/`1`、label `门口`/空、楼层号 `1`） |
+| | 空楼层 | 状态 `楼层 1｜共 0 个点位`；空态键出现；点「新增点位」后空态消失、出现第 1 行 |
+| | 删行后保存 | 删掉唯一行 → 状态 `共 0 个点位`；提交 JSON **恰为** `{'points': []}`（合法清空）；SnackBar「已保存楼层 1 的 0 个点位」 |
+| | 保存整体替换 | 新增第 2 行 + 清空既有行 label → 提交 JSON **恰为**四键 ×2（label `null` / `空地`）；`savePoints` 收到楼层号 `1`；SnackBar「已保存楼层 1 的 2 个点位」 |
+| | posNum 留空 | `savePoints` **0 次**；行内错误「第 1 行点位号需为整数」 |
+| | 坐标越界 1.2 | `savePoints` **0 次**；行内错误「第 1 行 xPct 需为 0~1 的数值（归一化百分比）」；状态未变 |
+| | 坐标边界 0 / 1 | 照常提交，端口收到 `xPct == 0.0`、`yPct == 1.0` |
+| | 改楼层号未重载即保存 | `savePoints` **0 次**；行内错误「楼层号已改，请先「加载」该楼层再保存」；点「加载」后 `loadPoints` 收到 `[1, 2]`、状态切 `楼层 2｜共 1 个点位`、整表以第 2 层快照重建 |
+| | 底图不存在（404 `MAP_NOT_FOUND`） | 顶部错误键文案 `底图不存在（MAP_NOT_FOUND）`；**行内错误键不出现**；状态 `未加载` |
+| 指挥端点位接线(2) | 底图行「点位」入口 | 点入即 `FloorPointsPage`；请求序列 `containsAllInOrder([login, situation/teams/summary, GET /api/v1/maps, GET /api/v1/maps/m-1/floors/1/points])` 且该请求 `authorization == 'Bearer access-1'`；状态文案 `楼层 1｜共 1 个点位` |
+| | 未注入入口 | 底图行不渲染「点位」按钮，编辑仍在（入口可选注入） |
+
+### 55.3 口径要点
+
+- **两套坐标系不可混用（反向确认）**：本页 `xPct` / `yPct` 是**归一化百分比 0~1**（原点左上），
+  与段 54 的**底图像素** `xPx` / `yPx` 不同口径；室内映射由服务端做，**前端不得做 y 翻转**。
+- **整体替换三度回归**：`FloorPoint` 恒发**四键**（`label` 缺席即显式 `null`），故表单以服务端快照整表预填、
+  保存时四键全提交——落「新增行 + 既有行 label 清空 → 显式 `null`」用例作判据。**空列表即清空**（合法）。
+- **先「加载」再「保存」**：楼层号可改，而 `_rows` 属于**已加载的那个楼层**；改号后若不重新加载就直接保存，
+  会把上一层清单整体写到新楼层（整体替换误伤）。本页用 `_loadedFloorNum` 在保存前置校验挡下，**不做「服务端会兜底」的假设**。
+- **本地校验镜像服务端**：`posNum` 只校验**整数**（契约 `@NotNull Integer`，不臆造正负 / 唯一性约束）；
+  `xPct` / `yPct` 校验 **0~1**（镜像服务端 `@DecimalMin("0") @DecimalMax("1")`），本地先挡一道免于白跑一趟。
+- **未录点位不是错误**：该楼层没录过点位表时服务端回**空列表**（非 404），契约的 404 留给「底图不存在」。
+- **入口可选注入**：`onOpenFloorPoints == null` 时整块不渲染，既有段 53 / 54 用例渲染不变。
+- **`MAP_FLOOR_POINT_NOT_FOUND` 不在本页**：该码由 `CommandService`（`moveVest` 手动置位）抛出，**不由本页两端点产生**，
+  故不纳入本页错误映射（不臆造不可能出现的分支）。
+
+### 55.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**338 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 +
+  段 50 10 + 段 51 13 + 段 52 27 + 段 53 13 + 段 54 11 + **本段 11**，较段 54 的 327 例 +11）；`flutter analyze` → `No issues found! (ran in 2.3s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（1 新 + 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（`pubspec.yaml` 未动）；共享层（`map_api.dart` / `map_models.dart`）**无需改动**（段 52 已就绪）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩 + 假传输），**未对着真实后端实例**跑真实
+点位表读 / 整体替换写（真实的字段级 400 `VALIDATION_FAILED`、404 `MAP_NOT_FOUND`、落库后 JSON 的回读形状
+均未验证）；集成层（`FloorPointsPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
+**点位表与 `moveVest` 的联动**（`CommandService` 按 `posNum` 取坐标 → 404 `MAP_FLOOR_POINT_NOT_FOUND`）**未做端到端验证**。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。
