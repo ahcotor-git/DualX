@@ -25,6 +25,9 @@ Key mapManagerDeleteKey(String mapId) => Key('mapManager.delete.$mapId');
 Key mapManagerUploadKey(String mapId) => Key('mapManager.upload.$mapId');
 Key mapManagerPreviewKey(String mapId) => Key('mapManager.preview.$mapId');
 
+/// 行内「标定」入口（未注入 [MapManagerPage.onOpenCalibration] 时不渲染）。
+Key mapManagerCalibrationKey(String mapId) => Key('mapManager.calibration.$mapId');
+
 /// 新建 / 编辑底图对话框的控件键。
 const Key kMapFormTitleKey = Key('mapManager.form.title');
 const Key kMapFormNameFieldKey = Key('mapManager.form.name');
@@ -63,6 +66,11 @@ typedef MapImageDownloader = Future<ApiResponse> Function(String mapId);
 /// 选文件端口：返回 `null` 表示用户取消。**本页不依赖任何平台选文件 API**，
 /// 由调用方注入（生产接线见 `app/console_app.dart`，测试注入假件）。
 typedef MapImagePicker = Future<PickedImage?> Function();
+
+/// 打开某底图的 UWB 标定面板端口（段 54）。
+///
+/// 标定页由调用方（`app/console_app.dart`）构造并 push，本页只负责给出行内入口。
+typedef MapCalibrationOpener = void Function(MapDetail map);
 
 /// 待上传的底图图片：文件名 + 原始字节 + 声明的内容类型。
 ///
@@ -111,6 +119,7 @@ class MapManagerPage extends StatefulWidget {
     this.uploadImage,
     this.downloadImage,
     this.pickImage,
+    this.onOpenCalibration,
   });
 
   /// 已登录的账号会话（提供身份快照）。
@@ -129,6 +138,9 @@ class MapManagerPage extends StatefulWidget {
 
   /// 选文件端口；与 [uploadImage] 成对注入。
   final MapImagePicker? pickImage;
+
+  /// 打开该底图 UWB 标定面板的入口；为 `null` 时不渲染行内「标定」。
+  final MapCalibrationOpener? onOpenCalibration;
 
   @override
   State<MapManagerPage> createState() => _MapManagerPageState();
@@ -361,6 +373,12 @@ class _MapManagerPageState extends State<MapManagerPage> {
                 key: mapManagerPreviewKey(map.mapId),
                 onPressed: _busy ? null : () => _openPreview(map),
                 child: const Text('预览'),
+              ),
+            if (widget.onOpenCalibration != null)
+              TextButton(
+                key: mapManagerCalibrationKey(map.mapId),
+                onPressed: _busy ? null : () => widget.onOpenCalibration!(map),
+                child: const Text('标定'),
               ),
             TextButton(
               key: mapManagerEditKey(map.mapId),

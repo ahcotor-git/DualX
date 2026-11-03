@@ -15,6 +15,7 @@ import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
 import 'package:scds_client/features/console/roster_editor_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
+import 'package:scds_client/features/console/uwb_calibration_page.dart';
 import 'package:scds_client/shared/api/api_client.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
 import 'package:scds_client/shared/api/api_problem.dart';
@@ -74,6 +75,10 @@ void main() {
 
   String portText(WidgetTester tester) =>
       tester.widget<TextField>(find.byKey(kConnectionPortFieldKey)).controller!.text;
+
+  /// 段 54：取某个 `TextField` 的当前文本（断言快照预填 / 清空）。
+  String fieldText(WidgetTester tester, Key key) =>
+      tester.widget<TextField>(find.byKey(key)).controller!.text;
 
   Future<void> enter(WidgetTester tester, String host, String port) async {
     await tester.enterText(find.byKey(kConnectionHostFieldKey), host);
@@ -519,6 +524,7 @@ void main() {
     MapImageUploader? uploadImage,
     MapImageDownloader? downloadImage,
     MapImagePicker? pickImage,
+    MapCalibrationOpener? onOpenCalibration,
   }) async {
     tester.view.physicalSize = const Size(1400, 2000);
     tester.view.devicePixelRatio = 1.0;
@@ -536,6 +542,60 @@ void main() {
           uploadImage: uploadImage,
           downloadImage: downloadImage,
           pickImage: pickImage,
+          onOpenCalibration: onOpenCalibration,
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 54：造一份契约形状的 UWB 标定参数（bs1~bs4 必填，长宽基准必填）。
+  UwbMeta uwbMetaOf({
+    double bs1x = 0,
+    double bs1y = 0,
+    double length = 600,
+    double width = 400,
+    UwbAnchorPoint? bs5,
+  }) =>
+      UwbMeta(
+        bs1: UwbAnchorPoint(xPx: bs1x, yPx: bs1y),
+        bs2: const UwbAnchorPoint(xPx: 600, yPx: 0),
+        bs3: const UwbAnchorPoint(xPx: 600, yPx: 400),
+        bs4: const UwbAnchorPoint(xPx: 0, yPx: 400),
+        bs5: bs5,
+        realLengthCm: length,
+        realWidthCm: width,
+      );
+
+  /// 段 54：UWB 标定面板直接挂树——五个端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 视口放大到一屏容纳 8 行基站输入与两个按钮，免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpUwb(
+    WidgetTester tester, {
+    String mapId = 'm-1',
+    String mapName = '演训场',
+    UwbMetaLoader? loadMeta,
+    UwbMetaSaver? saveMeta,
+    UwbCalibrationStarter? startCalibration,
+    UwbCalibrationPoller? pollCalibration,
+    UwbCalibrationClearer? clearCalibration,
+  }) async {
+    tester.view.physicalSize = const Size(1400, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: UwbCalibrationPage(
+          session: accountSession(),
+          mapId: mapId,
+          mapName: mapName,
+          loadMeta: loadMeta ?? () async => fail('未预期的读取标定参数'),
+          saveMeta: saveMeta ?? (UwbMeta meta) async => fail('未预期的保存标定参数'),
+          startCalibration:
+              startCalibration ?? (UwbCalibrationRequest? request) async => fail('未预期的启动校准'),
+          pollCalibration: pollCalibration ?? () async => fail('未预期的查询校准状态'),
+          clearCalibration: clearCalibration ?? () async => fail('未预期的清除校准'),
         ),
       ),
     );
@@ -3174,6 +3234,361 @@ void main() {
       await pumpSummary(tester, () async => <TeamSummary>[]);
 
       expect(find.byKey(kTeamSummaryMapsEntryKey), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 54：UWB 标定面板——`uwb-meta` 读 / 写 + `uwb-calibration` 启动 / 轮询 / 清除。
+  group('UWB 标定面板（段 54）', () {
+    testWidgets('已标定：状态文案取长宽基准，表单以服务端快照预填十键', (WidgetTester tester) async {
+      await pumpUwb(
+        tester,
+        loadMeta: () async =>
+            uwbMetaOf(bs5: const UwbAnchorPoint(xPx: 12, yPx: 34)),
+        pollCalibration: () async =>
+            const UwbCalibrationStatus(state: UwbCalibrationState.idle),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(kUwbMetaStatusKey)).data, '已标定｜长 600cm｜宽 400cm');
+      expect(tester.widget<Text>(find.byKey(kUwbCalibrationStateKey)).data, 'IDLE');
+
+      // 整体替换回归：不动的字段必须原样出现在表单里，否则保存会误伤它们。
+      expect(fieldText(tester, uwbMetaXKey(1)), '0');
+      expect(fieldText(tester, uwbMetaYKey(1)), '0');
+      expect(fieldText(tester, uwbMetaXKey(2)), '600');
+      expect(fieldText(tester, uwbMetaXKey(5)), '12');
+      expect(fieldText(tester, uwbMetaYKey(5)), '34');
+      expect(fieldText(tester, uwbMetaXKey(6)), '');
+      expect(fieldText(tester, kUwbMetaRealLengthKey), '600');
+      expect(fieldText(tester, kUwbMetaRealWidthKey), '400');
+      expect(tester.widget<Text>(find.byKey(kUwbCalibrationAccountKey)).data, 'admin（OPERATOR）');
+
+      await unmount(tester);
+    });
+
+    testWidgets('未标定（404 MAP_NOT_CALIBRATED）：切「未标定」态而非报错', (WidgetTester tester) async {
+      await pumpUwb(
+        tester,
+        loadMeta: () async => throw apiFailure(404, ApiErrorCode.mapNotCalibrated),
+        pollCalibration: () async =>
+            const UwbCalibrationStatus(state: UwbCalibrationState.idle),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(kUwbMetaStatusKey)).data, '未标定');
+      expect(find.byKey(kUwbCalibrationErrorKey), findsNothing);
+      expect(fieldText(tester, uwbMetaXKey(1)), '');
+
+      await unmount(tester);
+    });
+
+    testWidgets('底图不存在（404 MAP_NOT_FOUND）：真错误落页面顶部提示', (WidgetTester tester) async {
+      await pumpUwb(
+        tester,
+        loadMeta: () async => throw apiFailure(404, ApiErrorCode.mapNotFound),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kUwbCalibrationErrorKey)).data,
+        contains(ApiErrorCode.mapNotFound),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('保存：整体替换提交十键（bs5 有值、bs6~bs8 置 null）', (WidgetTester tester) async {
+      final List<UwbMeta> saved = <UwbMeta>[];
+      await pumpUwb(
+        tester,
+        loadMeta: () async => uwbMetaOf(bs5: const UwbAnchorPoint(xPx: 12, yPx: 34)),
+        pollCalibration: () async =>
+            const UwbCalibrationStatus(state: UwbCalibrationState.idle),
+        saveMeta: (UwbMeta meta) async {
+          saved.add(meta);
+          return meta;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kUwbMetaSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saved.single.toJson(), <String, Object?>{
+        'bs1': <String, Object?>{'xPx': 0.0, 'yPx': 0.0},
+        'bs2': <String, Object?>{'xPx': 600.0, 'yPx': 0.0},
+        'bs3': <String, Object?>{'xPx': 600.0, 'yPx': 400.0},
+        'bs4': <String, Object?>{'xPx': 0.0, 'yPx': 400.0},
+        'bs5': <String, Object?>{'xPx': 12.0, 'yPx': 34.0},
+        'bs6': null,
+        'bs7': null,
+        'bs8': null,
+        'realLengthCm': 600.0,
+        'realWidthCm': 400.0,
+      });
+      expect(find.text('已保存 UWB 标定参数'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('bs1 留空：不发请求、显示行内校验错误', (WidgetTester tester) async {
+      int saveCalls = 0;
+      await pumpUwb(
+        tester,
+        loadMeta: () async => uwbMetaOf(),
+        pollCalibration: () async =>
+            const UwbCalibrationStatus(state: UwbCalibrationState.idle),
+        saveMeta: (UwbMeta meta) async {
+          saveCalls++;
+          return meta;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      // 清空 bs1 的横纵坐标（必填四角之一）。
+      await tester.enterText(find.byKey(uwbMetaXKey(1)), '');
+      await tester.enterText(find.byKey(uwbMetaYKey(1)), '');
+      await tester.tap(find.byKey(kUwbMetaSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(saveCalls, 0);
+      expect(
+        tester.widget<Text>(find.byKey(kUwbMetaFormErrorKey)).data,
+        contains('基站 1 为必填'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('启动校准：携带采样帧受理，轮询推进，命中终态即停表', (WidgetTester tester) async {
+      final List<UwbCalibrationRequest?> started = <UwbCalibrationRequest?>[];
+      int pollCalls = 0;
+      await pumpUwb(
+        tester,
+        loadMeta: () async => uwbMetaOf(),
+        pollCalibration: () async {
+          pollCalls++;
+          return switch (pollCalls) {
+            <= 1 => const UwbCalibrationStatus(state: UwbCalibrationState.idle),
+            2 => const UwbCalibrationStatus(
+                state: UwbCalibrationState.running,
+                progressPct: 40,
+                sampledFrames: 80,
+              ),
+            _ => const UwbCalibrationStatus(
+                state: UwbCalibrationState.succeeded,
+                progressPct: 100,
+                sampledFrames: 200,
+              ),
+          };
+        },
+        startCalibration: (UwbCalibrationRequest? request) async {
+          started.add(request);
+          return const UwbCalibrationStatus(state: UwbCalibrationState.running);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(kUwbCalibrationStateKey)).data, 'IDLE');
+
+      await tester.enterText(find.byKey(kUwbCalibrationSampleFramesKey), '120');
+      await tester.tap(find.byKey(kUwbCalibrationStartButtonKey));
+      await tester.pump();
+      await tester.pump();
+
+      // 已受理并不等于在跑：只有 RUNNING 才起 1s 定时器。
+      expect(started.single!.toJson(), <String, Object?>{'sampleFrames': 120});
+      expect(tester.widget<Text>(find.byKey(kUwbCalibrationStateKey)).data, 'RUNNING');
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(
+        tester.widget<Text>(find.byKey(kUwbCalibrationStateKey)).data,
+        'RUNNING｜进度 40%｜已采样 80 帧',
+      );
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(
+        tester.widget<Text>(find.byKey(kUwbCalibrationStateKey)).data,
+        'SUCCEEDED｜进度 100%｜已采样 200 帧',
+      );
+
+      // 终态后再推进 5s 不应再有轮询。
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(pollCalls, 3);
+
+      await unmount(tester);
+    });
+
+    testWidgets('启动校准留空采样帧：端口收到 null（不发请求体，服务端取默认）',
+        (WidgetTester tester) async {
+      final List<UwbCalibrationRequest?> started = <UwbCalibrationRequest?>[];
+      await pumpUwb(
+        tester,
+        loadMeta: () async => uwbMetaOf(),
+        pollCalibration: () async =>
+            const UwbCalibrationStatus(state: UwbCalibrationState.idle),
+        startCalibration: (UwbCalibrationRequest? request) async {
+          started.add(request);
+          return const UwbCalibrationStatus(state: UwbCalibrationState.idle);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kUwbCalibrationStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(started.single, isNull);
+      expect(find.text('已受理 UWB 校准'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('清除校准：状态回到「未查询」并提示', (WidgetTester tester) async {
+      int clearCalls = 0;
+      await pumpUwb(
+        tester,
+        loadMeta: () async => uwbMetaOf(),
+        pollCalibration: () async =>
+            const UwbCalibrationStatus(state: UwbCalibrationState.succeeded, progressPct: 100),
+        clearCalibration: () async => clearCalls++,
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kUwbCalibrationStateKey)).data,
+        'SUCCEEDED｜进度 100%',
+      );
+
+      await tester.tap(find.byKey(kUwbCalibrationClearButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(clearCalls, 1);
+      expect(tester.widget<Text>(find.byKey(kUwbCalibrationStateKey)).data, '未查询');
+      expect(find.text('已清除 UWB 校准结果'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射为现场文案（链路未开 / 标定参数不自洽）', (WidgetTester tester) async {
+      await pumpUwb(
+        tester,
+        loadMeta: () async => uwbMetaOf(),
+        pollCalibration: () async =>
+            const UwbCalibrationStatus(state: UwbCalibrationState.idle),
+        startCalibration: (UwbCalibrationRequest? request) async =>
+            throw apiFailure(409, ApiErrorCode.deviceLinkNotOpen),
+        saveMeta: (UwbMeta meta) async =>
+            throw apiFailure(400, ApiErrorCode.mapUwbMetaIncomplete),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kUwbCalibrationStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kUwbCalibrationErrorKey)).data,
+        contains(ApiErrorCode.deviceLinkNotOpen),
+      );
+
+      await tester.tap(find.byKey(kUwbMetaSaveButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kUwbCalibrationErrorKey)).data,
+        contains(ApiErrorCode.mapUwbMetaIncomplete),
+      );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 54：UWB 标定接线——底图行「标定」入口进入，四个端口挂同一条已认证传输。
+  group('指挥端 UWB 标定接线（段 54）', () {
+    testWidgets('底图行「标定」入口：进入标定面板并按登录令牌拉参数与校准状态',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/maps':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{'mapId': 'm-1', 'name': '演训场', 'type': 'INDOOR'},
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'GET $kApiPrefix/maps/m-1/uwb-meta':
+            return jsonResponse(<String, dynamic>{
+              'bs1': <String, dynamic>{'xPx': 0, 'yPx': 0},
+              'bs2': <String, dynamic>{'xPx': 600, 'yPx': 0},
+              'bs3': <String, dynamic>{'xPx': 600, 'yPx': 400},
+              'bs4': <String, dynamic>{'xPx': 0, 'yPx': 400},
+              'realLengthCm': 600,
+              'realWidthCm': 400,
+            });
+          case 'GET $kApiPrefix/maps/m-1/uwb-calibration':
+            return jsonResponse(<String, dynamic>{'state': 'IDLE'});
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryMapsEntryKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(mapManagerCalibrationKey('m-1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(UwbCalibrationPage), findsOneWidget);
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/maps',
+          'GET $kApiPrefix/maps/m-1/uwb-meta',
+          'GET $kApiPrefix/maps/m-1/uwb-calibration',
+        ]),
+      );
+      final ScriptedCall metaCall = transport.calls.lastWhere(
+        (ScriptedCall call) => call.key == 'GET $kApiPrefix/maps/m-1/uwb-meta',
+      );
+      expect(metaCall.authorization, 'Bearer access-1');
+      expect(tester.widget<Text>(find.byKey(kUwbMetaStatusKey)).data, '已标定｜长 600cm｜宽 400cm');
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：底图行不渲染「标定」按钮', (WidgetTester tester) async {
+      await pumpMaps(
+        tester,
+        list: () async => mapPageOf(<MapDetail>[mapOf('m-1', name: '演训场')]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(mapManagerCalibrationKey('m-1')), findsNothing);
+      expect(find.byKey(mapManagerEditKey('m-1')), findsOneWidget);
 
       await unmount(tester);
     });

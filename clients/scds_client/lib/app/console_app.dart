@@ -10,6 +10,7 @@ import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
 import '../features/console/roster_editor_page.dart';
 import '../features/console/team_summary_page.dart';
+import '../features/console/uwb_calibration_page.dart';
 import '../shared/api/api_client.dart';
 import '../shared/api/auth_api.dart';
 import '../shared/api/auth_models.dart';
@@ -503,6 +504,58 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             mapId: mapId,
           ),
           pickImage: () async => null,
+          onOpenCalibration: (MapDetail map) => _openUwbCalibration(
+            navigator: navigator,
+            maps: maps,
+            map: map,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 54：打开某底图的 UWB 标定面板（`uwb-meta` 读 / 写 + 中心基准校准）。
+  ///
+  /// 五个端口都走同一条 [RefreshingApiTransport]，**全闭包读 `_account!.accessToken`**
+  /// （续期换到的新令牌才生效）；令牌到期由装饰器自动续期并重试一次。
+  void _openUwbCalibration({
+    required NavigatorState navigator,
+    required MapApi maps,
+    required MapDetail map,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => UwbCalibrationPage(
+          session: session,
+          mapId: map.mapId,
+          mapName: map.name,
+          loadMeta: () => maps.getUwbMeta(
+            token: _account!.accessToken,
+            mapId: map.mapId,
+          ),
+          saveMeta: (UwbMeta meta) => maps.putUwbMeta(
+            token: _account!.accessToken,
+            mapId: map.mapId,
+            meta: meta,
+          ),
+          startCalibration: (UwbCalibrationRequest? request) => maps.startUwbCalibration(
+            token: _account!.accessToken,
+            mapId: map.mapId,
+            request: request,
+          ),
+          pollCalibration: () => maps.getUwbCalibration(
+            token: _account!.accessToken,
+            mapId: map.mapId,
+          ),
+          clearCalibration: () => maps.clearUwbCalibration(
+            token: _account!.accessToken,
+            mapId: map.mapId,
+          ),
         ),
       ),
     );
