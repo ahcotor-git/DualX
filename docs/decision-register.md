@@ -2059,8 +2059,42 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 轨迹分片（真实 cursor 分页、`REPLAY_NOT_FOUND`、变速播放与真机观感均未验证）；集成层（`ReplayListPage` / `ReplayPlayerPage` +
 `ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**统计面板 / 导出面板**尚未接线，另开段。证据见 [testing](testing.md) **第 57 节**。
 
-**下一段（候选）**：**replay 域 UI 后半**——**统计面板 / 导出面板**（`GET .../statistics` + `POST .../exports`（202 受理）+
-`GET .../exports/{taskId}` 轮询 + `GET .../exports/{taskId}/download`，建议同「UI 接线另开段」并可能分两笔），属独立决策点；
+**段 57 后半落地（2026-11-03，UI 接线：replay 域——复盘统计面板）**：承上笔（前半＝复盘列表页 + 数据驱动回放器），
+用户裁定后半切入点「**统计面板先行（Recommended）**」，并**预先裁定**导出产物落地口径为「**注入 `saveBytes` 端口、不引依赖
+（Recommended）**」（与段 53 `pickImage` 同口径，留待导出段落地）。本笔只落 **`GET /replays/{replayId}/statistics` 单端点**：
+
+- `lib/features/console/replay_statistics_page.dart`（**新**）：`ReplayStatisticsPage`——复盘摘要 + 采样段数输入 + 「重载」+
+  四段如实展示（队伍战损汇总 / 命中排行 / 命中部位分布 / 存活人数曲线）；控件键 `kReplayStatisticsAccount|Summary|Loading|`
+  `Error|FormError|Buckets|ReloadButton|TeamsEmpty|ShootersEmpty|HitPartsEmpty|TimelineEmptyKey` +
+  `replayStatisticsTeamRowKey(teamWire)` / `replayStatisticsShooterRowKey(rank)` / `replayStatisticsHitPartRowKey(index)` /
+  `replayStatisticsBucketRowKey(index)`；端口 typedef `ReplayStatisticsLoader`（**只接 `timelineBuckets`**）；
+  `const int kReplayStatisticsMinBuckets = 10` / `kReplayStatisticsMaxBuckets = 500` / `kReplayStatisticsDefaultBuckets = 120`
+  （**仅用于文案**）；`_reload()`（**先本地校验采样段数**：非整数或越界即拦下、不发请求、**不清空已装载数据**）、
+  `_load(buckets)` **单飞**；公开助手 `describeTeamSummary` / `describeTopShooter(rank, shooter)` / `describeHitPartCount` /
+  `describeTimelineBucket`（复用 `formatReplayOffset`）；私有 `_describeLiveByTeam` / `_count`（缺失破折号）/ `_describeFailure`；
+- `lib/features/console/replay_list_page.dart`（**改**）：新增 `replayListStatisticsKey(replayId)` + typedef `ReplayStatisticsOpener`；
+  构造 / 字段 `onOpenStatistics`（`null` **不渲染**「统计」）；行内按钮顺序＝「回放」→「统计」；
+- `lib/app/console_app.dart`（**改**）：新增 import `replay_statistics_page.dart` ＋ `ReplayListPage` 接 `onOpenStatistics` ＋
+  新增 `_openReplayStatistics`（push 统计面板）——端口**只接 `timelineBuckets`**、**闭包读 `_account!.accessToken`**；
+- `test/console_widget_test.dart`（**改**）：新增 import `replay_statistics_page.dart`；新增助手 `teamSummaryOf` / `shooterOf` /
+  `hitPartCountOf` / `bucketOf` / `statsOf` / `pumpReplayStatistics`；**+10 例**（`复盘统计页（段 57）` **9** +
+  `指挥端复盘接线（段 57）` **+1**，该组共 2 例）。
+
+**口径要点**：**只落 1 端点**（概览 `GET /replays/{replayId}` 仍**不复拉**——列表行整对象传入）；**缺失即破折号、不臆造 0**——
+契约里四段字段**皆非必填**（四个集合默认空列表，条目内计数亦非必填），页面如实显示 `—`、未登记射手名显示「（未登记）」；
+**排行与分布按服务端顺序如实展示**（**不重排、不聚合**，名次＝回传序号从 1 起）；**存活曲线的 `t` 是相对开演的毫秒偏移**——
+复用 `formatReplayOffset` 出 `mm:ss.S`（**不是时刻**、不加回 `startedAt`），`liveByTeam` 键为队伍名、多队以 ` / ` 连接；
+**采样段数越界 / 非整数在客户端拦下**（不发请求、镜像服务端 `VALIDATION_FAILED`），校验不过**保留上一份已装载数据**、
+只提示表单错误；留空即 `null`（**不传该键**，服务端默认 120）、**不臆造缺省**；**入口可选注入**（延续段 49~56 同口径）。
+
+门禁：`flutter test` → `All tests passed!`（**387 例**，较前半的 377 例 **+10**）、`flutter analyze` → `No issues found!`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。**未验项**：**未对着真实后端实例**跑真实复盘统计
+（真实 `REPLAY_NOT_FOUND`、服务端采样段数校验、真机观感均未验证）；集成层（`ReplayStatisticsPage` + `ReplayApi` + 真实 `ApiClient`
++ 真实 HTTP）**未走通**；**导出面板**尚未接线，另开段。证据见 [testing](testing.md) **第 57.5~57.8 节**。
+
+**下一段（候选）**：**replay 域 UI 收口——导出面板**（`POST .../exports`（202 受理）+ `GET .../exports/{taskId}` 轮询 +
+`GET .../exports/{taskId}/download`，**产物落地口径已裁定**：「注入 `saveBytes` 端口、不引依赖」——与段 53 `pickImage` 同口径，
+生产端先接占位、测试注入假件驱动全流程），属独立决策点；
 他域候选同前：收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
 **device 域**（约 15 端点 + `watchLinks` WS）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；

@@ -3742,13 +3742,15 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 **replay 域 UI**（复盘列表 / 回放器 / 统计面板 / 导出面板）**尚未接线**，另开段。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
 
-## 57. M6 CLIENT-WINDOWS 续段（UI 接线）：replay 域——复盘列表页 + 数据驱动回放器
+## 57. M6 CLIENT-WINDOWS 续段（UI 接线）：replay 域——复盘列表页 + 数据驱动回放器 + 复盘统计面板
 
 承段 56「**replay 域共享层已就位**（契约模型 + 7 端点 HTTP 客户端 + 契约测试）」，用户裁定切入点
-「**replay 域 UI 接线（Recommended）**」＋回放器形态「**数据驱动回放器（Recommended）**」；本段只落 replay 域 **UI 前半**
-（**复盘列表页 + 数据驱动回放器 + 指挥端接线**），**统计面板 / 导出面板另开段**（延续段 48→49/50/51 与段 52→53/54/55 的节奏）。
-范围＝ `docs/api/paths/replay.yaml` 里 **UI 直接承载的 2 端点**（`GET /replays`、`GET /replays/{replayId}/timeline`）；
-复盘概览 `GET /replays/{replayId}` **不在本段**——列表页已从 `Replay` 行拿到全部字段并整对象传给回放器，不再单独拉第二遍。
+「**replay 域 UI 接线（Recommended）**」＋回放器形态「**数据驱动回放器（Recommended）**」；本段**分两笔**落 replay 域 UI：
+**前半（57.1~57.4）＝复盘列表页 + 数据驱动回放器**；**后半（57.5~57.8）＝复盘统计面板**（用户裁定后半切入点
+「**统计面板先行（Recommended）**」）；**导出面板**（`exports` 三端点）另开段（延续段 48→49/50/51 与段 52→53/54/55 的节奏）。
+范围＝ `docs/api/paths/replay.yaml` 里 **UI 直接承载的 3 端点**（前半 `GET /replays`、`GET /replays/{replayId}/timeline`；
+后半 `GET /replays/{replayId}/statistics`）；
+复盘概览 `GET /replays/{replayId}` **不在本段**——列表页已从 `Replay` 行拿到全部字段并整对象传给回放器 / 统计面板，不再单独拉第二遍。
 
 ### 57.1 交付物（1 笔 = 5 文件，2 新 3 改）
 
@@ -3812,3 +3814,55 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 复盘列表 / 轨迹分片（真实 cursor 分页、`REPLAY_NOT_FOUND`、变速播放与真机观感均未验证）；集成层（`ReplayListPage` /
 `ReplayPlayerPage` + `ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**统计面板 / 导出面板**（`statistics` + `exports`
 三端点）**尚未接线**，另开段。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+### 57.5 后半交付物（1 笔 = 4 文件，1 新 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/replay_statistics_page.dart`(新) | `ReplayStatisticsPage`——复盘摘要 + 采样段数输入 + 「重载」+ 四段如实展示（队伍战损汇总 / 命中排行 / 命中部位分布 / 存活人数曲线）；控件键 `kReplayStatisticsAccountKey`/`kReplayStatisticsSummaryKey`/`kReplayStatisticsLoadingKey`/`kReplayStatisticsErrorKey`/`kReplayStatisticsFormErrorKey`/`kReplayStatisticsBucketsKey`/`kReplayStatisticsReloadButtonKey`/`kReplayStatisticsTeamsEmptyKey`/`kReplayStatisticsShootersEmptyKey`/`kReplayStatisticsHitPartsEmptyKey`/`kReplayStatisticsTimelineEmptyKey` + `replayStatisticsTeamRowKey(teamWire)` / `replayStatisticsShooterRowKey(rank)` / `replayStatisticsHitPartRowKey(index)` / `replayStatisticsBucketRowKey(index)`；端口 `typedef ReplayStatisticsLoader`（**只接 `timelineBuckets`**）；`const int kReplayStatisticsMinBuckets = 10` / `kReplayStatisticsMaxBuckets = 500` / `kReplayStatisticsDefaultBuckets = 120`（**仅用于文案**）；`_reload()`（**先本地校验采样段数**：非整数或越界即拦下、不发请求、**不清空已装载数据**）、`_load(buckets)` **单飞**；公开助手 `describeTeamSummary` / `describeTopShooter(rank, shooter)` / `describeHitPartCount` / `describeTimelineBucket`；私有 `_describeLiveByTeam` / `_count`（缺失破折号）/ `_describeFailure` |
+| `lib/features/console/replay_list_page.dart`(改) | 新增 `replayListStatisticsKey(replayId)` + 端口 `typedef ReplayStatisticsOpener`；构造 / 字段 `onOpenStatistics`（`null` **不渲染**「统计」）；行内按钮顺序＝「回放」→「统计」；类注释同步为「回放 / 统计」双入口 |
+| `lib/app/console_app.dart`(改) | 新增 import `replay_statistics_page.dart`；`ReplayListPage` 接 `onOpenStatistics`；新增 `_openReplayStatistics`（push 统计面板）——端口**只接 `timelineBuckets`**、**闭包读 `_account!.accessToken`**；`_openReplays` 注释补「统计」去向 |
+| `test/console_widget_test.dart`(改) | **+10 例**：`复盘统计页（段 57）` **9** + `指挥端复盘接线（段 57）` **+1**（该组共 2 例）；新增 import `replay_statistics_page.dart`；新增助手 `teamSummaryOf` / `shooterOf` / `hitPartCountOf` / `bucketOf` / `statsOf` / `pumpReplayStatistics` |
+
+### 57.6 后半用例与判据（新增 10 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 复盘统计页(9) | 已加载 | 四段如实渲染（队伍 / 排行 / 部位 / 曲线），**采样段数留空即不传该键**（端口收到 `null`） |
+| | 可选字段缺失 | 五项计数、排行、部位、曲线（含 `liveByTeam`）**皆显示破折号，不臆造 0**；未登记射手名显示「（未登记）」 |
+| | 采样段数合法 | `' 60 '` 随重载请求送出（端口收到 `60`），无表单错误 |
+| | 采样段数非整数 | `abc` **本地拦下、不发请求**，显示行内错误，**且不清空已装载数据** |
+| | 采样段数越界 | `9` / `501` **本地拦下、不发请求** |
+| | 404 `REPLAY_NOT_FOUND` | 映射为「复盘不存在」文案 |
+| | 403 `AUTH_FORBIDDEN` | 映射为「当前账号无权查看该复盘」文案 |
+| | 503 `INSTANCE_NOT_READY` | 映射为「实例尚未就绪」文案 |
+| | 四段皆空 | 各段分别显示空态（四枚 `*EmptyKey` 各中一枚） |
+| 指挥端接线(+1) | 行内「统计」 | 进入统计面板并按登录令牌拉该复盘统计（`Bearer access-1`）；序列 `login→summary→replays→replays/r-1/statistics`；队伍行与曲线行文本如实 |
+
+### 57.7 后半口径要点
+
+- **只落 1 端点**：`GET /replays/{replayId}/statistics`；**概览 `GET /replays/{replayId}` 仍不复拉**（列表行整对象传入）。
+- **缺失即破折号、不臆造 0**：契约里四段字段**皆非必填**（`teams` / `topShooters` / `hitPartDistribution` / `timeline`
+  默认空列表，条目内计数亦非必填），页面如实显示 `—`；未登记射手名显示「（未登记）」。
+- **排行与分布按服务端顺序如实展示**：页面**不重排、不聚合**；排行名次（`第 N 名`）即服务端回传顺序的序号（从 1 起）。
+- **存活曲线的 `t` 是相对开演的毫秒偏移**：复用 `formatReplayOffset` 出 `mm:ss.S`（**不是时刻**，也不加回 `startedAt`）；
+  `liveByTeam` 键为队伍名（`RED` / `BLUE` / …），多队以 ` / ` 连接。
+- **采样段数越界 / 非整数在客户端拦下**（不发请求），镜像服务端 `VALIDATION_FAILED`；校验不过**保留上一份已装载数据**、
+  只提示表单错误——不把页面清空。留空即 `null`（**不传该键**，服务端默认 120），本页**不臆造缺省**。
+- **入口可选注入**：`onOpenStatistics` 为 `null` 时复盘列表行**不渲染**「统计」按钮（延续段 49~56 同口径）。
+
+### 57.8 后半门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**387 例** = 段 57 前半的 377 例 + **本笔 10**）、
+  `flutter analyze` → `No issues found!`；
+- **Maven 侧无增减**：本笔产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件（1 新 3 改），破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、`device_app`；
+  **未新增依赖**（`pubspec.yaml` 未动）；共享层（`replay_models.dart` / `replay_api.dart`）**无需改动**（段 56 已就绪）。
+
+**未验项**：本笔只做 `flutter analyze` + `flutter test`（`ReplayStatisticsLoader` 闭包桩 + 假数据），**未对着真实后端实例**跑真实
+复盘统计（真实 `REPLAY_NOT_FOUND`、采样段数服务端校验、真机观感均未验证）；集成层（`ReplayStatisticsPage` + `ReplayApi` +
+真实 `ApiClient` + 真实 HTTP）**未走通**；**导出面板**（`POST /replays/{replayId}/exports`、`GET .../exports/{taskId}`、
+`GET .../exports/{taskId}/download` 三端点）**尚未接线**，另开段——用户已裁定产物落地口径为
+「**注入 `saveBytes` 端口、不引依赖（Recommended）**」（与段 53 `pickImage` 同口径），留待该段落地。
+本笔为**实测前置的客户端骨架验收**，不是生产发布批准。
