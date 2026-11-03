@@ -3466,3 +3466,70 @@ CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水
 CRUD / 图片上传下载 / 楼层点位读写 / UWB 标定（真实的**图片头判型**、413 / 415 拦截、`MAP_IN_USE` 引用拦截、
 `MAP_NOT_CALIBRATED` 分码、异步校准进度与真机标定系数均未验证）；集成层（`MapApi` + 真实 `ApiClient` + 真实 HTTP）
 **未走通**；**map 域 UI**（底图管理 / 楼层点位编辑 / 标定面板）**尚未接线**，另开段。本段为**契约字段级骨架验收**，不是生产发布批准。
+
+## 53. M6 CLIENT-WINDOWS 续段（UI 接线）：map 域——底图管理页
+
+承段 52「**UI 接线另开段**」，本段只落 **map 域底图子域的指挥端接线**（`map_manager_page.dart` + 外壳装配 + 入口），
+**楼层点位编辑**与 **UWB 标定面板**仍留后段。范围＝ `docs/api/paths/map.yaml` 14 端点中的**底图子域 7 端点**
+（底图 CRUD 5 + 底图图片 2）。两个设计点经用户当次裁定：**入口＝队伍汇总页 AppBar「底图」**；
+**选文件＝注入 `pickImage` 端口、不引依赖**。
+
+### 53.1 交付物（1 笔 = 4 文件，1 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/map_manager_page.dart`(新) | `MapManagerPage`——列表 / 新建 / 编辑 / 删除 / 图片上传 / 图片预览；**22 控件键**（`kMapManager*` / `mapManagerRowKey\|EditKey\|DeleteKey\|UploadKey\|PreviewKey(mapId)` / `kMapForm*` / `kMapDeleteConfirm\|CancelKey` / `kMapImagePreview*Key`）；六端口 typedef `MapLister`/`MapCreator`/`MapUpdater`/`MapRemover`/`MapImageUploader`/`MapImageDownloader` + `MapImagePicker`（回 `null` 即取消）+ `PickedImage` 载体；`_guard` 单飞、`_describeFailure(ApiException)` 按 `ApiErrorCode` switch；写后重拉列表 + SnackBar；`_MapFormDialog` 以**服务端快照预填**并做**二键整体提交**；`_openPreview` 把 `downloadMapImage` 的二进制交 `Image.memory` |
+| `lib/features/console/team_summary_page.dart`(改) | 新增可选入口 `onOpenMaps` + 入口键 `kTeamSummaryMapsEntryKey`（`null` 时**不渲染**，既有用例渲染不变）；入口顺序＝演习 / 想定 / **底图** / 全体态势 / 账号 |
+| `lib/app/console_app.dart`(改) | 新增 `MapApi(transport)` 装配 + `TeamSummaryPage` 接 `onOpenMaps` + `_openMaps`（全闭包读 `_account!.accessToken`）；`pickImage` 接**占位** `() async => null`（不引选文件依赖） |
+| `test/console_widget_test.dart`(改) | 新增助手 `mapOf`/`mapPageOf`/`tinyPng`/`pumpMaps` + 两组共 **13 例**（`底图管理页（段 53）` 11 + `指挥端底图管理接线（段 53）` 2） |
+
+### 53.2 用例与判据（新增 13 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 底图管理页(11) | 首帧加载 / 空态 | `list` 恰 1 次；账号键显示 `admin（OPERATOR）`；空列表渲染空态键 |
+| | 行文本契约字面量 | `演训场｜类型 OUTDOOR｜图片 1920×1080｜标定 已标定`；缺字段如实 `室内馆｜类型 INDOOR｜图片 无｜标定 —` |
+| | 新建（整体替换二键） | 名称两端空白被裁；正文**恰为** `{name:'新底图', type:'INDOOR'}`；SnackBar「已新建底图「新底图」」 |
+| | 编辑（快照预填 + 二键回归） | 名称框回填 `旧名`、`DropdownButton<MapType>.value == MapType.outdoor`；**仅改名**仍提交 `{name:'新名', type:'OUTDOOR'}` |
+| | 名称非法 | 全空白**不发请求**；对话框保留（保存键仍在）且行内错误键出现 |
+| | 删除（确认后重拉） | 确认后 `remove('m-1')`；`listCalls == 2`（首帧 + 重拉）；SnackBar「已删除底图「演训场」」 |
+| | 契约错误码映射 | 409 `MAP_IN_USE` → 页面顶部错误文案含「已被想定引用」 |
+| | 上传图片 | `pickImage` 回图片 → `uploadImage('m-1', …)` 收到 `filename='plan.png'`/`contentType='image/png'`；`listCalls == 2` |
+| | 选文件取消 | `pickImage` 回 `null` → `uploadImage` 调用 **0 次** |
+| | 预览图片 | `downloadImage` 恰 1 次；预览对话框键出现；信息文案 `类型 image/png｜N 字节`；关闭键可关 |
+| | 未注入上传 / 预览端口 | 两者皆缺时上传 / 预览键 `findsNothing`，编辑 / 删除仍在（入口可选注入） |
+| 指挥端底图管理接线(2) | 汇总页「底图」入口 | 点入即 `MapManagerPage`；请求序列 `containsAllInOrder([login, situation/teams/summary, GET /api/v1/maps])` 且列表请求 `authorization == 'Bearer access-1'`；行文本含 `演训场` |
+| | 未注入入口 | 汇总页不渲染「底图」按钮 |
+
+### 53.3 口径要点
+
+- **整体替换在 UI 层的兜底＝快照预填**：`MapUpsertRequest` 恒发 `name`/`type` 二键，服务端把**在场字段**照落，
+  故编辑对话框 `initState` **以服务端快照预填**、保存时**完整二键提交**——落「**仅改底图名仍提交二键**」回归用例作判据。
+- **上传判型只在服务端**：客户端如实填 `contentType`，但**不据此预判**（服务端验真实图片头，415 / 413 由错误码决定），
+  页面只把 `UNSUPPORTED_MEDIA_TYPE` / `PAYLOAD_TOO_LARGE` 映射成现场文案。
+- **预览走鉴权下载、不走签名 URL**：预览用 `downloadMapImage`（带 `Bearer`、按**上传原格式**回二进制）交
+  `Image.memory`（`Uint8List.fromList`），**不落盘、不缓存**；`MapDetail.imageUrl` 那条 15 分钟签名 URL
+  **根相对路径且不带 `Bearer`**，本页**不采用**，避免把鉴权与非鉴权两路混在一处。
+- **选文件端口不引依赖（本段例外，已在装配处注明）**：`pickImage` 与 `uploadImage` **成对**注入，**缺一即不渲染**
+  「上传图片」；生产装配先接**占位**（恒回 `null`，等同取消），**数据链路已按契约接齐**，测试注入假件驱动全流程；
+  接真实文件选择器（`file_picker` 等）**需另授权引依赖**，故本段刻意不引。
+- **`_guard` 单飞 + 错误不冒泡**：置忙 → 执行 → 释放；`ApiException` 一律落页面顶部提示、不冒泡成红屏；错误码映射含
+  `mapNotFound` / `mapInUse` / `mapImageMissing` / `unsupportedMediaType` / `payloadTooLarge` / `validationFailed` /
+  `instanceNotReady`，兜底显示原码。
+- **入口可选注入**：`onOpenMaps == null` 时整块不渲染，既有只读用例渲染不变（沿用段 49~51 同口径）。
+
+### 53.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**316 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 +
+  段 50 10 + 段 51 13 + 段 52 27 + **本段 13**，较段 52 的 303 例 +13）；`flutter analyze` → `No issues found! (ran in 2.3s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（1 新 + 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（`pubspec.yaml` 未动）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩 + 假传输），**未对着真实后端实例**跑过真实底图
+CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`MAP_IN_USE` 引用拦截、二进制原格式回传均未验证）；
+集成层（`MapManagerPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端选文件端口为占位**
+（恒回 `null`，真实文件选择器**未接**）；**楼层点位编辑页**与 **UWB 标定面板**（读 / 写锚点标的 + 启动标定 + 轮询进度 + 清除）
+**尚未接线**，另开段。本段为**实测前置的客户端骨架验收**，不是生产发布批准。

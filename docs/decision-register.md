@@ -1853,11 +1853,50 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 413 / 415、`MAP_IN_USE` 引用拦截、`MAP_NOT_CALIBRATED` 分码、异步校准进度与真机标定系数未验证）；集成层
 （`MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**map 域 UI** 尚未接线。证据见 [testing](testing.md) **第 52 节**。
 
-**下一段（候选）**：**map 域 UI 接线**（底图管理页 / 楼层点位编辑 / UWB 标定面板，承接本段共享层，属最近一步）；
+**下一段（CLIENT-WINDOWS 续段·UI 接线·底图管理页）落地**：承接段 52 共享层，用户当次裁定方向「**map 域 UI 接线**」＋
+切入点「**底图管理页先行（Recommended）**」；并在两个设计点上裁定：**入口＝队伍汇总页 AppBar 加「底图」（Recommended）**、
+**选文件＝注入 `pickImage` 端口、不引依赖（Recommended）**。本段只落 **map 域底图子域**的指挥端接线
+（范围＝ `map.yaml` 14 端点中的**底图 CRUD 5 + 底图图片 2**＝**7 端点**），**楼层点位编辑**与 **UWB 标定面板**另开段。
+落**一笔**（**4 文件 / 1 新 3 改**，**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**）：
+- `lib/features/console/map_manager_page.dart`（**新**）：`MapManagerPage`（列表 / 新建 / 编辑 / 删除 / 图片上传 / 图片预览）；
+  **22 控件键**（`kMapManager*` / `mapManagerRowKey|EditKey|DeleteKey|UploadKey|PreviewKey(mapId)` / `kMapForm*` /
+  `kMapDeleteConfirm|CancelKey` / `kMapImagePreview*Key`）；六端口 typedef `MapLister` / `MapCreator` / `MapUpdater` /
+  `MapRemover` / `MapImageUploader` / `MapImageDownloader` ＋ `MapImagePicker`（回 `null` 即取消）＋ `PickedImage` 载体；
+  `_guard` 单飞去重、`_describeFailure(ApiException)` 按 `ApiErrorCode` switch（`mapNotFound` / `mapInUse` /
+  `mapImageMissing` / `unsupportedMediaType` / `payloadTooLarge` / `validationFailed` / `instanceNotReady`）；
+  写后**重拉列表** + SnackBar；`_MapFormDialog` `initState` **以服务端快照预填**并做**二键整体提交**；
+  `_openPreview` 把 `downloadMapImage` 的二进制交 `Image.memory`；
+- `lib/features/console/team_summary_page.dart`（**改**）：新增可选入口 `onOpenMaps` + 入口键 `kTeamSummaryMapsEntryKey`
+  （`null` 时**不渲染**，既有只读用例渲染不变）；入口顺序＝演习 / 想定 / **底图** / 全体态势 / 账号；
+- `lib/app/console_app.dart`（**改**）：新增 import（`map_manager_page` / `map_api` / `map_models`）＋ `MapApi(transport)` 装配 ＋
+  `TeamSummaryPage` 接 `onOpenMaps` ＋ `_openMaps`（**全闭包读 `_account!.accessToken`**，续期换到的新令牌才生效）；
+  `pickImage` 接**占位** `() async => null`，并在 doc 注释里明确「刻意不引第三方依赖（`file_picker` 等需单独授权）」；
+- `test/console_widget_test.dart`（**改**）：新增助手 `mapOf` / `mapPageOf` / `tinyPng`（1×1 真实 PNG）+ `pumpMaps` +
+  两组共 **13 例**（`底图管理页（段 53）` **11** + `指挥端底图管理接线（段 53）` **2**）。
+
+**口径要点**：**整体替换在 UI 层的兜底＝快照预填**——`MapUpsertRequest` 恒发 `name`/`type` 二键、服务端把**在场字段**照落，
+故编辑以**服务端快照预填**、保存时**完整二键提交**（落「仅改名仍提交二键」回归用例作判据）；**上传判型只在服务端**——
+客户端如实填 `contentType` 但**不据此预判**（服务端验真实图片头，415 `UNSUPPORTED_MEDIA_TYPE` / 413
+`PAYLOAD_TOO_LARGE` 由错误码决定）；**预览走鉴权下载、不走签名 URL**——`downloadMapImage`（带 `Bearer`、按上传
+**原格式**回二进制）交 `Image.memory`，**不落盘不缓存**，而 `MapDetail.imageUrl` 那条 15 分钟签名 URL **根相对路径且
+不带 `Bearer`**、本页**不采用**（避免鉴权与非鉴权两路混在一处）；**选文件端口不引依赖**——`pickImage` 与 `uploadImage`
+**成对**注入、**缺一即不渲染**「上传图片」，生产先接**占位**（恒回 `null`＝用户取消），**数据链路已按契约接齐**、
+测试注入假件驱动全流程，接真实文件选择器**需另授权引依赖**故本段刻意不引；**入口可选注入**（`onOpenMaps == null`
+整块不渲染，延续段 49~51 同口径）。
+
+门禁：`flutter test` → `All tests passed!`（**316 例**，较段 52 的 303 例 **+13**）、`flutter analyze` →
+`No issues found! (ran in 2.3s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实底图 CRUD / 图片上传下载（真实图片头判型、413 / 415、`MAP_IN_USE` 引用拦截、
+二进制原格式回传未验证）；集成层（`MapManagerPage` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端选文件端口为占位**；
+**楼层点位编辑页**与 **UWB 标定面板** 尚未接线。证据见 [testing](testing.md) **第 53 节**。
+
+**下一段（候选）**：**map 域续接**——**楼层点位编辑页**（归一化百分比坐标系 `xPct`/`yPct`）与 **UWB 标定面板**
+（读 / 写锚点标的（底图像素 `xPx`/`yPx`，十键整体替换）+ 启动标定 + 轮询进度 + 清除），承接本段底图子域、属最近一步；
 收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
 复盘与导出 **replay 域**（约 7 端点，可同样「共享层先行」）；**device 域**（约 15 端点 + `watchLinks` WS）；
 `moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋
-连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
+连接配置落盘（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；安装 Visual Studio C++
+工作负载（需另授权）以补齐 **Windows 原生构建验收**。
 
 
 
