@@ -1824,11 +1824,40 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 真实 `EXERCISE_ROSTER_EMPTY` 编成校验、真实 `EXERCISE_ALREADY_RUNNING` 并发拦截未验证）；**模板下载 / multipart 导入** UI
 **尚未接线**。证据见 [testing](testing.md) **第 51 节**。
 
-**下一段（候选）**：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
-地图与标定 **map 域**（约 14 端点，含 multipart 图片与校准异步）；复盘与导出 **replay 域**（约 7 端点）；
-**device 域**（约 15 端点 + `watchLinks` WS）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储
-（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）
-以补齐 **Windows 原生构建验收**。后续恢复默认「每原子任务 ≤3 文件」。
+**下一段（CLIENT-WINDOWS 续段·共享层先行·map 域）落地**：用户当次裁定方向「**map 域（共享层先行）**」，本段只落
+**map 域的共享层**——**契约模型 + 14 端点 HTTP 客户端 + 契约测试**，**UI 接线另开段**（延续段 48→49/50/51 的节奏）。
+范围即 `docs/api/paths/map.yaml` 的 6 个 path item、**14 个端点**（底图 CRUD 5 + 底图图片 2 + 楼层点位 2 + UWB 标定 5）。
+落**一笔**（**3 文件 / 3 新**，**未破「每原子任务 ≤3 文件」上限**）：
+- `lib/shared/api/map_models.dart`（**新**）：`MapType` / `MapDetail` / `MapUpsertRequest` / `MapPage`；`FloorPoint` /
+  `FloorPointsRequest`；`UwbAnchorPoint` / `UwbMeta` / `UwbCalibrationRequest` / `UwbCalibrationState` /
+  `UwbCalibrationStatus`。`PageMeta` 复用 `exercise_models.dart`（`common.yaml#/PageMeta` 客户端唯一声明处，不造第二份）；
+- `lib/shared/api/map_api.dart`（**新**）：`MapApi`——`listMaps` / `createMap` / `getMap` / `updateMap` / `deleteMap`；
+  `uploadMapImage`（multipart）/ `downloadMapImage`（二进制，保持 `ApiResponse`）；`listFloorPoints` / `replaceFloorPoints`；
+  `getUwbMeta` / `putUwbMeta` / `startUwbCalibration` / `getUwbCalibration` / `clearUwbCalibration`；
+- `test/shared/api/map_api_test.dart`（**新**）：本机 `HttpServer` 打桩的**真实 HTTP 行为**断言，共 **27 例**
+  （`listMaps` 3 + 底图 CRUD 5 + 底图图片 4 + 楼层点位 3 + `uwb-meta` 4 + `uwb-calibration` 6 + 契约解析守则 2）。
+
+**口径要点**：**两套坐标系不可混用**——`FloorPoint` 的 `xPct` / `yPct` 是**归一化百分比 0~1**，`UwbAnchorPoint` 的
+`xPx` / `yPx` 是**底图像素**（沿用冻结的 `uwb_meta` 结构与 `t_map.uwb_meta` 库列），像素→百分比换算只在解算链路内做；
+**请求体两类口径（相反）**——整体替换（`MapUpsertRequest` 恒发二键 / `FloorPoint` 恒发四键 / `UwbMeta` 恒发**十键**，
+缺席即显式 `null`）与可选缺省（`UwbCalibrationRequest` **只发非 null 键**，`sampleFrames` 不传走服务端默认 200）；
+**图片上传由服务端按真实图片头判型**（请求 `Content-Type` 与扩展名都不作数；413 `PAYLOAD_TOO_LARGE` / 415
+`UNSUPPORTED_MEDIA_TYPE`）；**图片两路取用**——`MapDetail.imageUrl` 是**短时效签名 URL**（15 分钟、根相对路径、
+**不带 Bearer**，客户端拼 base URL 交 `<img>`，不缓存跨会话），`downloadMapImage`（带 Bearer）按原格式回二进制；
+**UWB 的 404 分码**（`MAP_NOT_FOUND` 换图 vs `MAP_NOT_CALIBRATED` 去标定）须分别引导；**校准是异步的**（202 仅受理，
+进度靠 GET 轮询；冲突 / 链路未开回 409）；**基站编号与 41B 帧 `ranges[i]` 偏移 `7+4*i` 固定对应**，错位致解算整体偏移。
+
+门禁：`flutter test` → `All tests passed!`（**303 例**，较段 51 的 276 例 **+27**）、`flutter analyze` →
+`No issues found! (ran in 4.4s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑真实底图 CRUD / 图片上传下载 / 楼层点位读写 / UWB 标定（真实图片头判型、
+413 / 415、`MAP_IN_USE` 引用拦截、`MAP_NOT_CALIBRATED` 分码、异步校准进度与真机标定系数未验证）；集成层
+（`MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**map 域 UI** 尚未接线。证据见 [testing](testing.md) **第 52 节**。
+
+**下一段（候选）**：**map 域 UI 接线**（底图管理页 / 楼层点位编辑 / UWB 标定面板，承接本段共享层，属最近一步）；
+收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
+复盘与导出 **replay 域**（约 7 端点，可同样「共享层先行」）；**device 域**（约 15 端点 + `watchLinks` WS）；
+`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋
+连接配置落盘（需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
 
 
 

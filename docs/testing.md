@@ -3384,3 +3384,85 @@ CLIENT-WINDOWS 续段经决策点确认取「**指令 + 当前演习日志流水
 `DEVICE_LINK_NOT_OPEN` 链路门禁、真实 `EXERCISE_ROSTER_EMPTY` 编成校验、真实 `EXERCISE_ALREADY_RUNNING` 并发拦截未验证）；
 集成层（`ExerciseControlPage` + `ExerciseApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**模板下载 / multipart 导入**的 UI
 **尚未接线**，另开段。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 52. M6 CLIENT-WINDOWS 续段（共享层先行）：map 域——底图 / 楼层点位 / UWB 标定
+
+承段 51「**UI 接线另开段**」与用户当次裁定「**map 域（共享层先行）**」，本段只落 **map 域的共享层**：
+`lib/shared/api/map_models.dart`（契约模型）+ `lib/shared/api/map_api.dart`（14 端点 HTTP 客户端）+
+`test/shared/api/map_api_test.dart`（契约测试），**UI 接线另开段**。范围即 `docs/api/paths/map.yaml`
+的 6 个 path item、**14 个端点**（底图 CRUD 5 + 底图图片 2 + 楼层点位 2 + UWB 标定 5）。
+
+### 52.1 交付物（1 笔 = 3 文件，3 新）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/shared/api/map_models.dart`(新) | `MapType` / `MapDetail` / `MapUpsertRequest` / `MapPage`；`FloorPoint` / `FloorPointsRequest`；`UwbAnchorPoint` / `UwbMeta` / `UwbCalibrationRequest` / `UwbCalibrationState` / `UwbCalibrationStatus`。`PageMeta` 复用 `exercise_models.dart`（`common.yaml#/PageMeta` 客户端唯一声明处） |
+| `lib/shared/api/map_api.dart`(新) | `MapApi`：`listMaps` / `createMap` / `getMap` / `updateMap` / `deleteMap`；`uploadMapImage`（multipart）/ `downloadMapImage`（二进制）；`listFloorPoints` / `replaceFloorPoints`；`getUwbMeta` / `putUwbMeta` / `startUwbCalibration` / `getUwbCalibration` / `clearUwbCalibration`。非 2xx 由 `ApiTransport` 抛 `ApiException`，本层不判业务 |
+| `test/shared/api/map_api_test.dart`(新) | 本机 `HttpServer` 打桩的**真实 HTTP 行为**断言（路径含 `{mapId}` / `{floorNum}` 展开、查询串只带非 null 参数、`Bearer` 注入、请求体口径、非 2xx → `ApiException`），共 **27 例** |
+
+### 52.2 用例与判据（新增 27 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| `listMaps`(3) | 带 `type/page/size` | `GET /api/v1/maps`，查询串 `{type:'INDOOR',page:'1',size:'20'}`，`items`/`meta` 解析，`Bearer access-1` |
+| | 不带参数 | `uri.query` 为空（走服务端默认分页） |
+| | 未知 `type` 字面量 | 抛 `FormatException`（不静默落默认分支） |
+| 底图 CRUD(5) | `createMap` | `POST /api/v1/maps`，201；正文**恰为** `{name,type}`；`imageUrl`/`floorCount` 缺席为 `null` |
+| | `getMap` 404 | `ApiException(statusCode=404, code=MAP_NOT_FOUND)`，路径 `…/maps/missing` |
+| | `updateMap` | `PUT /api/v1/maps/map-3`，正文恒发二键 |
+| | `deleteMap` | `DELETE`，204 无正文，带 `Bearer` |
+| | `deleteMap` 409 | `MAP_IN_USE` → `ApiException`（不做级联删除） |
+| 底图图片(4) | `uploadMapImage` | `POST …/maps/map-3/image`，`Content-Type: multipart/form-data` 且带 `boundary`；正文含 `name="file"` / `filename="floor2.png"` / `Content-Type: image/png`；回填 `imageWidth/imageHeight` |
+| | `uploadMapImage` 415 | `UNSUPPORTED_MEDIA_TYPE` → `ApiException` |
+| | `downloadMapImage` | `GET …/image`，回**原始二进制**与 `contentType=image/png`，带 `Bearer` |
+| | `downloadMapImage` 404 | `MAP_IMAGE_MISSING` → `ApiException` |
+| 楼层点位(3) | `listFloorPoints` | `GET …/maps/map-3/floors/2/points`，`points` 解析（`posNum`/`xPct`/`label`，`label` 可空） |
+| | `replaceFloorPoints` | `PUT` 同路径；正文 `points[0]` **四点键全发**（`label: null`） |
+| | `replaceFloorPoints` 空表 | 正文 `{points: []}`（即清空） |
+| `uwb-meta`(4) | `getUwbMeta` | `GET …/uwb-meta`，`bs1~bs8` + 两个基准（`bs5` 缺席为 `null`） |
+| | `getUwbMeta` 404 | `MAP_NOT_CALIBRATED`（与 `MAP_NOT_FOUND` **分码**） |
+| | `putUwbMeta` | `PUT`；正文**十键全发**（`bs5~bs8` 缺席显式 `null`），`bs1` 为 `{xPx:100.0,yPx:200.0}` |
+| | `putUwbMeta` 400 | `MAP_UWB_META_INCOMPLETE`（语义问题）→ `ApiException` |
+| `uwb-calibration`(6) | `startUwbCalibration` 202 | 正文**只发非 null 键**（`{sampleFrames:300}`），回 `state=RUNNING` |
+| | `startUwbCalibration` 省略体 | `body` 为空、`contentType` 为 `null`（走服务端默认 200 帧） |
+| | `startUwbCalibration` 409 | `MAP_CALIBRATION_IN_PROGRESS` → `ApiException` |
+| | `getUwbCalibration` | `SUCCEEDED` + `progressPct=100` + `appliedAt` 非空 |
+| | 未知 `state` 字面量 | 抛 `FormatException` |
+| | `clearUwbCalibration` | `DELETE …/uwb-calibration`，204 无正文，带 `Bearer` |
+| 契约解析守则(2) | `MapDetail` 必填缺失 | 缺 `mapId` → 抛 `TypeError`（不臆造缺省值） |
+| | `FloorPoint` 整数坐标 | `xPct:0` / `yPct:1` 解析为 `0.0` / `1.0`（`num → double`），`label` 缺席为 `null` |
+
+### 52.3 口径要点
+
+- **两套坐标系不可混用**：`FloorPoint.xPct` / `yPct` 是**归一化百分比 0~1**；`UwbAnchorPoint.xPx` / `yPx` 是
+  **底图像素**（原点左上，沿用冻结的 `uwb_meta` 结构与 `t_map.uwb_meta` 库列）。像素→百分比的换算只在解算链路内做，不经客户端模型。
+- **请求体两类口径（相反）**：**整体替换**——`MapUpsertRequest`（恒发 `name`/`type`）、`FloorPoint`（恒发四点键，`label`
+  缺席即置 `null`）、`UwbMeta`（恒发**十键**，`bs5~bs8` 缺席即置 `null`）；**可选缺省**——`UwbCalibrationRequest`
+  **只发非 null 键**（`sampleFrames` 不传即走服务端默认 200，对应 `scds-solver` 的 `calibSampleFrames`）。
+- **图片上传由服务端判型**：服务端校验**真实图片头**（仅 PNG / JPEG / WebP），请求的 `Content-Type` 与扩展名都**不作数**；
+  超 20MB 单图上限回 413 `PAYLOAD_TOO_LARGE`，非白名单回 415 `UNSUPPORTED_MEDIA_TYPE`。客户端如实填 `contentType`，但**不据此预判**。
+- **图片两路取用方式不同**：`MapDetail.imageUrl` 是**短时效签名 URL**（默认 15 分钟、**根相对路径、不带 `Authorization`**），
+  客户端自行拼 base URL 交给 `<img>`，**不缓存跨会话**；`downloadMapImage`（带 `Bearer`）按**上传原格式**返回二进制，交给需要鉴权或落盘的场景。
+- **UWB 的 404 分码**：`MAP_NOT_FOUND`（id 打错了，去换图）与 `MAP_NOT_CALIBRATED`（图在、但还没做 UWB 标定，去标定）
+  是**两种现场处置动作**，前端应分别引导，不可合并成一句「找不到」。
+- **校准是异步的**：`startUwbCalibration` 的 202 只表示**已受理**，进度必须靠 `getUwbCalibration` 轮询；
+  已有校准在进行（`MAP_CALIBRATION_IN_PROGRESS`）或 UWB 链路未开启时，触发端点回 409。
+- **基站编号是硬约束**：`bs(i+1)` ↔ 41B 帧的 `ranges[i]`（字节偏移 `7 + 4*i`，小端 int32），**错位会导致解算结果整体偏移**——
+  模型文档已标注，服务端保存前另做一致性校验（`MAP_UWB_META_INCOMPLETE`）。
+- **分页元信息复用**：`MapPage` 的 `meta` 直接用 `exercise_models.dart` 的 `PageMeta`（同为 `common.yaml#/PageMeta`），
+  客户端**不重复造第二份**，避免两处声明日后漂移。
+
+### 52.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**303 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 +
+  段 50 10 + 段 51 13 + **本段 27**，较段 51 的 276 例 +27）；`flutter analyze` → `No issues found! (ran in 4.4s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 3 文件**（3 新），**未破「每原子任务 ≤3 文件」上限**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**；**未接线任何 UI**。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（本机 `HttpServer` 打桩），**未对着真实后端实例**跑过真实底图
+CRUD / 图片上传下载 / 楼层点位读写 / UWB 标定（真实的**图片头判型**、413 / 415 拦截、`MAP_IN_USE` 引用拦截、
+`MAP_NOT_CALIBRATED` 分码、异步校准进度与真机标定系数均未验证）；集成层（`MapApi` + 真实 `ApiClient` + 真实 HTTP）
+**未走通**；**map 域 UI**（底图管理 / 楼层点位编辑 / 标定面板）**尚未接线**，另开段。本段为**契约字段级骨架验收**，不是生产发布批准。
