@@ -2014,4 +2014,58 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；
 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
 
+**下一段（CLIENT-WINDOWS 续段·UI 接线·replay 域前半）落地**：承接段 56「**replay 域共享层已就位**，下一步是 replay 域 UI 接线」的候选，
+用户当次裁定切入点「**replay 域 UI 接线（Recommended）**」＋回放器形态「**数据驱动回放器（Recommended）**」。本段只落 replay 域 **UI 前半**
+（**复盘列表页 + 数据驱动回放器 + 指挥端接线**），**统计面板 / 导出面板另开段**（延续段 48→49/50/51 与段 52→53/54/55 的节奏）。
+范围＝ `docs/api/paths/replay.yaml` 里 **UI 直接承载的 2 端点**（`GET /replays`、`GET /replays/{replayId}/timeline`）；
+复盘概览 `GET /replays/{replayId}` **不在本段**——列表页已从 `Replay` 行拿到全部字段并整对象传给回放器，不再单独拉第二遍。
+落**一笔**（**5 文件 / 2 新 3 改**，**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**）：
+- `lib/features/console/replay_list_page.dart`（**新**）：`ReplayListPage`——想定名关键字 + 结束时间起 / 止 + 「查询」+
+  复盘行表（行摘要 + 行内「回放」）+ 分页（上一页 / 页码 / 下一页）；控件键 `kReplayListAccount|Error|Loading|Empty|Keyword|`
+  `From|To|SearchButton|FormError|Page|PrevButton|NextButtonKey` + `replayListRowKey(replayId)` / `replayListPlayKey(replayId)`；
+  两端口 typedef `ReplayLister`（`keyword`/`from`/`to`/`page`/`size`）/ `ReplayOpener`；`const int kReplayListPageSize = 20`；
+  `_load(page)` **单飞**、`_goto(delta)`、`_hasNext = _page * meta.size < meta.total`；公开助手 `describeReplaySummary(Replay)`；
+  私有 `_readInstant`（**长度 10 即按 UTC 零点**）/ `_blankToNull` / `_count`（缺失破折号）/ `_describeFailure`；
+- `lib/features/console/replay_player_page.dart`（**新**）：`ReplayPlayerPage`——复盘摘要 + 「播放 / 暂停」+ 速度下拉 +
+  「加载下一片」+ 进度条 + 当前时刻各单元读数；控件键 `kReplayPlayerAccount|Summary|Error|Status|Progress|Slider|PlayButton|`
+  `Speed|LoadMoreButton|End|EmptyKey` + `replayPlayerUnitKey(vestNum)`；端口 typedef `ReplayTimelineLoader`（**只接 `cursor`**）；
+  `const List<double> kReplaySpeeds = [0.5, 1, 2, 4]` + `const int kReplayTickMs = 100`；`_fetchMore()`（`_fetching` 单飞，
+  失败即 `_pause()`）、`_togglePlay()`（末尾再按＝重播）、`_onTick()`（追到已装载末尾：有分片就续拉、到末尾就停表）、
+  `_readingsAt(positionMs)`（每马甲取 `t <= 位置` 的最后一条）；公开助手 `formatReplayOffset(int)` /
+  `describeSampleReading(TrackSample)` / `describeSamplePosition(TrackSample)`；
+- `lib/features/console/team_summary_page.dart`（**改**）：新增 `const Key kTeamSummaryReplaysEntryKey` + 构造 / 字段
+  `onOpenReplays`（`null` 时**不渲染**）；AppBar `actions` 在「演习」之后、「想定」之前插入「复盘」`TextButton`；
+- `lib/app/console_app.dart`（**改**）：新增 4 个 import + `final ReplayApi replays = ReplayApi(transport);` ＋
+  `TeamSummaryPage` 接 `onOpenReplays` ＋ 新增 `_openReplays`（push 列表页）与 `_openReplayPlayer`（push 回放器页）——
+  **两端口全闭包读 `_account!.accessToken`**（续期换到的新令牌才生效），分片端口**只接 `cursor`**；
+- `test/console_widget_test.dart`（**改**）：新增 import `replay_list_page.dart` / `replay_player_page.dart` /
+  `shared/api/replay_models.dart`；新增助手 `replayOf` / `replayPageOf` / `pumpReplayList` / `sampleOf` / `pumpReplayPlayer`；
+  三组共 **17 例**（`复盘列表页（段 57）` **9** + `复盘回放器（段 57）` **7** + `指挥端复盘接线（段 57）` **1**）。
+
+**口径要点**：**`replayId` 就是演习编号**——停演时把本场态势落库为一条与演习同 ID 的复盘记录，UI 展示与跳转都用它、不另造编号；
+**时间轴一律是相对开演的毫秒偏移**——`TrackSample.t` 与播放位置都是偏移量，页面**不加回 `startedAt`**（跨时区回放不错位，
+进度条 / 变速 / 定位只依赖整型 `t`），`formatReplayOffset` 输出 `mm:ss.S`、**不是时刻**；**轨迹边拉边播、不一次拉全量**——
+一场演习采样点可达数十万条，页面按 `nextCursor` 连续拉取、`nextCursor == null` 即末尾，播到已装载末尾自动续拉下一片、到末尾自动停表；
+**坐标两组不可混用、不换算不翻转**——室内 `xPct`/`yPct`（归一化 0~1）与室外 `lng`/`lat`（BD-09）库里只有一套有效，
+页面**如实分列展示**（`describeSamplePosition`），万一两套都在（不应发生）按室内口径显示、**不做静默换算**；
+**时间过滤是结束时间区间（含端点）**——本页把 `yyyy-MM-dd` 按 **UTC 零点**解释，避免本地时区把区间整体平移，
+非法输入**在客户端拦下、不发请求**（服务端另有 `VALIDATION_FAILED` 兜底）；**只拼非空参数**（留空即不传该键、由服务端走默认值，
+分页以服务端回传的 `meta.page` 为准）；**回放器不画底图**（本段形态是**数据驱动回放器**，地图叠加留待后续段）；
+**分片端口只接 `cursor`**（`limit`/`vestNums`/`stride` 由调用方在闭包里定死、不散进 UI）；**概览不重复拉**；
+**入口可选注入**（延续段 49~55 同口径）。
+
+门禁：`flutter test` → `All tests passed!`（**377 例**，较段 56 的 360 例 **+17**）、`flutter analyze` → `No issues found!`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。**未验项**：**未对着真实后端实例**跑真实复盘列表 /
+轨迹分片（真实 cursor 分页、`REPLAY_NOT_FOUND`、变速播放与真机观感均未验证）；集成层（`ReplayListPage` / `ReplayPlayerPage` +
+`ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**统计面板 / 导出面板**尚未接线，另开段。证据见 [testing](testing.md) **第 57 节**。
+
+**下一段（候选）**：**replay 域 UI 后半**——**统计面板 / 导出面板**（`GET .../statistics` + `POST .../exports`（202 受理）+
+`GET .../exports/{taskId}` 轮询 + `GET .../exports/{taskId}/download`，建议同「UI 接线另开段」并可能分两笔），属独立决策点；
+他域候选同前：收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
+**device 域**（约 15 端点 + `watchLinks` WS）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
+平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；
+安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
+
+**观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）。
+
 

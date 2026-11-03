@@ -3741,3 +3741,74 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 产物过期 409、OOXML 二进制回传均未验证）；集成层（`ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
 **replay 域 UI**（复盘列表 / 回放器 / 统计面板 / 导出面板）**尚未接线**，另开段。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 57. M6 CLIENT-WINDOWS 续段（UI 接线）：replay 域——复盘列表页 + 数据驱动回放器
+
+承段 56「**replay 域共享层已就位**（契约模型 + 7 端点 HTTP 客户端 + 契约测试）」，用户裁定切入点
+「**replay 域 UI 接线（Recommended）**」＋回放器形态「**数据驱动回放器（Recommended）**」；本段只落 replay 域 **UI 前半**
+（**复盘列表页 + 数据驱动回放器 + 指挥端接线**），**统计面板 / 导出面板另开段**（延续段 48→49/50/51 与段 52→53/54/55 的节奏）。
+范围＝ `docs/api/paths/replay.yaml` 里 **UI 直接承载的 2 端点**（`GET /replays`、`GET /replays/{replayId}/timeline`）；
+复盘概览 `GET /replays/{replayId}` **不在本段**——列表页已从 `Replay` 行拿到全部字段并整对象传给回放器，不再单独拉第二遍。
+
+### 57.1 交付物（1 笔 = 5 文件，2 新 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/replay_list_page.dart`(新) | `ReplayListPage`——想定名关键字 + 结束时间起 / 止 + 「查询」+ 复盘行表（行摘要 + 行内「回放」）+ 分页（上一页 / 页码 / 下一页）；控件键 `kReplayListAccountKey`/`kReplayListErrorKey`/`kReplayListLoadingKey`/`kReplayListEmptyKey`/`kReplayListKeywordKey`/`kReplayListFromKey`/`kReplayListToKey`/`kReplayListSearchButtonKey`/`kReplayListFormErrorKey`/`kReplayListPageKey`/`kReplayListPrevButtonKey`/`kReplayListNextButtonKey` + `replayListRowKey(replayId)` / `replayListPlayKey(replayId)`；端口 `typedef ReplayLister`（`keyword`/`from`/`to`/`page`/`size`）+ `typedef ReplayOpener`；`const int kReplayListPageSize = 20`；`_load(page)` **单飞**、`_goto(delta)`、`_hasNext = _page * meta.size < meta.total`；公开助手 `describeReplaySummary(Replay)`；私有 `_readInstant`（**长度 10 即按 UTC 零点**）/ `_blankToNull` / `_count`（缺失破折号）/ `_describeFailure` |
+| `lib/features/console/replay_player_page.dart`(新) | `ReplayPlayerPage`——复盘摘要 + 「播放 / 暂停」+ 速度下拉 + 「加载下一片」+ 进度条 + 当前时刻各单元读数；控件键 `kReplayPlayerAccountKey`/`kReplayPlayerSummaryKey`/`kReplayPlayerErrorKey`/`kReplayPlayerStatusKey`/`kReplayPlayerProgressKey`/`kReplayPlayerSliderKey`/`kReplayPlayerPlayButtonKey`/`kReplayPlayerSpeedKey`/`kReplayPlayerLoadMoreButtonKey`/`kReplayPlayerEndKey`/`kReplayPlayerEmptyKey` + `replayPlayerUnitKey(vestNum)`；端口 `typedef ReplayTimelineLoader`（**只接 `cursor`**）；`const List<double> kReplaySpeeds = [0.5, 1, 2, 4]` + `const int kReplayTickMs = 100`；`_fetchMore()`（`_fetching` 单飞，失败即 `_pause()`）、`_togglePlay()`（末尾再按＝重播）、`_onTick()`（追到已装载末尾：有分片就续拉、到末尾就停表）、`_readingsAt(positionMs)`（每马甲取 `t <= 位置` 的最后一条）；公开助手 `formatReplayOffset(int)` / `describeSampleReading(TrackSample)` / `describeSamplePosition(TrackSample)` |
+| `lib/features/console/team_summary_page.dart`(改) | 新增 `kTeamSummaryReplaysEntryKey` + 构造 / 字段 `onOpenReplays`（`null` 不渲染）；AppBar `actions` 在「演习」之后、「想定」之前插入「复盘」`TextButton` |
+| `lib/app/console_app.dart`(改) | 新增 4 个 import + `final ReplayApi replays = ReplayApi(transport);`；`TeamSummaryPage` 接 `onOpenReplays`；新增 `_openReplays`（push 列表页）与 `_openReplayPlayer`（push 回放器页）——**两端口全闭包读 `_account!.accessToken`**（续期换到的新令牌才生效），分片端口**只接 `cursor`** |
+| `test/console_widget_test.dart`(改) | **+17 例**：`复盘列表页（段 57）` **9** + `复盘回放器（段 57）` **7** + `指挥端复盘接线（段 57）` **1**；新增 import `replay_list_page.dart` / `replay_player_page.dart` / `shared/api/replay_models.dart`；新增助手 `replayOf` / `replayPageOf` / `pumpReplayList` / `sampleOf` / `pumpReplayPlayer` |
+
+### 57.2 用例与判据（新增 17 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 复盘列表页(9) | 已加载 | 账号文本 + 行摘要给出想定 / 模式 / 开始 / 时长 / 参演 / 命中 / 阵亡 |
+| | 可选字段缺失 | `battleMode` 与各计数显示破折号（**不臆造 0**） |
+| | 空列表 | 显示空态 |
+| | 查询 | 日期按 **UTC 零点**解释，`keyword` 与区间一并交端口、从第 1 页重拉 |
+| | 非法时间 | **本地拦下、不发请求**，显示行内校验错误（用 `2026/10/01` 这种不匹配 ISO 正则的串） |
+| | 分页 | 「下一页」按 `page+1` 拉取；末页禁「下一页」、首页禁「上一页」 |
+| | 行内「回放」 | 回调收到该行复盘 |
+| | 未注入入口 | 行内不渲染「回放」按钮 |
+| | 404 `REPLAY_NOT_FOUND` | 错误落到页面顶部（非行内） |
+| 复盘回放器(7) | 首片 | 首次**不传 `cursor`**，状态给出采样点数与游标 |
+| | 拖到某时刻 | 给出每个单元 `t <= 位置` 的最新读数 |
+| | `nextCursor == null` | 显示末尾提示、「加载下一片」禁用 |
+| | 空片且末尾 | 显示空读数空态与末尾提示 |
+| | 边拉边播 | 播到已装载末尾**自动续拉下一片**，拉到末尾**自动停表** |
+| | 拉取失败 | 即停表：显示错误且**不每拍重试** |
+| | 纯 `test` | `describeSamplePosition` 两组分列、不换算不翻转；`formatReplayOffset` 为 `mm:ss.S`；缺失字段破折号 |
+| 指挥端接线(1) | 「复盘」入口 | 进入列表页并按登录令牌拉第一页；行内「回放」进入回放器；序列 `login→summary→replays→replays/r-1/timeline`、`Bearer access-1` |
+
+### 57.3 口径要点
+
+- **`replayId` 就是演习编号**：停演时把本场态势落库为一条与演习同 ID 的复盘记录，UI 展示与跳转都用它，不另造编号。
+- **时间轴一律是相对开演的毫秒偏移**：`TrackSample.t` 与播放位置都是偏移量，页面**不加回 `startedAt`**——
+  跨时区回放不会错位；进度条 / 变速 / 定位只依赖整型 `t`。`formatReplayOffset` 输出 `mm:ss.S`，**不是时刻**。
+- **轨迹边拉边播、不一次拉全量**：一场演习采样点可达数十万条，页面按 `nextCursor` 连续拉取，`nextCursor == null` 即末尾；
+  播到**已装载末尾**时自动续拉下一片，到末尾自动停表。
+- **坐标两组不可混用、不换算不翻转**：室内 `xPct`/`yPct`（归一化 0~1）与室外 `lng`/`lat`（BD-09）在库里只有一套有效，
+  页面**如实分列展示**（`describeSamplePosition`）；万一两套都在（不应发生）按室内口径显示，**不做静默换算**。
+- **时间过滤是结束时间区间（含端点）**：本页把 `yyyy-MM-dd` 按 **UTC 零点**解释，避免本地时区把区间整体平移；
+  非法输入**在客户端拦下、不发请求**（服务端另有 `VALIDATION_FAILED` 兜底）；契约里 `from`/`to` 是**结束时间**，不是开始时间。
+- **只拼非空参数**：留空即不传该键、由服务端走默认值（`page` 从 1 起、`size` 1..200），**不臆造缺省**；分页以服务端回传的 `meta.page` 为准。
+- **回放器不画底图**：本段形态是**数据驱动回放器**（数值 / 读数流），按用户裁定；地图叠加留待后续段。
+- **分片端口只接 `cursor`**：`limit` / `vestNums` / `stride` 由调用方在闭包里定死、不散进 UI（生产接线走服务端默认），本层**不臆造默认值**。
+- **概览不重复拉**：列表页已从 `Replay` 行拿到全部字段并整对象传给回放器，不再单独 `GET /replays/{replayId}`。
+- **入口可选注入**：`onOpenReplays` 为 `null` 时队伍汇总页**不渲染**「复盘」按钮（延续段 49~55 同口径）。
+
+### 57.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**377 例** = 段 56 的 360 例 + **本段 17**）、
+  `flutter analyze` → `No issues found!`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 5 文件（2 新 3 改），破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、`device_app`；
+  **未新增依赖**（`pubspec.yaml` 未动）；共享层（`replay_models.dart` / `replay_api.dart`）**无需改动**（段 56 已就绪）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（`ScriptedTransport` 闭包桩 + 假数据），**未对着真实后端实例**跑真实
+复盘列表 / 轨迹分片（真实 cursor 分页、`REPLAY_NOT_FOUND`、变速播放与真机观感均未验证）；集成层（`ReplayListPage` /
+`ReplayPlayerPage` + `ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**统计面板 / 导出面板**（`statistics` + `exports`
+三端点）**尚未接线**，另开段。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
