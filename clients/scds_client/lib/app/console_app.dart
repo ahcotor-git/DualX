@@ -9,6 +9,8 @@ import '../features/console/floor_points_page.dart';
 import '../features/console/map_manager_page.dart';
 import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
+import '../features/console/replay_list_page.dart';
+import '../features/console/replay_player_page.dart';
 import '../features/console/roster_editor_page.dart';
 import '../features/console/team_summary_page.dart';
 import '../features/console/uwb_calibration_page.dart';
@@ -22,6 +24,8 @@ import '../shared/api/exercise_models.dart';
 import '../shared/api/health_api.dart';
 import '../shared/api/map_api.dart';
 import '../shared/api/map_models.dart';
+import '../shared/api/replay_api.dart';
+import '../shared/api/replay_models.dart';
 import '../shared/api/situation_api.dart';
 import '../shared/auth/refreshing_api_transport.dart';
 import '../shared/auth/session_store.dart';
@@ -147,6 +151,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
               final CommandApi command = CommandApi(transport);
               final ExerciseApi exercises = ExerciseApi(transport);
               final MapApi maps = MapApi(transport);
+              final ReplayApi replays = ReplayApi(transport);
 
               navigator.push(
                 MaterialPageRoute<void>(
@@ -196,6 +201,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                             onOpenMaps: () => _openMaps(
                               navigator: navigator,
                               maps: maps,
+                            ),
+                            onOpenReplays: () => _openReplays(
+                              navigator: navigator,
+                              replays: replays,
                             ),
                           ),
                         ),
@@ -598,6 +607,80 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             mapId: map.mapId,
             floorNum: floorNum,
             request: request,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 57：打开「复盘」页（replay 域只读面——复盘列表 / 概览）。
+  ///
+  /// `list` 是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换到的新令牌才生效）；令牌到期由装饰器自动续期并重试一次。
+  /// 行内「回放」→ [_openReplayPlayer]。
+  ///
+  /// 注：`replayId` 就是演习编号（停演时把本场态势落库为一条同 ID 的复盘记录）。
+  void _openReplays({
+    required NavigatorState navigator,
+    required ReplayApi replays,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => ReplayListPage(
+          session: session,
+          list: ({
+            String? keyword,
+            DateTime? from,
+            DateTime? to,
+            int? page,
+            int? size,
+          }) =>
+              replays.listReplays(
+            token: _account!.accessToken,
+            keyword: keyword,
+            from: from,
+            to: to,
+            page: page,
+            size: size,
+          ),
+          onOpenReplay: (Replay replay) => _openReplayPlayer(
+            navigator: navigator,
+            replays: replays,
+            replay: replay,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 57：打开复盘回放器（`GET /replays/{replayId}/timeline`，按游标边拉边播）。
+  ///
+  /// 分片端口**只接 `cursor`**——`limit` / `vestNums` / `stride` 走服务端默认
+  /// （本层不臆造默认值）；时间轴是**相对开演的毫秒偏移**，页面不加回 `startedAt`。
+  void _openReplayPlayer({
+    required NavigatorState navigator,
+    required ReplayApi replays,
+    required Replay replay,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => ReplayPlayerPage(
+          session: session,
+          replay: replay,
+          loadTimeline: ({String? cursor}) => replays.getReplayTimeline(
+            token: _account!.accessToken,
+            replayId: replay.replayId,
+            cursor: cursor,
           ),
         ),
       ),

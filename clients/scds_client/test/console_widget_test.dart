@@ -14,6 +14,8 @@ import 'package:scds_client/features/console/floor_points_page.dart';
 import 'package:scds_client/features/console/map_manager_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
+import 'package:scds_client/features/console/replay_list_page.dart';
+import 'package:scds_client/features/console/replay_player_page.dart';
 import 'package:scds_client/features/console/roster_editor_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
 import 'package:scds_client/features/console/uwb_calibration_page.dart';
@@ -25,6 +27,7 @@ import 'package:scds_client/shared/api/command_models.dart';
 import 'package:scds_client/shared/api/exercise_models.dart';
 import 'package:scds_client/shared/api/health_api.dart';
 import 'package:scds_client/shared/api/map_models.dart';
+import 'package:scds_client/shared/api/replay_models.dart';
 import 'package:scds_client/shared/api/situation_models.dart';
 import 'package:scds_client/shared/auth/session_store.dart';
 import 'package:scds_client/shared/config/connection_config.dart';
@@ -634,6 +637,107 @@ void main() {
           loadPoints: loadPoints ?? (int floorNum) async => fail('未预期的读取楼层点位'),
           savePoints: savePoints ??
               (int floorNum, FloorPointsRequest request) async => fail('未预期的保存楼层点位'),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 57：造一个契约形状的复盘概览（必填仅 `replayId` / `planName` / `startedAt`）。
+  ///
+  /// 其余字段契约未置 `required`，默认留空——用来验证「缺失显示破折号，不臆造 0」。
+  Replay replayOf(
+    String replayId, {
+    String planName = '想定A',
+    DateTime? startedAt,
+    BattleMode? battleMode,
+    int? durationSeconds,
+    int? participantCount,
+    int? hitCount,
+    int? deadCount,
+  }) =>
+      Replay(
+        replayId: replayId,
+        planName: planName,
+        startedAt: startedAt ?? DateTime.utc(2026, 10, 1, 8),
+        battleMode: battleMode,
+        durationSeconds: durationSeconds,
+        participantCount: participantCount,
+        hitCount: hitCount,
+        deadCount: deadCount,
+      );
+
+  ReplayPage replayPageOf(List<Replay> items, {int page = 1, int size = 20, int? total}) =>
+      ReplayPage(
+        items: items,
+        meta: PageMeta(page: page, size: size, total: total ?? items.length),
+      );
+
+  /// 段 57：复盘列表页直接挂树——`list` 是闭包桩，**不发真实请求**。
+  ///
+  /// 视口放大到一屏容纳过滤行与分页行，免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpReplayList(
+    WidgetTester tester, {
+    ReplayLister? list,
+    ReplayOpener? onOpenReplay,
+  }) async {
+    tester.view.physicalSize = const Size(1400, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReplayListPage(
+          session: accountSession(),
+          list: list ??
+              ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async =>
+                  replayPageOf(<Replay>[]),
+          onOpenReplay: onOpenReplay,
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 57：造一个契约形状的轨迹采样点（坐标两组各自可空，库里有哪套就写哪套）。
+  TrackSample sampleOf({
+    int t = 0,
+    int vestNum = 1,
+    double? xPct,
+    double? yPct,
+    double? lng,
+    double? lat,
+    int? hp,
+    VestStatus? status,
+  }) =>
+      TrackSample(
+        t: t,
+        vestNum: vestNum,
+        xPct: xPct,
+        yPct: yPct,
+        lng: lng,
+        lat: lat,
+        hp: hp,
+        status: status,
+      );
+
+  /// 段 57：复盘回放器直接挂树——`loadTimeline` 是闭包桩，**不发真实请求**。
+  Future<void> pumpReplayPlayer(
+    WidgetTester tester, {
+    Replay? replay,
+    ReplayTimelineLoader? loadTimeline,
+  }) async {
+    tester.view.physicalSize = const Size(1400, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReplayPlayerPage(
+          session: accountSession(),
+          replay: replay ?? replayOf('r-1'),
+          loadTimeline: loadTimeline ??
+              ({String? cursor}) async => const TimelineChunk(samples: <TrackSample>[]),
         ),
       ),
     );
@@ -3964,6 +4068,523 @@ void main() {
 
       expect(find.byKey(mapManagerFloorPointsKey('m-1')), findsNothing);
       expect(find.byKey(mapManagerEditKey('m-1')), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 57：复盘列表页——replay 域只读面（列表 / 概览）的指挥端接线。
+  group('复盘列表页（段 57）', () {
+    testWidgets('已加载：给出账号与行摘要（想定 / 模式 / 开始 / 时长 / 各计数）',
+        (WidgetTester tester) async {
+      final Replay replay = replayOf(
+        'r-1',
+        planName: '红方突袭',
+        startedAt: DateTime.utc(2026, 10, 1, 8),
+        battleMode: BattleMode.battle,
+        durationSeconds: 600,
+        participantCount: 12,
+        hitCount: 5,
+        deadCount: 3,
+      );
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async =>
+            replayPageOf(<Replay>[replay]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(kReplayListAccountKey)).data, 'admin（OPERATOR）');
+      expect(
+        tester.widget<Text>(find.byKey(replayListRowKey('r-1'))).data,
+        '红方突袭｜模式 BATTLE｜开始 2026-10-01T08:00:00.000Z｜时长 600s｜参演 12｜命中 5｜阵亡 3',
+      );
+      expect(tester.widget<Text>(find.byKey(kReplayListPageKey)).data, '第 1 页｜共 1 场（每页 20）');
+
+      await unmount(tester);
+    });
+
+    testWidgets('可选字段缺失：模式与各计数显示破折号，不臆造 0', (WidgetTester tester) async {
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async =>
+            replayPageOf(<Replay>[replayOf('r-2', planName: '夜间行军')]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(replayListRowKey('r-2'))).data,
+        '夜间行军｜模式 —｜开始 2026-10-01T08:00:00.000Z｜时长 —｜参演 —｜命中 —｜阵亡 —',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('空列表：显示空态', (WidgetTester tester) async {
+      await pumpReplayList(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kReplayListEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('查询：日期按 UTC 零点解释，关键字与区间一并交端口并重拉第 1 页',
+        (WidgetTester tester) async {
+      final List<String?> keywords = <String?>[];
+      final List<DateTime?> froms = <DateTime?>[];
+      final List<DateTime?> tos = <DateTime?>[];
+      final List<int?> pages = <int?>[];
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async {
+          keywords.add(keyword);
+          froms.add(from);
+          tos.add(to);
+          pages.add(page);
+          return replayPageOf(<Replay>[]);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kReplayListKeywordKey), ' 红方 ');
+      await tester.enterText(find.byKey(kReplayListFromKey), '2026-10-01');
+      await tester.enterText(find.byKey(kReplayListToKey), '2026-10-05');
+      await tester.tap(find.byKey(kReplayListSearchButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(keywords, <String?>[null, '红方']);
+      // 只给日期时按 **UTC 零点**解释——否则本地时区会把区间整体平移一天。
+      expect(froms, <DateTime?>[null, DateTime.utc(2026, 10, 1)]);
+      expect(tos, <DateTime?>[null, DateTime.utc(2026, 10, 5)]);
+      expect(pages, <int?>[1, 1]);
+
+      await unmount(tester);
+    });
+
+    testWidgets('非法时间：本地拦下、不发请求，显示行内校验错误', (WidgetTester tester) async {
+      int calls = 0;
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async {
+          calls++;
+          return replayPageOf(<Replay>[]);
+        },
+      );
+      await tester.pumpAndSettle();
+      expect(calls, 1);
+
+      await tester.enterText(find.byKey(kReplayListFromKey), '2026/10/01');
+      await tester.tap(find.byKey(kReplayListSearchButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(calls, 1);
+      expect(
+        tester.widget<Text>(find.byKey(kReplayListFormErrorKey)).data,
+        '时间需为 yyyy-MM-dd 或 ISO-8601（留空表示不限）',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('分页：下一页按 page+1 拉取，末页禁用「下一页」、首页禁用「上一页」',
+        (WidgetTester tester) async {
+      final List<int?> pages = <int?>[];
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async {
+          pages.add(page);
+          if (page == 2) {
+            return replayPageOf(<Replay>[replayOf('r-21')], page: 2, total: 25);
+          }
+          return replayPageOf(
+            <Replay>[for (int i = 1; i <= 20; i++) replayOf('r-$i')],
+            page: 1,
+            total: 25,
+          );
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(pages, <int?>[1]);
+      expect(tester.widget<TextButton>(find.byKey(kReplayListPrevButtonKey)).onPressed, isNull);
+      expect(tester.widget<TextButton>(find.byKey(kReplayListNextButtonKey)).onPressed, isNotNull);
+
+      await tester.tap(find.byKey(kReplayListNextButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(pages, <int?>[1, 2]);
+      expect(tester.widget<Text>(find.byKey(kReplayListPageKey)).data, '第 2 页｜共 25 场（每页 20）');
+      expect(tester.widget<TextButton>(find.byKey(kReplayListNextButtonKey)).onPressed, isNull);
+      expect(tester.widget<TextButton>(find.byKey(kReplayListPrevButtonKey)).onPressed, isNotNull);
+      expect(find.byKey(replayListRowKey('r-21')), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('行内「回放」：回调收到该行复盘', (WidgetTester tester) async {
+      final List<Replay> opened = <Replay>[];
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async =>
+            replayPageOf(<Replay>[replayOf('r-1')]),
+        onOpenReplay: (Replay replay) => opened.add(replay),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(replayListPlayKey('r-1')));
+      await tester.pumpAndSettle();
+
+      expect(opened.single.replayId, 'r-1');
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：行内不渲染「回放」按钮', (WidgetTester tester) async {
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async =>
+            replayPageOf(<Replay>[replayOf('r-1')]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(replayListPlayKey('r-1')), findsNothing);
+      expect(find.byKey(replayListRowKey('r-1')), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('复盘不存在（404 REPLAY_NOT_FOUND）：错误落到页面顶部', (WidgetTester tester) async {
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async =>
+            throw apiFailure(404, ApiErrorCode.replayNotFound),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kReplayListErrorKey)).data,
+        '复盘不存在（REPLAY_NOT_FOUND）',
+      );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 57：数据驱动回放器——轨迹分片按游标边拉边播，不画底图。
+  group('复盘回放器（段 57）', () {
+    testWidgets('首片：首次不传 cursor，状态给出采样点数与游标', (WidgetTester tester) async {
+      final List<String?> cursors = <String?>[];
+      await pumpReplayPlayer(
+        tester,
+        loadTimeline: ({String? cursor}) async {
+          cursors.add(cursor);
+          return TimelineChunk(
+            samples: <TrackSample>[
+              sampleOf(t: 0, vestNum: 1, xPct: 0.25, yPct: 0.75, hp: 100, status: VestStatus.live),
+              sampleOf(t: 1000, vestNum: 1, xPct: 0.3, yPct: 0.7),
+              sampleOf(t: 2000, vestNum: 2, xPct: 0.5, yPct: 0.5),
+            ],
+            nextCursor: 'c-2',
+          );
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(cursors, <String?>[null]);
+      expect(tester.widget<Text>(find.byKey(kReplayPlayerAccountKey)).data, 'admin（OPERATOR）');
+      expect(tester.widget<Text>(find.byKey(kReplayPlayerSummaryKey)).data, contains('想定A'));
+      expect(
+        tester.widget<Text>(find.byKey(kReplayPlayerStatusKey)).data,
+        '已装载 3 个采样点｜游标 c-2',
+      );
+      // 时间轴是**相对开演的毫秒偏移**，不是时刻。
+      expect(tester.widget<Text>(find.byKey(kReplayPlayerProgressKey)).data, '00:00.0 / 00:02.0');
+      // 位置 0：只有 vest 1 的第一条采样（t=0）满足 t <= 0。
+      expect(
+        tester.widget<Text>(find.byKey(replayPlayerUnitKey(1))).data,
+        '#1｜00:00.0｜室内 (0.250, 0.750)｜血量 100｜状态 LIVE',
+      );
+      expect(find.byKey(replayPlayerUnitKey(2)), findsNothing);
+      expect(find.byKey(kReplayPlayerEndKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('拖到某时刻：给出每个单元 t<=位置 的最新读数', (WidgetTester tester) async {
+      await pumpReplayPlayer(
+        tester,
+        loadTimeline: ({String? cursor}) async => TimelineChunk(
+          samples: <TrackSample>[
+            sampleOf(t: 0, vestNum: 2, xPct: 0.1, yPct: 0.1, hp: 100),
+            sampleOf(t: 0, vestNum: 1, xPct: 0.2, yPct: 0.2, hp: 100),
+            sampleOf(t: 5000, vestNum: 1, xPct: 0.9, yPct: 0.9, hp: 40, status: VestStatus.die),
+          ],
+          nextCursor: null,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final Slider slider = tester.widget<Slider>(find.byKey(kReplayPlayerSliderKey));
+      slider.onChanged!(5000);
+      await tester.pump();
+
+      expect(tester.widget<Text>(find.byKey(kReplayPlayerProgressKey)).data, '00:05.0 / 00:05.0');
+      expect(
+        tester.widget<Text>(find.byKey(replayPlayerUnitKey(1))).data,
+        '#1｜00:05.0｜室内 (0.900, 0.900)｜血量 40｜状态 DIE',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(replayPlayerUnitKey(2))).data,
+        '#2｜00:00.0｜室内 (0.100, 0.100)｜血量 100｜状态 —',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('nextCursor 为 null 即末尾：显示末尾提示、「加载下一片」禁用',
+        (WidgetTester tester) async {
+      int calls = 0;
+      await pumpReplayPlayer(
+        tester,
+        loadTimeline: ({String? cursor}) async {
+          calls++;
+          return TimelineChunk(
+            samples: <TrackSample>[sampleOf(t: 0, vestNum: 1, xPct: 0.1, yPct: 0.1)],
+            nextCursor: null,
+          );
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(calls, 1);
+      expect(find.byKey(kReplayPlayerEndKey), findsOneWidget);
+      expect(
+        tester.widget<TextButton>(find.byKey(kReplayPlayerLoadMoreButtonKey)).onPressed,
+        isNull,
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('空片且末尾：显示空读数空态与末尾提示', (WidgetTester tester) async {
+      await pumpReplayPlayer(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kReplayPlayerEmptyKey), findsOneWidget);
+      expect(find.byKey(kReplayPlayerEndKey), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(kReplayPlayerProgressKey)).data, '00:00.0 / 00:00.0');
+
+      await unmount(tester);
+    });
+
+    testWidgets('边拉边播：播到已装载末尾自动续拉下一片，拉到末尾自动停表',
+        (WidgetTester tester) async {
+      final List<String?> cursors = <String?>[];
+      await pumpReplayPlayer(
+        tester,
+        loadTimeline: ({String? cursor}) async {
+          cursors.add(cursor);
+          if (cursor == null) {
+            return TimelineChunk(
+              samples: <TrackSample>[
+                sampleOf(t: 0, vestNum: 1, xPct: 0.1, yPct: 0.1),
+                sampleOf(t: 100, vestNum: 1, xPct: 0.2, yPct: 0.2),
+              ],
+              nextCursor: 'c-2',
+            );
+          }
+          return TimelineChunk(
+            samples: <TrackSample>[sampleOf(t: 200, vestNum: 1, xPct: 0.3, yPct: 0.3)],
+            nextCursor: null,
+          );
+        },
+      );
+      await tester.pumpAndSettle();
+      expect(cursors, <String?>[null]);
+
+      await tester.tap(find.byKey(kReplayPlayerPlayButtonKey));
+      await tester.pumpAndSettle();
+
+      // 追到已装载末尾时就地续拉下一片（游标 c-2），拉到末尾（nextCursor null）才停。
+      expect(cursors, <String?>[null, 'c-2']);
+      expect(tester.widget<Text>(find.byKey(kReplayPlayerStatusKey)).data, '已装载 3 个采样点｜游标 —');
+      expect(find.byKey(kReplayPlayerEndKey), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(kReplayPlayerProgressKey)).data, '00:00.2 / 00:00.2');
+      expect(
+        tester
+            .widget<Text>(find.descendant(
+              of: find.byKey(kReplayPlayerPlayButtonKey),
+              matching: find.byType(Text),
+            ))
+            .data,
+        '播放',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('拉取失败即停表：显示错误且不每拍重试', (WidgetTester tester) async {
+      final List<String?> cursors = <String?>[];
+      await pumpReplayPlayer(
+        tester,
+        loadTimeline: ({String? cursor}) async {
+          cursors.add(cursor);
+          if (cursor == null) {
+            return TimelineChunk(
+              samples: <TrackSample>[
+                sampleOf(t: 0, vestNum: 1, xPct: 0.1, yPct: 0.1),
+                sampleOf(t: 100, vestNum: 1, xPct: 0.2, yPct: 0.2),
+              ],
+              nextCursor: 'c-2',
+            );
+          }
+          throw apiFailure(404, ApiErrorCode.replayNotFound);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kReplayPlayerPlayButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(cursors, <String?>[null, 'c-2']);
+      expect(
+        tester.widget<Text>(find.byKey(kReplayPlayerErrorKey)).data,
+        '复盘不存在（REPLAY_NOT_FOUND）',
+      );
+      expect(
+        tester
+            .widget<Text>(find.descendant(
+              of: find.byKey(kReplayPlayerPlayButtonKey),
+              matching: find.byType(Text),
+            ))
+            .data,
+        '播放',
+      );
+
+      // 停表后不再自动重试：再走几拍也不新增请求。
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      expect(cursors, <String?>[null, 'c-2']);
+
+      await unmount(tester);
+    });
+
+    test('坐标两组分列、不换算不翻转；偏移格式化为 mm:ss.S；缺失字段显示破折号', () {
+      expect(describeSamplePosition(sampleOf(xPct: 0.25, yPct: 0.75)), '室内 (0.250, 0.750)');
+      expect(
+        describeSamplePosition(sampleOf(lng: 116.397, lat: 39.908)),
+        '室外 (116.39700, 39.90800)',
+      );
+      expect(describeSamplePosition(sampleOf()), '无坐标');
+
+      expect(formatReplayOffset(0), '00:00.0');
+      expect(formatReplayOffset(90500), '01:30.5');
+      expect(formatReplayOffset(3661500), '61:01.5');
+
+      expect(
+        describeSampleReading(
+          sampleOf(t: 1500, vestNum: 7, xPct: 0.5, yPct: 0.5, hp: 88, status: VestStatus.live),
+        ),
+        '#7｜00:01.5｜室内 (0.500, 0.500)｜血量 88｜状态 LIVE',
+      );
+      expect(
+        describeSampleReading(sampleOf(t: 1500, vestNum: 7)),
+        '#7｜00:01.5｜无坐标｜血量 —｜状态 —',
+      );
+    });
+  });
+
+  /// 段 57：复盘接线——汇总页「复盘」入口进入，列表 + 回放器挂同一条已认证传输。
+  group('指挥端复盘接线（段 57）', () {
+    testWidgets('「复盘」入口：进入列表页并按登录令牌拉第一页，行内「回放」进入回放器',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/replays':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'replayId': 'r-1',
+                  'planName': '红方突袭',
+                  'startedAt': '2026-10-01T08:00:00Z',
+                  'battleMode': 'BATTLE',
+                  'durationSeconds': 600,
+                  'participantCount': 12,
+                  'hitCount': 5,
+                  'deadCount': 3,
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'GET $kApiPrefix/replays/r-1/timeline':
+            return jsonResponse(<String, dynamic>{
+              'samples': <Object>[
+                <String, dynamic>{
+                  't': 0,
+                  'vestNum': 1,
+                  'xPct': 0.25,
+                  'yPct': 0.75,
+                  'hp': 100,
+                  'status': 'LIVE',
+                },
+              ],
+              'nextCursor': null,
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryReplaysEntryKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReplayListPage), findsOneWidget);
+      final ScriptedCall listCall = transport.calls
+          .lastWhere((ScriptedCall call) => call.key == 'GET $kApiPrefix/replays');
+      expect(listCall.authorization, 'Bearer access-1');
+      expect(
+        tester.widget<Text>(find.byKey(replayListRowKey('r-1'))).data,
+        '红方突袭｜模式 BATTLE｜开始 2026-10-01T08:00:00.000Z｜时长 600s｜参演 12｜命中 5｜阵亡 3',
+      );
+
+      // 行内「回放」→ 回放器，按同一令牌拉该复盘第一片轨迹（cursor 不传）。
+      await tester.tap(find.byKey(replayListPlayKey('r-1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReplayPlayerPage), findsOneWidget);
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/replays',
+          'GET $kApiPrefix/replays/r-1/timeline',
+        ]),
+      );
+      final ScriptedCall timelineCall = transport.calls
+          .lastWhere((ScriptedCall call) => call.key == 'GET $kApiPrefix/replays/r-1/timeline');
+      expect(timelineCall.authorization, 'Bearer access-1');
+      expect(find.byKey(kReplayPlayerEndKey), findsOneWidget);
 
       await unmount(tester);
     });
