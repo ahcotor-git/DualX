@@ -1973,10 +1973,45 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 **未验项**：**未对着真实后端实例**跑真实楼层点位表读写（真实底图不存在 404、服务端几何校验、点位表与 `moveVest` 手动置位联动未验证）；
 集成层（`FloorPointsPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**map 域 UI 至此全部接线**。证据见 [testing](testing.md) **第 55 节**。
 
-**下一段（候选）**：**map 域 UI 已收口**，可转他域——收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，
-属独立决策点）；复盘与导出 **replay 域**（约 7 端点，可同样「共享层先行」）；**device 域**（约 15 端点 + `watchLinks` WS）；
-`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘
-（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；安装 Visual Studio C++ 工作负载（需另授权）
-以补齐 **Windows 原生构建验收**。
+**下一段（CLIENT-WINDOWS 续段·共享层先行·replay 域）落地**：承接段 55「**map 域 UI 已收口，可转他域**」的候选，用户当次裁定切入点
+「**replay 域（共享层先行）(Recommended)**」。本段只落 replay 域的**共享层**（**契约模型 + 7 端点 HTTP 客户端 + 契约测试**），
+**UI 接线另开段**（延续段 48→49/50/51 与段 52→53/54/55 的节奏）。范围＝ `docs/api/paths/replay.yaml` 的 6 个 path item、**7 个端点**
+（复盘列表 1 + 概览 1 + 轨迹分片 1 + 统计 1 + 导出受理 1 + 导出查询 1 + 导出下载 1）。落**一笔**（**恰 3 文件 / 3 新，未破「每原子任务 ≤3 文件」上限**）：
+- `lib/shared/api/replay_models.dart`（**新**）：`enum ExportFormat { xlsx('XLSX'), csv('CSV') }`、`enum AsyncTaskState { pending, running, succeeded, failed }`；
+  `Replay`（必填仅 `replayId`/`planName`/`startedAt`）、`ReplayPage`（复用 `exercise_models.dart` 的 `PageMeta`）、
+  `TrackSample`（`t`/`vestNum` 必填，`xPct`/`yPct`/`lng`/`lat`/`hp`/`status` 可空）、`TimelineChunk`、
+  `ReplayStatistics` + `TopShooter`/`HitPartCount`/`TimelineBucket`、`ExportRequest.toJson()` **恒发 `{format}`**、`AsyncTask`；
+  私有助手 `_enumOrNull` / `_dateTimeOrNull` / `_intMapOrNull` / `_listOrEmpty`；
+- `lib/shared/api/replay_api.dart`（**新**）：`ReplayApi` 持窄端口 `ApiTransport`——`listReplays`（`keyword`/`from`/`to`/`page`/`size`）、
+  `getReplay`、`getReplayTimeline`（`cursor`/`limit`/`vestNums`/`stride`）、`getReplayStatistics`（`timelineBuckets`）、
+  `exportReplay`（202）、`getExportTask`、`downloadExport`（保持 `ApiResponse`）；私有助手 `_query`（只拼非 null）+ `_instant`（`DateTime` → UTC ISO-8601）；
+- `test/shared/api/replay_api_test.dart`（**新**）：**22 例**——`listReplays` 4 + `getReplay`/`getReplayTimeline` 5 +
+  `getReplayStatistics` 3 + `异步导出` 7 + `契约解析守则` 3；含本地 `_Seen`/`respondJson`/`expectApiFailure`（与 `map_api_test.dart` 同口径的自足桩）。
+
+**口径要点**：**`replayId` 就是演习编号**——停演时把本场态势落库为一条与演习同 ID 的复盘记录，本域**无独立 replay 表**，路径里的
+`{replayId}` 解析不出 UUID 时按「复盘不存在」处理（404 `REPLAY_NOT_FOUND`），**不是 400**；**时间轴一律是相对偏移**——
+`TrackSample.t` 与 `TimelineBucket.t` 都是**相对开演的毫秒偏移**（不是绝对时刻），客户端插值 / 变速播放 / 进度条定位只依赖整型 `t`，
+跨时区不会错位，故本层**不得**加回 `startedAt`；**轨迹是 cursor 分片、不是 revision 增量**——复盘**只读、定长、可随机访问**，
+回放常要跳着看，单调增量模型不适合，`nextCursor == null` 即末尾、应**边拉边播**；**坐标平铺、两组不可混用**——室内 `xPct`/`yPct`
+（归一化百分比）与室外 `lng`/`lat`（BD-09）**库里哪套有效就只写哪套**，Y 轴映射已在**写入前**完成、客户端**不得自行换算或翻转**；
+**导出是异步且会合并**——`POST .../exports` **固定回 202**（新建 `PENDING` 或复用同一复盘同格式的活跃任务，对客户端都是「已受理，去轮询」），
+**不会出现 200 / 202 两种成功码**，409 落在**下载**侧；**产物两条取用路径**——`AsyncTask.downloadUrl` 是**短时效（默认 15 分钟）可重复**签名 URL、
+**根相对路径、不带 `Bearer`**，每次查询由服务端**重新签发**（不存库、不缓存跨会话），到期以 `expireAt` 为准、过期后**需重新发起导出**，
+`downloadExport` 是走 `Bearer` 的等价路径、按产物格式回二进制并带 `Content-Disposition: attachment`；**不重复造第二份**——
+`PageMeta` / `BattleMode`（`exercise_models.dart`）与 `TeamSummary` / `VestStatus` / `HitPart`（`situation_models.dart`）契约里本就是同一份定义，
+直接 import 复用；**`ExportFormat` 不与 `PlanTemplateFormat` 复用**——字面量虽同为 `XLSX`/`CSV`，但契约上是两个独立 schema。
+
+门禁：`flutter test` → `All tests passed!`（**360 例**，较段 55 的 338 例 **+22**）、`flutter analyze` → `No issues found! (ran in 2.4s)`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）；`api_problem.dart` 的 `REPLAY_NOT_FOUND` / `REPLAY_EXPORT_FAILED`
+**段前已就位**。**未验项**：**未对着真实后端实例**跑真实复盘列表 / 轨迹分片 / 统计 / 导出（真实 `REPLAY_NOT_FOUND`、导出任务合并语义、
+产物过期 409、OOXML 二进制回传均未验证）；集成层（`ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**replay 域 UI 尚未接线**，另开段。
+证据见 [testing](testing.md) **第 56 节**。
+
+**下一段（候选）**：**replay 域共享层已就位**，下一步是 **replay 域 UI 接线**（复盘列表页 / 回放器（cursor 边拉边播 + 变速 + 进度条）/ 统计面板 /
+导出面板（202 受理 + 轮询 + 下载）），**建议再「UI 接线另开段」并分两笔**（列表 + 概览 / 回放器与统计 / 导出），属独立决策点；
+他域候选同前：收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
+**device 域**（约 15 端点 + `watchLinks` WS）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
+平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；
+安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
 
 

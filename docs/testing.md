@@ -3658,3 +3658,86 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 均未验证）；集成层（`FloorPointsPage` + `MapApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
 **点位表与 `moveVest` 的联动**（`CommandService` 按 `posNum` 取坐标 → 404 `MAP_FLOOR_POINT_NOT_FOUND`）**未做端到端验证**。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 56. M6 CLIENT-WINDOWS 续段（共享层先行）：replay 域——复盘 / 轨迹 / 统计 / 异步导出
+
+承段 55「**map 域 UI 已收口**」，用户裁定切入点「**replay 域（共享层先行）**」；本段只落 replay 域的**共享层**
+（**契约模型 + 7 端点 HTTP 客户端 + 契约测试**），**UI 接线另开段**（延续段 48→49/50/51 与段 52→53/54/55 的节奏）。
+范围＝ `docs/api/paths/replay.yaml` 的 6 个 path item、**7 个端点**
+（复盘列表 1 + 概览 1 + 轨迹分片 1 + 统计 1 + 导出受理 1 + 导出查询 1 + 导出下载 1）。
+
+### 56.1 交付物（1 笔 = 3 文件，3 新）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/shared/api/replay_models.dart`(新) | `enum ExportFormat { xlsx('XLSX'), csv('CSV') }`；`enum AsyncTaskState { pending, running, succeeded, failed }`；`Replay`（必填仅 `replayId`/`planName`/`startedAt`）；`ReplayPage`（复用 `exercise_models.dart` 的 `PageMeta`）；`TrackSample`（`t`/`vestNum` 必填，`xPct`/`yPct`/`lng`/`lat`/`hp`/`status` 可空）；`TimelineChunk`；`ReplayStatistics` + `TopShooter`/`HitPartCount`/`TimelineBucket`；`ExportRequest.toJson()` **恒发 `{format}`**；`AsyncTask`（复用 `situation_models.dart` 的 `TeamSummary`/`VestStatus`/`HitPart`、`exercise_models.dart` 的 `BattleMode`）；私有助手 `_enumOrNull`/`_dateTimeOrNull`/`_intMapOrNull`/`_listOrEmpty` |
+| `lib/shared/api/replay_api.dart`(新) | `ReplayApi` 持窄端口 `ApiTransport`——`listReplays`（`keyword`/`from`/`to`/`page`/`size`）/`getReplay`/`getReplayTimeline`（`cursor`/`limit`/`vestNums`/`stride`）/`getReplayStatistics`（`timelineBuckets`）/`exportReplay`（202）/`getExportTask`/`downloadExport`（保持 `ApiResponse`）；私有助手 `_query`（只拼非 null）+ `_instant`（`DateTime` → UTC ISO-8601） |
+| `test/shared/api/replay_api_test.dart`(新) | **22 例**：`listReplays` 4 + `getReplay`/`getReplayTimeline` 5 + `getReplayStatistics` 3 + `异步导出` 7 + `契约解析守则` 3；含本地 `_Seen`/`respondJson`/`expectApiFailure`（与 `map_api_test.dart` 同口径的自足桩） |
+
+### 56.2 用例与判据（新增 22 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 复盘列表(4) | 带 `keyword`/`from`/`to`/`page`/`size` | 回 `items`+`meta`；`uri.queryParameters` 逐键相等，`from`/`to` 为 `2026-10-01T00:00:00.000Z` / `2026-10-31T23:59:00.000Z`（**转 UTC ISO-8601**）；`authorization == 'Bearer access-1'` |
+| | 不带参数 | `uri.query` 为空（走服务端默认分页）；`meta.size == 20` |
+| | 可空字段缺席 | `planId`/`mapId`/`battleMode`/`endedAt`/`durationSeconds`/`hitCount` 均 `null`（**不臆造缺省值**） |
+| | 未知 `battleMode` 字面量 | 抛 `FormatException`（不静默落默认分支） |
+| 概览/轨迹(5) | `getReplay` | `uri.path == '$kApiPrefix/replays/r-1'`；`battleMode == BattleMode.train` |
+| | `getReplay` 404 | `REPLAY_NOT_FOUND` → `ApiException`（`statusCode 404`） |
+| | `getReplayTimeline` 四参 | `uri.queryParameters == {cursor: 'c-1', limit: '2000', vestNums: '1,3,5', stride: '10'}`（**`vestNums` 逗号分隔**） |
+| | `getReplayTimeline` 无参 | `uri.query` 为空；`nextCursor` 为 `null` 即末尾 |
+| | 坐标平铺口径 | 室内点 `xPct`/`yPct` 有值而 `lng`/`lat` 为 `null`、`status == VestStatus.live`；室外点反之、`hp`/`status` 为 `null` |
+| 统计(3) | 四块全解析 | `teams[0].team == Team.red`、`topShooters[0].name == '张三'`、`hitPartDistribution[0].hitPart == HitPart.head`、`timeline[0].liveByTeam == {'RED': 12, 'BLUE': 12}`；`queryParameters == {timelineBuckets: '200'}` |
+| | 可选集合缺席 | 四个集合均**空列表**（非 `null`）；`uri.query` 为空 |
+| | 未知 `hitPart` 字面量 | 抛 `FormatException` |
+| 异步导出(7) | `exportReplay` | `POST` 路径 `/replays/r-1/exports`；`contentType.mimeType == 'application/json'`；提交 JSON **恰为** `{'format': 'XLSX'}`；回 `PENDING` 且 `downloadUrl` 为 `null` |
+| | `exportReplay` CSV | 提交 JSON `{'format': 'CSV'}`（契约字面量原样送出） |
+| | `exportReplay` 401 | `AUTH_TOKEN_EXPIRED` → `ApiException` |
+| | `getExportTask` | 路径 `/replays/r-1/exports/task-1`；`SUCCEEDED`、`progressPct 100`、`downloadUrl` 以 `/api/v1/files?path=` 起、`expireAt` 非空 |
+| | `getExportTask` 未知 `state` | 抛 `FormatException` |
+| | `downloadExport` | **原始二进制**逐字节相等；`contentType == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'`；路径带 `/download` |
+| | `downloadExport` 409 | `REPLAY_EXPORT_FAILED` → `ApiException`（未完成或产物已过期） |
+| 契约守则(3) | `Replay` 必填缺失（`replayId`） | 抛 `TypeError`（不臆造缺省值） |
+| | `TrackSample.xPct` 传整数 | 解析为 `double`（`0` → `0.0`、`1` → `1.0`） |
+| | `AsyncTask` 必填缺失（`taskId`） | 抛 `TypeError` |
+
+### 56.3 口径要点
+
+- **`replayId` 就是演习编号**：停演时把本场态势落库为一条与演习同 ID 的复盘记录，本域**无独立 replay 表**；
+  路径里的 `{replayId}` 解析不出 UUID 时按「复盘不存在」处理（404 `REPLAY_NOT_FOUND`），**不是 400**。
+- **时间轴一律是相对偏移**：`TrackSample.t` 与 `TimelineBucket.t` 都是**相对开演的毫秒偏移**，
+  **不是绝对时刻**——客户端插值 / 变速播放 / 进度条定位只依赖整型 `t`，跨时区不会错位，故本层**不得**加回 `startedAt`。
+- **轨迹是 cursor 分片、不是 revision 增量**：复盘**只读、定长、可随机访问**，回放常要跳着看，单调增量模型不适合；
+  `nextCursor == null` 即末尾，客户端应**边拉边播**（一场演习采样点可达数十万条）。
+- **坐标平铺、两组不可混用**：室内 `xPct`/`yPct`（归一化百分比）与室外 `lng`/`lat`（BD-09）**库里哪套有效就只写哪套**，
+  另一套本就是 `null`；Y 轴映射已在**写入前**完成，客户端**不得自行换算或翻转**。
+- **导出是异步且会合并**：`POST .../exports` **固定回 202**（要么新建 `PENDING`、要么复用同一复盘同格式的活跃任务），
+  对客户端都是「已受理，去轮询」——**不会出现 200 / 202 两种成功码**；409 落在**下载**侧。
+- **产物两条取用路径**：`AsyncTask.downloadUrl` 是**短时效（默认 15 分钟）可重复**签名 URL、**根相对路径、不带 `Bearer`**，
+  每次查询由服务端**重新签发**（不存库、不缓存跨会话），到期以 `expireAt` 为准、过期后**需重新发起导出**；
+  `downloadExport` 是走 `Bearer` 的等价路径，按产物格式回二进制并带 `Content-Disposition: attachment`。
+- **请求体口径**：`ExportRequest` 只有 `format` 一个必填键，`toJson()` **恒发 `{format}`**（与 `MapUpsertRequest` 同「整体替换」口径）。
+- **解析口径与全仓一致**：必填缺失 → `TypeError`、**未知枚举字面量 → `FormatException`**、无 `required` 的字段 → nullable、
+  可空的集合缺席 → **空列表**；**不臆造缺省值**。
+- **不重复造第二份**：`PageMeta`（`exercise_models.dart`）、`TeamSummary`/`VestStatus`/`HitPart`（`situation_models.dart`）、
+  `BattleMode`（`exercise_models.dart`）契约里本就是同一份定义，直接 import 复用。
+- **`ExportFormat` 不与 `PlanTemplateFormat` 复用**：字面量虽同为 `XLSX`/`CSV`，但契约上是两个独立 schema
+  （一个是想定导入模板、一个是复盘导出报表），故各自声明。
+
+### 56.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**360 例** = 段 1b 14 + 段 2b 24 + 段 3 34 + 段 4 23 + 段 5 23 +
+  段 6 15 + 段 A 15 + 段 B 15 + 段 C 15 + 段 D 前半 10 + 段 D 后半 7 + 段 45 8 + 段 46 12 + 段 47 10 + 段 48 19 + 段 49 9 +
+  段 50 10 + 段 51 13 + 段 52 27 + 段 53 13 + 段 54 11 + 段 55 11 + **本段 22**，较段 55 的 338 例 +22）；
+  `flutter analyze` → `No issues found! (ran in 2.4s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务恰 3 文件（3 新），未破「每原子任务 ≤3 文件」上限**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（`pubspec.yaml` 未动）；`api_problem.dart` 的 `REPLAY_NOT_FOUND` / `REPLAY_EXPORT_FAILED`
+  **段前已就位**，无需改动。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（本机 `HttpServer` 打桩 + 真实 HTTP 行为断言），
+**未对着真实后端实例**跑真实复盘列表 / 轨迹分片 / 统计 / 导出（真实 `REPLAY_NOT_FOUND`、导出任务合并语义、
+产物过期 409、OOXML 二进制回传均未验证）；集成层（`ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
+**replay 域 UI**（复盘列表 / 回放器 / 统计面板 / 导出面板）**尚未接线**，另开段。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。
