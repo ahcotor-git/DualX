@@ -27,6 +27,10 @@ Key vestLedgerBindKey(int vestNum) => Key('vestLedger.bind.$vestNum');
 Key vestLedgerRebindKey(int vestNum) => Key('vestLedger.rebind.$vestNum');
 Key vestLedgerUnbindKey(int vestNum) => Key('vestLedger.unbind.$vestNum');
 
+/// 行内单马甲链路状态入口（`GET /devices/vests/{vestNum}/link`，**只读查询**）。
+/// 未注入 `VestLedgerPage.link` 时**不渲染**。
+Key vestLedgerLinkKey(int vestNum) => Key('vestLedger.link.$vestNum');
+
 /// 登记 / 编辑马甲对话框的控件键。
 const Key kVestFormTitleKey = Key('vestLedger.form.title');
 const Key kVestFormNumFieldKey = Key('vestLedger.form.num');
@@ -49,6 +53,12 @@ const Key kVestBindingErrorKey = Key('vestLedger.binding.error');
 const Key kVestBindingSaveKey = Key('vestLedger.binding.save');
 const Key kVestBindingCancelKey = Key('vestLedger.binding.cancel');
 
+/// 单马甲链路状态对话框的控件键（只读展示，同时只会有一个在屏）。
+const Key kVestLinkDialogKey = Key('vestLedger.link.dialog');
+const Key kVestLinkTitleKey = Key('vestLedger.link.title');
+const Key kVestLinkBodyKey = Key('vestLedger.link.body');
+const Key kVestLinkCloseKey = Key('vestLedger.link.close');
+
 /// 马甲台账列表端口（`GET /devices/vests`）。[keyword] 为空即不传该键（走服务端默认）。
 typedef VestLister = Future<VestDevicePage> Function({String? keyword});
 
@@ -68,12 +78,18 @@ typedef VestBindingWriter = Future<VestDevice> Function(int vestNum, VestBinding
 /// 解绑端口（`DELETE /devices/vests/{vestNum}/binding`，**幂等**）。
 typedef VestUnbinder = Future<VestDevice> Function(int vestNum);
 
+/// 单马甲链路状态端口（`GET /devices/vests/{vestNum}/link`，**只读**）。
+///
+/// 在线判定（距最后一次心跳 `<= 5000ms`）由**服务端**给出，客户端不重算。
+typedef VestLinkReader = Future<VestLink> Function(int vestNum);
+
 /// 马甲台账页（M6 CLIENT-WINDOWS 段 61）——device 域马甲台账与绑定闭环的指挥端接线。
 ///
-/// 覆盖台账的读 / 写（[list] / [create] / [update] / [remove]）与绑定闭环
-/// （[bind] / [rebind] / [unbind]）。范围＝ `docs/api/paths/device.yaml` 17 端点中的
-/// **前 8 个（台账 5 + 绑定 3）**；每马甲链路状态、UWB 基站、链路状态与开关
-/// （含 `watchLinks` WS 状态层）**另开段**。
+/// 覆盖台账的读 / 写（[list] / [create] / [update] / [remove]）、绑定闭环
+/// （[bind] / [rebind] / [unbind]）与单马甲链路状态只读查询（[link]）。
+/// 范围＝ `docs/api/paths/device.yaml` 17 端点中的**前 8 个（台账 5 + 绑定 3）**
+/// ＋ 第 9 个（单马甲链路 1）；UWB 基站、链路状态与开关（含 `watchLinks` WS 状态层）
+/// **另开段**。
 ///
 /// 口径：
 /// - **修改是整体替换**：契约 `VestDeviceUpsertRequest.toJson` 恒输出
@@ -97,6 +113,7 @@ class VestLedgerPage extends StatefulWidget {
     this.bind,
     this.rebind,
     this.unbind,
+    this.link,
   });
 
   /// 已登录的账号会话（提供身份快照）。
@@ -115,6 +132,9 @@ class VestLedgerPage extends StatefulWidget {
 
   /// 解绑端口（`DELETE .../binding`）；为 `null` 时不渲染已绑定行的「解绑」。
   final VestUnbinder? unbind;
+
+  /// 单马甲链路状态端口（`GET .../link`）；为 `null` 时不渲染行内「链路」。
+  final VestLinkReader? link;
 
   @override
   State<VestLedgerPage> createState() => _VestLedgerPageState();
@@ -287,6 +307,30 @@ class _VestLedgerPageState extends State<VestLedgerPage> {
     });
   }
 
+  /// 单马甲链路状态：拉到后弹只读对话框。
+  ///
+  /// 拉取走 [_guard]（单飞 + 失败落 [_error]）；失败时无结果，不弹框。
+  /// 在线判定由服务端按心跳窗口给出，页面**只展示不重算**。
+  Future<void> _openLink(VestDevice vest) async {
+    final VestLinkReader? reader = widget.link;
+    if (reader == null) {
+      return;
+    }
+    VestLink? link;
+    await _guard(() async {
+      link = await reader(vest.vestNum);
+    });
+    if (link == null || !mounted) {
+      return;
+    }
+    final VestLink resolved = link!;
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) =>
+          _VestLinkDialog(vestNum: vest.vestNum, link: resolved),
+    );
+  }
+
   /// 写成功后按当前关键字重新拉列表并以 SnackBar 回执。
   Future<void> _reloadAfterWrite(String notice) async {
     final VestDevicePage page = await widget.list(keyword: _keywordOrNull());
@@ -368,6 +412,12 @@ class _VestLedgerPageState extends State<VestLedgerPage> {
               key: vestLedgerUnbindKey(vest.vestNum),
               onPressed: _busy ? null : () => _confirmUnbind(vest),
               child: const Text('解绑'),
+            ),
+          if (widget.link != null)
+            TextButton(
+              key: vestLedgerLinkKey(vest.vestNum),
+              onPressed: _busy ? null : () => _openLink(vest),
+              child: const Text('链路'),
             ),
           TextButton(
             key: vestLedgerEditKey(vest.vestNum),
@@ -692,6 +742,33 @@ class _VestBindingDialogState extends State<_VestBindingDialog> {
   }
 }
 
+/// 单马甲链路状态对话框——**只读**展示 `GET /devices/vests/{vestNum}/link` 的返回。
+///
+/// 该内联对象契约未给它起名、无 `required`，各字段按契约 nullable——
+/// 缺失时如实显示破折号，不臆造默认值。在线判定由服务端给出，此处不重算。
+class _VestLinkDialog extends StatelessWidget {
+  const _VestLinkDialog({required this.vestNum, required this.link});
+
+  final int vestNum;
+  final VestLink link;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      key: kVestLinkDialogKey,
+      title: Text('马甲 $vestNum 链路状态', key: kVestLinkTitleKey),
+      content: Text(_describeLink(link), key: kVestLinkBodyKey),
+      actions: <Widget>[
+        FilledButton(
+          key: kVestLinkCloseKey,
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+}
+
 String _describeAccount(AccountSession session) {
   final String name = session.user?.displayName ?? session.user?.username ?? '（未知账号）';
   final List<String> roles = session.user?.roles ?? const <String>[];
@@ -711,3 +788,11 @@ String _tri(bool? value, String whenTrue, String whenFalse) => switch (value) {
       false => whenFalse,
       null => '—',
     };
+
+/// 单马甲链路状态一行摘要；契约该对象无 `required`，缺失字段如实显示破折号。
+String _describeLink(VestLink link) => '编号 ${link.vestNum ?? '—'}'
+    '｜在线 ${_tri(link.online, '在线', '离线')}'
+    '｜最后心跳 ${link.lastHeartbeatAt?.toIso8601String() ?? '—'}'
+    '｜末帧 ${link.lastFrameType ?? '—'}'
+    '｜收帧 ${link.framesTotal ?? '—'}'
+    '｜丢弃 ${link.droppedTotal ?? '—'}';

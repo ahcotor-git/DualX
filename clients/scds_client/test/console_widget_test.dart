@@ -922,7 +922,8 @@ void main() {
 
   /// 段 61：马甲台账页直接挂树——四个必填端口都是闭包桩，**不发真实请求**。
   ///
-  /// 绑定三端口（[bind] / [rebind] / [unbind]）可选：不注入即不渲染对应行内按钮。
+  /// 绑定三端口与单马甲链路端口（[bind] / [rebind] / [unbind] / [link]）可选：
+  /// 不注入即不渲染对应行内按钮。
   /// 视口放大到一屏容纳行内动作按钮，免得 `ListView` 懒构建漏掉控件。
   Future<void> pumpVests(
     WidgetTester tester, {
@@ -933,6 +934,7 @@ void main() {
     VestBindingWriter? bind,
     VestBindingWriter? rebind,
     VestUnbinder? unbind,
+    VestLinkReader? link,
   }) async {
     tester.view.physicalSize = const Size(1600, 2000);
     tester.view.devicePixelRatio = 1.0;
@@ -950,11 +952,30 @@ void main() {
           bind: bind,
           rebind: rebind,
           unbind: unbind,
+          link: link,
         ),
       ),
     );
     await tester.pump();
   }
+
+  /// 段 63：造一条契约形状的单马甲链路状态（该内联对象无 `required`，全部可空）。
+  VestLink vestLinkOf(
+    int vestNum, {
+    bool? online,
+    DateTime? lastHeartbeatAt,
+    String? lastFrameType,
+    int? framesTotal,
+    int? droppedTotal,
+  }) =>
+      VestLink(
+        vestNum: vestNum,
+        online: online,
+        lastHeartbeatAt: lastHeartbeatAt,
+        lastFrameType: lastFrameType,
+        framesTotal: framesTotal,
+        droppedTotal: droppedTotal,
+      );
 
   /// 段 62：造一条契约形状的链路状态（必填仅 `kind` / `state`）。
   LinkStatus linkStatusOf(
@@ -6237,6 +6258,168 @@ void main() {
       await pumpSummary(tester, () async => <TeamSummary>[]);
 
       expect(find.byKey(kTeamSummaryVestsEntryKey), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 63：马甲台账页——device 域第 9 端点（单马甲链路状态 `getVestLink`）的指挥端接线。
+  group('马甲台账页·单马甲链路（段 63）', () {
+    testWidgets('未注入链路端口：行内不渲染「链路」按钮', (WidgetTester tester) async {
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async => vestPageOf(<VestDevice>[vestOf(7)]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(vestLedgerLinkKey(7)), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('点击「链路」：按行编号拉取并弹只读对话框，展示契约字面量',
+        (WidgetTester tester) async {
+      final List<int> requested = <int>[];
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async => vestPageOf(<VestDevice>[vestOf(7)]),
+        link: (int vestNum) async {
+          requested.add(vestNum);
+          return vestLinkOf(
+            7,
+            online: true,
+            lastHeartbeatAt: DateTime.utc(2026, 11, 4, 1, 2, 3),
+            lastFrameType: 'ff03',
+            framesTotal: 120,
+            droppedTotal: 3,
+          );
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerLinkKey(7)));
+      await tester.pumpAndSettle();
+
+      expect(requested, <int>[7]);
+      expect(tester.widget<Text>(find.byKey(kVestLinkTitleKey)).data, '马甲 7 链路状态');
+      expect(
+        tester.widget<Text>(find.byKey(kVestLinkBodyKey)).data,
+        '编号 7｜在线 在线｜最后心跳 2026-11-04T01:02:03.000Z｜末帧 ff03｜收帧 120｜丢弃 3',
+      );
+
+      await tester.tap(find.byKey(kVestLinkCloseKey));
+      await tester.pumpAndSettle();
+      expect(find.byKey(kVestLinkDialogKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('链路字段缺失：如实显示破折号，不臆造默认值', (WidgetTester tester) async {
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async => vestPageOf(<VestDevice>[vestOf(9)]),
+        link: (int vestNum) async => vestLinkOf(9),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerLinkKey(9)));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kVestLinkBodyKey)).data,
+        '编号 9｜在线 —｜最后心跳 —｜末帧 —｜收帧 —｜丢弃 —',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('拉取失败：不弹对话框、不臆造数据，错误落页面顶部提示',
+        (WidgetTester tester) async {
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async => vestPageOf(<VestDevice>[vestOf(7)]),
+        link: (int vestNum) async =>
+            throw apiFailure(404, ApiErrorCode.deviceVestNotFound),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerLinkKey(7)));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kVestLinkDialogKey), findsNothing);
+      expect(
+        tester.widget<Text>(find.byKey(kVestLedgerErrorKey)).data,
+        contains(ApiErrorCode.deviceVestNotFound),
+      );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 63：指挥端装配接线——马甲台账行「链路」→ `GET /devices/vests/{n}/link`。
+  group('指挥端马甲台账链路接线（段 63）', () {
+    testWidgets('汇总页 → 马甲台账 → 行「链路」：按登录令牌拉取单马甲链路',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/devices/vests':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'vestNum': 7,
+                  'name': '张三',
+                  'bound': true,
+                  'enabled': true,
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'GET $kApiPrefix/devices/vests/7/link':
+            return jsonResponse(<String, dynamic>{
+              'vestNum': 7,
+              'online': true,
+              'lastFrameType': 'ff03',
+              'framesTotal': 5,
+              'droppedTotal': 0,
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryVestsEntryKey));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerLinkKey(7)));
+      await tester.pumpAndSettle();
+
+      final ScriptedCall linkCall = transport.calls.lastWhere(
+        (ScriptedCall call) => call.key == 'GET $kApiPrefix/devices/vests/7/link',
+      );
+      expect(linkCall.authorization, 'Bearer access-1');
+      expect(
+        tester.widget<Text>(find.byKey(kVestLinkBodyKey)).data,
+        '编号 7｜在线 在线｜最后心跳 —｜末帧 ff03｜收帧 5｜丢弃 0',
+      );
 
       await unmount(tester);
     });

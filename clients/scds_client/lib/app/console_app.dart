@@ -804,15 +804,16 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
     );
   }
 
-  /// 段 61：打开「马甲台账」页（device 域台账与绑定闭环）。
+  /// 段 61 / 段 63：打开「马甲台账」页（device 域台账与绑定闭环 + 单马甲链路状态）。
   ///
-  /// 七个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// 八个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
   /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
   /// 令牌到期时自动续期并重试一次。
   ///
   /// 注：`bind` / `rebind` 是**同一端点族**的两种动词（`POST` 首次绑定 / `PUT` 换绑），
   /// 页面按行上 `bound` 状态二选一；`unbind` 幂等。绑定 `secret` 明文只上行一次，
-  /// 页面不落日志、不本地存储。
+  /// 页面不落日志、不本地存储。`link` 为**只读**单马甲链路状态
+  /// （在线判定由服务端给出，客户端不重算）。
   void _openVests({
     required NavigatorState navigator,
     required DeviceApi devices,
@@ -854,6 +855,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             request: request,
           ),
           unbind: (int vestNum) => devices.unbindVest(
+            token: _account!.accessToken,
+            vestNum: vestNum,
+          ),
+          link: (int vestNum) => devices.getVestLink(
             token: _account!.accessToken,
             vestNum: vestNum,
           ),
