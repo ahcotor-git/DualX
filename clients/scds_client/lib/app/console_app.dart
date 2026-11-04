@@ -346,14 +346,21 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
     );
   }
 
-  /// 段 49：打开想定管理页（列表 / 新建 / 编辑 / 删除）。
+  /// 段 49：打开想定管理页（列表 / 新建 / 编辑 / 删除；段 59 增模板下载 / 导入）。
   ///
-  /// 四个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// 各端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
   /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
   /// 令牌到期时自动续期并重试一次。
   ///
   /// 注：修改想定是**整体替换**（`PlanUpsertRequest` 显式输出全部键），
   /// 页面以服务端回传快照预填表单，故这里只管透传请求体。
+  ///
+  /// 段 59 文件能力（与段 53 `pickImage` / 段 58 `saveBytes` 同口径，**刻意不引第三方依赖**）：
+  /// - `pickFile` 是**选文件端口**——生产端先接一个「未选择」占位（恒回 `null`，等同系统
+  ///   文件对话框里按取消），真实选文件待后续接入；数据链路（[PlanImporter]）已按契约接齐，
+  ///   测试用注入假件驱动全流程；
+  /// - `saveBytes`（落盘）**不注入**——模板下载须能落盘才有意义，故「下载模板」按钮不渲染，
+  ///   待落盘能力接入后再补。
   void _openPlans({
     required NavigatorState navigator,
     required ExerciseApi exercises,
@@ -384,6 +391,17 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             token: _account!.accessToken,
             planId: planId,
           ),
+          downloadTemplate: (PlanTemplateFormat format) => exercises.downloadPlanTemplate(
+            token: _account!.accessToken,
+            format: format,
+          ),
+          importPlan: (String filename, List<int> bytes, String? name) => exercises.importPlan(
+            token: _account!.accessToken,
+            filename: filename,
+            bytes: bytes,
+            name: name,
+          ),
+          pickFile: () async => null,
           onOpenRoster: (Plan plan) => _openRoster(
             navigator: navigator,
             exercises: exercises,

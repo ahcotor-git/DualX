@@ -348,9 +348,10 @@ void main() {
         meta: PageMeta(page: 1, size: 20, total: total ?? items.length),
       );
 
-  /// 段 49：想定管理页直接挂树——四个端口都是闭包桩，**不发真实请求**。
+  /// 段 49：想定管理页直接挂树——四个写端口都是闭包桩，**不发真实请求**。
   ///
   /// 未注入的写端口被触发即判失败（用例应只点注入过的动作）。
+  /// 段 59 追加四端口：模板下载 / 导入 / 选文件 / 落盘（皆为 `null` 时不渲染对应入口）。
   /// 视口放大到一屏容纳列表与悬浮新建按钮，免得 `ListView` 懒构建漏掉控件。
   Future<void> pumpPlans(
     WidgetTester tester, {
@@ -358,6 +359,10 @@ void main() {
     PlanCreator? create,
     PlanUpdater? update,
     PlanRemover? remove,
+    PlanTemplateDownloader? downloadTemplate,
+    PlanImporter? importPlan,
+    PlanFilePicker? pickFile,
+    PlanTemplateSaver? saveBytes,
   }) async {
     tester.view.physicalSize = const Size(1200, 2000);
     tester.view.devicePixelRatio = 1.0;
@@ -372,11 +377,22 @@ void main() {
           update: update ??
               (String planId, PlanUpsertRequest request) async => fail('未预期的修改想定'),
           remove: remove ?? (String planId) async => fail('未预期的删除想定'),
+          downloadTemplate: downloadTemplate,
+          importPlan: importPlan,
+          pickFile: pickFile,
+          saveBytes: saveBytes,
         ),
       ),
     );
     await tester.pump();
   }
+
+  /// 段 59：造一个待导入的模板文件（文件名 + 原始字节）。
+  PickedPlanFile pickedPlanFileOf({
+    String filename = 'template.xlsx',
+    List<int> bytes = const <int>[1, 2, 3],
+  }) =>
+      PickedPlanFile(filename: filename, bytes: bytes);
 
   /// 段 50：造一个契约形状的编成条目（必填仅 `vestNum` / `team`）。
   RosterEntry rosterEntryOf(
@@ -5384,6 +5400,265 @@ void main() {
       );
       // 生产端未注入落盘端口，故不给「下载」按钮（产物走 downloadUrl）。
       expect(find.byKey(kReplayExportDownloadButtonKey), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 59：想定导入 / 模板下载——exercise 域文件端点的指挥端接线。
+  ///
+  /// 「模板下载」（`GET /plans/template?format=`，二进制）+ 「导入想定」（`POST /plans/import`，
+  /// multipart）两对端口皆注入闭包桩，**不发真实请求**；文件能力（选文件 / 落盘）由注入假件驱动，
+  /// 缺一即不渲染对应入口（同段 53 `pickImage` / 段 58 `saveBytes` 口径）。
+  group('想定模板与导入（段 59）', () {
+    testWidgets('下载模板：按所选格式取二进制并交落盘端口（默认 XLSX）', (WidgetTester tester) async {
+      final List<PlanTemplateFormat> requested = <PlanTemplateFormat>[];
+      final List<String> savedNames = <String>[];
+      final List<List<int>> savedBytes = <List<int>>[];
+      final List<String?> savedTypes = <String?>[];
+      await pumpPlans(
+        tester,
+        downloadTemplate: (PlanTemplateFormat format) async {
+          requested.add(format);
+          return ApiResponse(
+            statusCode: 200,
+            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            body: const <int>[80, 75, 3, 4],
+          );
+        },
+        saveBytes: (String filename, List<int> bytes, String? contentType) async {
+          savedNames.add(filename);
+          savedBytes.add(bytes);
+          savedTypes.add(contentType);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kPlanManagerTemplateButtonKey));
+      await tester.pumpAndSettle();
+
+      // 默认格式 XLSX；字节与 contentType 原样交落盘端口，本页不解码。
+      expect(requested, <PlanTemplateFormat>[PlanTemplateFormat.xlsx]);
+      expect(savedNames, <String>['plan-template.xlsx']);
+      expect(savedBytes.single, <int>[80, 75, 3, 4]);
+      expect(
+        savedTypes.single,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      expect(find.text('已保存模板 plan-template.xlsx'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('模板格式切 CSV：请求携带 CSV 且落盘文件名 .csv', (WidgetTester tester) async {
+      final List<PlanTemplateFormat> requested = <PlanTemplateFormat>[];
+      final List<String> savedNames = <String>[];
+      await pumpPlans(
+        tester,
+        downloadTemplate: (PlanTemplateFormat format) async {
+          requested.add(format);
+          return ApiResponse(statusCode: 200, contentType: 'text/csv', body: const <int>[97]);
+        },
+        saveBytes: (String filename, List<int> bytes, String? contentType) async =>
+            savedNames.add(filename),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kPlanManagerTemplateFormatKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('CSV').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kPlanManagerTemplateButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(requested, <PlanTemplateFormat>[PlanTemplateFormat.csv]);
+      expect(savedNames.single, 'plan-template.csv');
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入落盘端口：不渲染「下载模板」（模板须落盘才有意义）', (WidgetTester tester) async {
+      await pumpPlans(
+        tester,
+        downloadTemplate: (PlanTemplateFormat format) async => ApiResponse(
+          statusCode: 200,
+          contentType: 'application/octet-stream',
+          body: const <int>[],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kPlanManagerTemplateButtonKey), findsNothing);
+      expect(find.byKey(kPlanManagerTemplateFormatKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('导入想定：选文件后调导入端口（文件名 / 字节），并重拉列表 + 回执',
+        (WidgetTester tester) async {
+      final List<String> filenames = <String>[];
+      final List<List<int>> contents = <List<int>>[];
+      final List<String?> names = <String?>[];
+      int listCalls = 0;
+      await pumpPlans(
+        tester,
+        list: ({String? keyword}) async {
+          listCalls++;
+          return planPageOf(<Plan>[planOf('p-1', name: '红方突袭')]);
+        },
+        importPlan: (String filename, List<int> bytes, String? name) async {
+          filenames.add(filename);
+          contents.add(bytes);
+          names.add(name);
+          return planOf('p-9', name: '夜间行军');
+        },
+        pickFile: () async => pickedPlanFileOf(filename: 'roster.xlsx', bytes: const <int>[9, 8]),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kPlanManagerImportButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(filenames, <String>['roster.xlsx']);
+      expect(contents.single, <int>[9, 8]);
+      // 不传 name 即由服务端取文件名（契约口径）。
+      expect(names.single, isNull);
+      // 首帧一次 + 导入后重拉一次。
+      expect(listCalls, 2);
+      expect(find.text('已导入想定「夜间行军」'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未选择文件：不发导入请求，提示「未选择文件」', (WidgetTester tester) async {
+      int importCalls = 0;
+      int listCalls = 0;
+      await pumpPlans(
+        tester,
+        list: ({String? keyword}) async {
+          listCalls++;
+          return planPageOf(<Plan>[]);
+        },
+        importPlan: (String filename, List<int> bytes, String? name) async {
+          importCalls++;
+          return planOf('p-9');
+        },
+        pickFile: () async => null,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kPlanManagerImportButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(importCalls, 0);
+      // 未选择即止步：不重拉列表（只有首帧那次）。
+      expect(listCalls, 1);
+      expect(find.text('未选择文件'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入选文件端口：不渲染「导入想定」', (WidgetTester tester) async {
+      await pumpPlans(
+        tester,
+        importPlan: (String filename, List<int> bytes, String? name) async => planOf('p-9'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kPlanManagerImportButtonKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('导入失败：模板整文件校验失败落页面顶部提示', (WidgetTester tester) async {
+      await pumpPlans(
+        tester,
+        importPlan: (String filename, List<int> bytes, String? name) async =>
+            throw apiFailure(400, ApiErrorCode.validationFailed),
+        pickFile: () async => pickedPlanFileOf(),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kPlanManagerImportButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kPlanManagerErrorKey)).data,
+        '参数校验失败（VALIDATION_FAILED）',
+      );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 59：想定导入接线——从队伍汇总页进入想定管理页，文件能力未接入时的生产行为。
+  group('指挥端想定导入接线（段 59）', () {
+    testWidgets('想定管理页：接入选文件占位后「导入想定」在位，点击即「未选择文件」且不发请求',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/plans':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'planId': 'p-1',
+                  'name': '红方突袭',
+                  'createdAt': '2026-10-29T00:00:00Z',
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryPlansEntryKey));
+      await tester.pumpAndSettle();
+
+      // 生产端接了个「未选择」占位：入口在位；未注入落盘端口：不给「下载模板」。
+      expect(find.byKey(kPlanManagerImportButtonKey), findsOneWidget);
+      expect(find.byKey(kPlanManagerTemplateButtonKey), findsNothing);
+
+      await tester.tap(find.byKey(kPlanManagerImportButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(find.text('未选择文件'), findsOneWidget);
+      // 未选择即止步：链路只到 login / summary / plans（汇总页另有周期轮询，故用有序包含），
+      // 且**未发生任何导入 POST**。
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/plans',
+        ]),
+      );
+      expect(
+        transport.calls
+            .where((ScriptedCall call) => call.key == 'POST $kApiPrefix/plans/import'),
+        isEmpty,
+      );
 
       await unmount(tester);
     });

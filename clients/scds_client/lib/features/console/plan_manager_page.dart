@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/api/api_client.dart';
 import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/exercise_models.dart';
@@ -22,6 +23,14 @@ Key planManagerDeleteKey(String planId) => Key('planManager.delete.$planId');
 
 /// 段 50 新增：进入该想定「编成编辑」页的行内入口（未注入回调时不渲染该按钮）。
 Key planManagerRosterKey(String planId) => Key('planManager.roster.$planId');
+
+/// 段 59 新增：想定导入 / 模板下载的控件键。
+///
+/// 「下载模板」需同时注入 [PlanTemplateDownloader] + [PlanTemplateSaver] 才渲染；
+/// 「导入想定」需同时注入 [PlanImporter] + [PlanFilePicker] 才渲染。
+const Key kPlanManagerTemplateFormatKey = Key('planManager.templateFormat');
+const Key kPlanManagerTemplateButtonKey = Key('planManager.templateButton');
+const Key kPlanManagerImportButtonKey = Key('planManager.importButton');
 
 /// 新建 / 编辑想定对话框的控件键。
 const Key kPlanFormTitleKey = Key('planManager.form.title');
@@ -49,10 +58,52 @@ typedef PlanUpdater = Future<Plan> Function(String planId, PlanUpsertRequest req
 /// 删除想定端口（`DELETE /plans/{planId}`）。
 typedef PlanRemover = Future<void> Function(String planId);
 
-/// 想定管理页（M6 CLIENT-WINDOWS 段 49；段 50 增「编成」入口）——exercise 域写端点的指挥端接线。
+/// 段 59 新增：下载想定导入模板端口（`GET /plans/template?format=`，按格式回**二进制**）。
+///
+/// 保原始 [ApiResponse]（字节 + [ApiResponse.contentType]），本页不解码，直接交 [PlanTemplateSaver]。
+typedef PlanTemplateDownloader = Future<ApiResponse> Function(PlanTemplateFormat format);
+
+/// 段 59 新增：从模板文件导入想定端口（`POST /plans/import`，`multipart/form-data`，201）。
+///
+/// [name] 为 `null` 时不带该字段（服务端取文件名）。
+typedef PlanImporter = Future<Plan> Function(String filename, List<int> bytes, String? name);
+
+/// 段 59 新增：选文件端口：返回 `null` 表示用户取消。
+///
+/// **本页不依赖任何平台选文件 API**，由调用方注入（生产接线见 `app/console_app.dart`，
+/// 测试注入假件）；为 `null` 时**不渲染「导入想定」按钮**。
+typedef PlanFilePicker = Future<PickedPlanFile?> Function();
+
+/// 段 59 新增：落盘模板端口：把下载到的原始字节按 [filename] 交给调用方保存。
+///
+/// Flutter 桌面 / Android **没有内置写文件对话框**，本页**刻意不引第三方依赖**——
+/// 为 `null` 时**不渲染「下载模板」按钮**（模板下载须能落盘才有意义）。
+typedef PlanTemplateSaver = Future<void> Function(
+  String filename,
+  List<int> bytes,
+  String? contentType,
+);
+
+/// 段 59 新增：待导入的想定模板文件——文件名 + 原始字节。
+///
+/// 服务端按**整文件内容**校验（表头 / 列 / 行），[filename] 只写进 `Content-Disposition`
+/// 的 `filename=`，服务端不信任它。
+class PickedPlanFile {
+  const PickedPlanFile({required this.filename, required this.bytes});
+
+  /// 模板文件名。
+  final String filename;
+
+  /// 文件原始字节。
+  final List<int> bytes;
+}
+
+/// 想定管理页（M6 CLIENT-WINDOWS 段 49；段 50 增「编成」入口；段 59 增模板下载 / 导入）——exercise 域写端点的指挥端接线。
 ///
 /// 覆盖「想定」子域的读/写：[PlanLister] / [PlanCreator] / [PlanUpdater] / [PlanRemover]，
-/// 以及行内「编成」入口（[onOpenRoster]，段 50 接 [RosterEditorPage]）。
+/// 以及行内「编成」入口（[onOpenRoster]，段 50 接 [RosterEditorPage]）、
+/// 「下载模板」（[downloadTemplate] + [saveBytes]，段 59）与「导入想定」
+/// （[importPlan] + [pickFile]，段 59）。
 /// 开演 / 停演属同一域，但在后续段接线，本页不承载。
 ///
 /// 口径：
@@ -70,6 +121,10 @@ class PlanManagerPage extends StatefulWidget {
     required this.update,
     required this.remove,
     this.onOpenRoster,
+    this.downloadTemplate,
+    this.importPlan,
+    this.pickFile,
+    this.saveBytes,
   });
 
   /// 已登录的账号会话（提供身份快照）。
@@ -83,6 +138,18 @@ class PlanManagerPage extends StatefulWidget {
   /// 段 50 新增：打开该想定的「编成编辑」页；为 `null` 时不渲染行内「编成」按钮。
   final void Function(Plan plan)? onOpenRoster;
 
+  /// 段 59 新增：下载模板端口；与 [saveBytes] **成对**——缺一即不渲染「下载模板」。
+  final PlanTemplateDownloader? downloadTemplate;
+
+  /// 段 59 新增：导入想定端口；与 [pickFile] **成对**——缺一即不渲染「导入想定」。
+  final PlanImporter? importPlan;
+
+  /// 段 59 新增：选文件端口；为 `null` 时不渲染「导入想定」按钮。
+  final PlanFilePicker? pickFile;
+
+  /// 段 59 新增：落盘端口；为 `null` 时不渲染「下载模板」按钮。
+  final PlanTemplateSaver? saveBytes;
+
   @override
   State<PlanManagerPage> createState() => _PlanManagerPageState();
 }
@@ -92,9 +159,17 @@ class _PlanManagerPageState extends State<PlanManagerPage> {
 
   List<Plan>? _plans;
 
+  /// 段 59：模板下载格式（默认 XLSX，与契约 `format` 默认一致）。
+  PlanTemplateFormat _format = PlanTemplateFormat.xlsx;
+
   /// 读写单飞：任一请求在途时禁用按钮，避免重复新建 / 重复删除。
   bool _busy = false;
   String? _error;
+
+  /// 段 59：两对端口都齐备才渲染对应入口（缺一即视为该能力不可用）。
+  bool get _showTemplate =>
+      widget.downloadTemplate != null && widget.saveBytes != null;
+  bool get _showImport => widget.importPlan != null && widget.pickFile != null;
 
   @override
   void initState() {
@@ -180,6 +255,55 @@ class _PlanManagerPageState extends State<PlanManagerPage> {
         return;
       }
       await _reloadAfterWrite('已删除想定「${plan.name}」');
+    });
+  }
+
+  /// 段 59：下载导入模板（按所选格式取二进制）并交落盘端口保存。
+  ///
+  /// 模板须能落盘才有意义，故 [_showTemplate] 已保证两个端口都在位；本方法再取一次是
+  /// 为了让类型收窄（`null` 检查即早退）。
+  Future<void> _downloadTemplate() async {
+    final PlanTemplateDownloader? download = widget.downloadTemplate;
+    final PlanTemplateSaver? saver = widget.saveBytes;
+    if (download == null || saver == null) {
+      return;
+    }
+    await _guard(() async {
+      final ApiResponse response = await download(_format);
+      final String filename = _templateFileName(_format);
+      await saver(filename, response.body, response.contentType);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已保存模板 $filename')));
+    });
+  }
+
+  /// 段 59：选文件 → 走 multipart 导入；未选择（`null`）即止步，**不发请求**。
+  ///
+  /// 文件名交服务端，`name` 不传即由服务端取文件名（契约口径）。
+  Future<void> _importPlan() async {
+    final PlanFilePicker? picker = widget.pickFile;
+    final PlanImporter? importer = widget.importPlan;
+    if (picker == null || importer == null) {
+      return;
+    }
+    final PickedPlanFile? file = await picker();
+    if (!mounted) {
+      return;
+    }
+    if (file == null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('未选择文件')));
+      return;
+    }
+    await _guard(() async {
+      final Plan plan = await importer(file.filename, file.bytes, null);
+      if (!mounted) {
+        return;
+      }
+      await _reloadAfterWrite('已导入想定「${plan.name}」');
     });
   }
 
@@ -322,6 +446,49 @@ class _PlanManagerPageState extends State<PlanManagerPage> {
                 _error!,
                 key: kPlanManagerErrorKey,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            if (_showTemplate || _showImport) ...<Widget>[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  if (_showTemplate)
+                    InputDecorator(
+                      decoration: const InputDecoration(labelText: '模板格式'),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<PlanTemplateFormat>(
+                          key: kPlanManagerTemplateFormatKey,
+                          value: _format,
+                          items: PlanTemplateFormat.values
+                              .map(
+                                (PlanTemplateFormat format) =>
+                                    DropdownMenuItem<PlanTemplateFormat>(
+                                  value: format,
+                                  child: Text(format.wire),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (PlanTemplateFormat? value) =>
+                              setState(() => _format = value ?? PlanTemplateFormat.xlsx),
+                        ),
+                      ),
+                    ),
+                  if (_showTemplate)
+                    FilledButton(
+                      key: kPlanManagerTemplateButtonKey,
+                      onPressed: _busy ? null : _downloadTemplate,
+                      child: const Text('下载模板'),
+                    ),
+                  if (_showImport)
+                    FilledButton(
+                      key: kPlanManagerImportButtonKey,
+                      onPressed: _busy ? null : _importPlan,
+                      child: const Text('导入想定'),
+                    ),
+                ],
               ),
             ],
             const Divider(height: 32),
@@ -483,3 +650,7 @@ String? _blankToNull(String text) {
   final String trimmed = text.trim();
   return trimmed.isEmpty ? null : trimmed;
 }
+
+/// 段 59：模板本地文件名——契约只回格式，文件名由客户端按格式约定拼，不臆造服务端字段。
+String _templateFileName(PlanTemplateFormat format) =>
+    'plan-template.${format == PlanTemplateFormat.xlsx ? 'xlsx' : 'csv'}';
