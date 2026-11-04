@@ -3992,3 +3992,57 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 服务端整文件校验失败的具体分码均未验证）；集成层（`PlanManagerPage` + `ExerciseApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
 **生产端 `pickFile` 为占位**（恒回 `null`）、**`saveBytes` 未注入**——真实文件选择器 / 落盘需另授权引依赖。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 60. M6 CLIENT-WINDOWS 续段（共享层先行）：device 域——马甲台账 / 绑定闭环 / 链路状态与开关 / UWB 基站
+
+承段 59「**exercise 域 UI 收口**（想定 / 编成 / 演习控制 / 模板与导入）」，按用户当次裁定切入点
+「**device 域（共享层先行）**」，本段只落 device 域**共享层**——**契约模型 + HTTP 客户端 + 契约测试**三件套，
+**UI 接线另开段**（同段 52 map 域 / 段 56 replay 域口径）。
+
+### 60.1 交付物（1 笔 = 3 文件）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/shared/api/device_models.dart`(新) | device 域契约模型。枚举 `LinkKind`（`serialVest('SERIAL_VEST')` / `uwbTcpServer('UWB_TCP_SERVER')` / `uwbSerial('UWB_SERIAL')`）、`LinkState`（`closed` / `open` / `opening` / `error`）、`UwbDataSource`（`tcpServer('TCP_SERVER')` / `serial('SERIAL')`），均带 `fromWire`（未知字面量抛 `FormatException`）；`LinkStatus`（`required kind`/`required state` + `target`/`baudRate`/`fdCount`/`lastFrameAt`/`framesTotal`/`droppedTotal`/`crcErrorTotal`/`errorMessage` 皆 nullable）；`VestDevice`（`required vestNum` + `name`/`team`(复用 `Team`)/`simNo`/`model`/`firmwareVersion`/`remark`/`bound`/`enabled`/`lastSeenAt`/`createdAt`/`updatedAt`）；`VestDevicePage`（`required items`/`required meta`(复用 `PageMeta`)）；`VestDeviceUpsertRequest`（`required vestNum` + `name`/`team`/`model`/`remark`，`toJson` **恒输出全部键**）；`VestBindingRequest`（`required secret`，`toJson` 只 `{'secret': …}`）；`VestLink` / `SerialPortInfo`（内联对象，全字段 nullable）；`Anchor`（`required anchorId` + `name`/`xPx`/`yPx`/`enabled`）；`AnchorUpsertRequest`（无 required，`toJson` **恒输出全部键**）；`LinkOpenSerialRequest`（`required portName` + `baudRate`/`flowControlRtsCts`，`toJson` 只带非 `null`）；`LinkOpenUwbRequest`（`required dataSource` + `host`/`port`/`serialPortName`，`toJson` 只带非 `null`）；私有助手 `_enumOrNull` / `_dateTimeOrNull` / `_listOrEmpty` |
+| `lib/shared/api/device_api.dart`(新) | `class DeviceApi { DeviceApi(this._client); final ApiTransport _client; }`，**17 个 REST 端点**：`listVests`(GET `/devices/vests`，查询 `keyword`/`team`/`status`/`bound`/`page`/`size`，只拼非 null) / `createVest`(POST，201) / `getVest`(GET `/devices/vests/{vestNum}`) / `updateVest`(PUT) / `deleteVest`(DELETE，204 无体) / `bindVest`(POST `/binding`，201) / `rebindVest`(PUT `/binding`) / `unbindVest`(DELETE `/binding`，幂等) / `getVestLink`(GET `/devices/vests/{vestNum}/link`) / `listAnchors`(GET `/devices/anchors`) / `upsertAnchor`(PUT `/devices/anchors/{anchorId}`) / `getLinks`(GET `/devices/links`) / `listSerialPorts`(GET `/devices/links/serial-ports`) / `openVestSerial`(POST `/devices/links/vest-serial`) / `closeVestSerial`(DELETE `/devices/links/vest-serial`) / `openUwbLink`(POST `/devices/links/uwb`) / `closeUwbLink`(DELETE `/devices/links/uwb`)；私有助手 `_query`（只拼非 null，全 null 回 `null`）/ `_listOf`（顶层数组解析） |
+| `test/shared/api/device_api_test.dart`(新) | **23 例**：`listVests（马甲台账列表）` 2 + `马甲台账写与详情` 5 + `绑定闭环` 4 + `getVestLink（单马甲链路状态）` 1 + `anchors（UWB 基站）` 2 + `links（链路状态与开关）` 9；本地桩 `_vestJson` / `_problemJson` / `_Seen` / `respondJson` / `expectApiFailure` |
+
+### 60.2 用例与判据（新增 23 例）
+
+| 分组 | 用例数 | 判据 |
+|---|---:|---|
+| 马甲台账列表 | 2 | `keyword`/`team`/`status`/`bound`/`page`/`size` 全给时查询串＝`{'keyword':'张','team':'RED','status':'LIVE','bound':'true','page':'1','size':'20'}`（`bool` → `'true'`）；全不传时 URL **无查询串**；分页体解出 `items` + `meta` |
+| 台账写与详情 | 5 | `createVest` 请求体＝`{'vestNum':101,'name':'张三','team':'RED','model':'V2','remark':null}`（**恒输出全部键**）；201 → `VestDevice`；`getVest` 路径 `/devices/vests/101`；`updateVest` 走 `PUT`；`deleteVest` 204 **无体**（不解析） |
+| 绑定闭环 | 4 | `bindVest` 走 `POST …/binding`、体＝`{'secret':'…'}`、201；`rebindVest` 走 `PUT …/binding`；`unbindVest` 走 `DELETE …/binding`（幂等，204/200 均通过） |
+| 单马甲链路状态 | 1 | `getVestLink` 路径 `/devices/vests/101/link`，解出 `vestNum`/`online`/`framesTotal`/`droppedTotal` |
+| UWB 基站 | 2 | `listAnchors` 解顶层数组为 `List<Anchor>`；`upsertAnchor` 走 `PUT /devices/anchors/3`、体**恒输出全部键**（`{'name':…,'xPx':…,'yPx':…,'enabled':…}`） |
+| 链路状态与开关 | 9 | `getLinks` 解顶层数组 `List<LinkStatus>`（含 `LinkKind`/`LinkState` 字面量）；`listSerialPorts` 解顶层数组；`openVestSerial` 只带 `{'portName':'COM7'}`、带 baud 时才加 `baudRate` 键；`closeVestSerial` 走 `DELETE`；`openUwbLink`（`TCP_SERVER`）只带非 null 键、`LinkState.opening` 解析通过；`closeUwbLink` 走 `DELETE`、解出 `LinkState.closed`；**未知枚举字面量** → `FormatException`；**非 2xx** → `ApiException`（`code` 取 `problem.code`） |
+
+### 60.3 口径要点
+
+- **只落共享层 3 件套**：契约模型 + HTTP 客户端 + 契约测试；device 域 **UI 接线另开段**（同段 52 / 段 56 口径）。
+- **`toJson` 两口径有据**：`VestDeviceUpsertRequest` / `AnchorUpsertRequest` **恒输出全部键**——服务端
+  `VestLedgerService.edited(...)` 对 `name`/`team`/`model`/`remark` **原样整体覆盖**、`AnchorUpsertRequest` 字段为原始类型（缺省落 `null`/`false`）；
+  `LinkOpenSerialRequest` / `LinkOpenUwbRequest` **只输出非 `null` 键**——服务端字段可空、由网关按契约默认值（baudRate 115200 / flowControlRtsCts false / host 0.0.0.0 / port 12001）兜底。
+- **解析口径不臆造缺省值**（延续段 52 起范式）：契约必填字段缺失 → `TypeError`；形状不符 → `FormatException`；
+  **未知枚举字面量 → `FormatException`**；无 `required` 的字段 → nullable。
+- **`Anchor.xPx` / `yPx` 为归一化 0..1**（契约 D15 已澄清，**非像素**），本层原样透传不换算。
+- **复用不造第二份**：`team` 复用 `situation_models.dart` 的 `Team`；分页 `meta` 复用 `exercise_models.dart` 的 `PageMeta`。
+- **WS `watchLinks` 刻意不入本层**：`GET /ws/v1/devices/links`（子协议 `scds.links.v1`）载荷与 `getLinks()` **同构**，
+  连接 / 重连归**状态层**（同 `shared/state/situation_socket.dart` 之于态势）；本层只给 REST 兜底轮询。
+- **`api_contract.dart` 无需改动**：`ApiErrorCode` 已**预置全部 `DEVICE_*` 与 `EXERCISE_ALREADY_RUNNING`**（段 60 未改契约）。
+
+### 60.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**428 例** = 段 59 的 405 例 + **本段 23**）、
+  `flutter analyze` → `No issues found!`（新三文件）；单文件 `flutter test test/shared/api/device_api_test.dart` → **23 例全绿**；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务恰 3 文件（3 新）**，**未破「每原子任务 ≤3 文件」上限**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、`device_app`；
+  **未新增依赖**（`pubspec.yaml` 未动）；`api_contract.dart` **无需改动**（错误码已预置）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（`HttpServer` 回环桩 + 假数据），**未对着真实后端实例**跑真实
+17 端点（真实分页语义、绑定密钥长度校验 400、`unbind` 幂等语义、`DEVICE_LINK_SERIAL_BUSY` 409、`retire` 演习中 409
+`EXERCISE_ALREADY_RUNNING`、UWB `openUwbLink` 真实链路建立均未验证）；集成层（`DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
+**`watchLinks` WS 未纳入本层**（连接 / 重连归状态层，另开段）；device 域 **UI 接线尚未开段**。
+本段为**实测前置的客户端共享层验收**，不是生产发布批准。

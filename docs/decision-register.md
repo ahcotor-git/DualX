@@ -2158,12 +2158,50 @@ multipart 导入 / 整文件校验 400（真实 OOXML / CSV 二进制回传、`C
 （`PlanManagerPage` + `ExerciseApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端 `pickFile` 为占位**、**`saveBytes` 未注入**。
 证据见 [testing](testing.md) **第 59 节**。
 
-**下一段（候选）**：**exercise 域 UI 已收口**（想定 / 编成 / 演习控制 / 模板与导入）、**replay 域 UI 已收口**（列表 + 回放器 + 统计 + 导出）、
-**map 域 UI 已收口**（底图 5 + 图片 2 + 楼层点位 2 + UWB 标定 5）；**主功能域 UI 基本接线完毕**，可转下列候选：
-**device 域**（约 15 端点 + `watchLinks` WS，规模最大）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
-平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
-接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
-安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
+**段 60 落地（2026-11-04，共享层先行：device 域——马甲台账 / 绑定闭环 / 链路状态与开关 / UWB 基站）**：承段 59「**exercise 域 UI 收口**（想定 /
+编成 / 演习控制 / 模板与导入）」，按用户当次裁定切入点「**device 域（共享层先行）**」，本段只落 device 域**共享层**——**契约模型 + HTTP 客户端 +
+契约测试**三件套，**UI 接线另开段**（同段 52 map 域 / 段 56 replay 域口径）。**落一笔（恰 3 文件 / 3 新，未破「每原子任务 ≤3 文件」上限）**：
+
+- `lib/shared/api/device_models.dart`（**新**）：device 域契约模型。枚举 `LinkKind`（`serialVest('SERIAL_VEST')` / `uwbTcpServer('UWB_TCP_SERVER')` /
+  `uwbSerial('UWB_SERIAL')`）、`LinkState`（`closed`/`open`/`opening`/`error`）、`UwbDataSource`（`tcpServer('TCP_SERVER')`/`serial('SERIAL')`），
+  均带 `fromWire`（未知字面量抛 `FormatException`）；`LinkStatus`（`required kind`/`required state` + 8 个 nullable 遥测字段）；`VestDevice`
+  （`required vestNum` + `name`/`team`(复用 `Team`)/`simNo`/`model`/`firmwareVersion`/`remark`/`bound`/`enabled`/`lastSeenAt`/`createdAt`/`updatedAt`）；
+  `VestDevicePage`（`required items`/`required meta`(复用 `PageMeta`)）；`VestDeviceUpsertRequest`（`required vestNum` + `name`/`team`/`model`/`remark`，
+  `toJson` **恒输出全部键**）；`VestBindingRequest`（`required secret`，`toJson` 只 `{'secret': …}`）；`VestLink` / `SerialPortInfo`（内联对象，全 nullable）；
+  `Anchor`（`required anchorId` + `name`/`xPx`/`yPx`/`enabled`）；`AnchorUpsertRequest`（无 required，`toJson` **恒输出全部键**）；
+  `LinkOpenSerialRequest`（`required portName` + `baudRate`/`flowControlRtsCts`，`toJson` 只带非 `null`）；`LinkOpenUwbRequest`（`required dataSource` +
+  `host`/`port`/`serialPortName`，`toJson` 只带非 `null`）；私有助手 `_enumOrNull` / `_dateTimeOrNull` / `_listOrEmpty`；
+- `lib/shared/api/device_api.dart`（**新**）：`class DeviceApi { DeviceApi(this._client); final ApiTransport _client; }`，**17 个 REST 端点**：
+  `listVests`(GET `/devices/vests`，查询 `keyword`/`team`/`status`/`bound`/`page`/`size`，只拼非 null) / `createVest`(POST，201) /
+  `getVest`(GET `/devices/vests/{vestNum}`) / `updateVest`(PUT) / `deleteVest`(DELETE，204 无体) / `bindVest`(POST `/binding`，201) /
+  `rebindVest`(PUT `/binding`) / `unbindVest`(DELETE `/binding`，幂等) / `getVestLink`(GET `/devices/vests/{vestNum}/link`) /
+  `listAnchors`(GET `/devices/anchors`) / `upsertAnchor`(PUT `/devices/anchors/{anchorId}`) / `getLinks`(GET `/devices/links`) /
+  `listSerialPorts`(GET `/devices/links/serial-ports`) / `openVestSerial`(POST `/devices/links/vest-serial`) / `closeVestSerial`(DELETE `/devices/links/vest-serial`) /
+  `openUwbLink`(POST `/devices/links/uwb`) / `closeUwbLink`(DELETE `/devices/links/uwb`)；私有助手 `_query`（只拼非 null，全 null 回 `null`）/ `_listOf`（顶层数组解析）；
+- `test/shared/api/device_api_test.dart`（**新**）：**23 例**（`listVests` 2 + 台账写与详情 5 + 绑定闭环 4 + `getVestLink` 1 + `anchors` 2 + `links` 9）；
+  本地桩 `_vestJson` / `_problemJson` / `_Seen` / `respondJson` / `expectApiFailure`。
+
+**口径要点**：**只落共享层 3 件套**（契约模型 + HTTP 客户端 + 契约测试），**UI 接线另开段**（同段 52 / 段 56）；
+**`toJson` 两口径有据**——`VestDeviceUpsertRequest` / `AnchorUpsertRequest` **恒输出全部键**（服务端 `VestLedgerService.edited(...)` 对
+`name`/`team`/`model`/`remark` **原样整体覆盖**、`AnchorUpsertRequest` 字段为原始类型缺省落 `null`/`false`），
+`LinkOpenSerialRequest` / `LinkOpenUwbRequest` **只输出非 `null` 键**（服务端字段可空、由网关按契约默认值 baudRate 115200 / flowControlRtsCts false /
+host 0.0.0.0 / port 12001 兜底）；**解析口径不臆造缺省值**（契约必填缺失 → `TypeError`；形状不符 / **未知枚举字面量** → `FormatException`；无 `required` → nullable）；
+**`Anchor.xPx`/`yPx` 为归一化 0..1**（契约 D15 已澄清，**非像素**），本层原样透传；**复用不造第二份**（`Team` / `PageMeta`）；
+**WS `watchLinks` 刻意不入本层**（`GET /ws/v1/devices/links`，子协议 `scds.links.v1`，载荷与 `getLinks()` **同构**，连接 / 重连归**状态层**，
+同 `shared/state/situation_socket.dart` 之于态势；本层只给 REST 兜底轮询）；**`api_contract.dart` 无需改动**（`ApiErrorCode` 已预置全部 `DEVICE_*` 与 `EXERCISE_ALREADY_RUNNING`）。
+
+门禁：`flutter test` → `All tests passed!`（**428 例**，较段 59 的 405 例 **+23**；单文件 `device_api_test.dart` **23 例全绿**）、
+`flutter analyze` → `No issues found!`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。**未验项**：**未对着真实后端实例**跑真实
+17 端点（真实分页语义、绑定密钥长度校验 400、`unbind` 幂等、`DEVICE_LINK_SERIAL_BUSY` 409、`retire` 演习中 409 `EXERCISE_ALREADY_RUNNING`、
+UWB `openUwbLink` 真实链路建立均未验证）；集成层（`DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**`watchLinks` WS 未纳入本层**；
+device 域 **UI 接线尚未开段**。证据见 [testing](testing.md) **第 60 节**。
+
+**下一段（候选）**：**device 域共享层已就位**（契约模型 + 17 端点客户端 + 23 例契约测试），下一步候选（按推荐序）：
+① **device 域 UI 接线**（马甲台账页 / 绑定闭环 / 链路状态与开关 / UWB 基站；含 `watchLinks` WS 状态层）；
+② `moveVest` 手动置位 UI（视联调需要再定）；③ T-PROD 部署；④ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
+⑤ 接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
+⑥ 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
+（背景：**exercise / replay / map 三域 UI 已收口**，device 域共享层已就位、UI 待接线。）
 
 **观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）。
 
