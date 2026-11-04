@@ -2092,10 +2092,43 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 （真实 `REPLAY_NOT_FOUND`、服务端采样段数校验、真机观感均未验证）；集成层（`ReplayStatisticsPage` + `ReplayApi` + 真实 `ApiClient`
 + 真实 HTTP）**未走通**；**导出面板**尚未接线，另开段。证据见 [testing](testing.md) **第 57.5~57.8 节**。
 
-**下一段（候选）**：**replay 域 UI 收口——导出面板**（`POST .../exports`（202 受理）+ `GET .../exports/{taskId}` 轮询 +
-`GET .../exports/{taskId}/download`，**产物落地口径已裁定**：「注入 `saveBytes` 端口、不引依赖」——与段 53 `pickImage` 同口径，
-生产端先接占位、测试注入假件驱动全流程），属独立决策点；
-他域候选同前：收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
+**段 58 落地（2026-11-04，UI 接线：replay 域——复盘导出面板）**：承段 57「**replay 域 UI 前半与后半已接线**」，
+用户裁定收口切入点「**导出面板**」，并在两处决策点选「入口＝**复盘列表页行内「导出」**」＋「进度＝**自动轮询（仅 `PENDING`/`RUNNING` 时 1s，终态停表）**」；
+本段落 replay 域 **`exports` 三端点**（`POST /replays/{replayId}/exports`（**固定 202**）/ `GET .../exports/{taskId}` 轮询 /
+`GET .../exports/{taskId}/download`），**replay 域 UI 至此全部接线**（列表 + 回放器 + 统计 + 导出）：
+
+- `lib/features/console/replay_export_page.dart`（**新**）：`ReplayExportPage`——复盘摘要 + 格式下拉（XLSX / CSV）+「开始导出」+
+  任务状态（`state` / 进度 / 文件名 / 过期）+「下载」+ 下载 URL 文本；控件键 `kReplayExportAccount|Summary|Format|StartButton|`
+  `State|Message|DownloadUrl|DownloadButton|ErrorKey`；四端口 typedef `ReplayExportStarter`（`format`）/ `ReplayExportPoller`（`taskId`）/
+  `ReplayExportDownloader`（`taskId`）/ `ReplayExportSaver`（`filename`/`bytes`/`contentType`）；
+  `const Duration kReplayExportPollInterval = Duration(seconds: 1)`；State `_format = ExportFormat.xlsx` / `_task` / `_taskFormat` /
+  `_busy` / `_error` / `_pollTimer`；`_start()`（POST 受理后 `_syncPollTimer`）、`_download()`（走 Bearer 取字节交 `saveBytes` + SnackBar）、
+  `_poll()`（失败即 `_stopPoll` + 文案）、`_syncPollTimer(task)`（仅 `PENDING`/`RUNNING` 起 1s 周期、终态即停表）、
+  `_fileName(task)`（缺失回退 `replay-<replayId>.<ext>`）、`_describeTask`（`state.wire` + 进度 / 文件 / 过期，缺项不写）、`_describeFailure`；
+- `lib/features/console/replay_list_page.dart`（**改**）：新增 `replayListExportKey(replayId)` + typedef `ReplayExportOpener`；
+  构造 / 字段 `onOpenExport`（`null` **不渲染**「导出」）；行内按钮顺序＝「回放」→「统计」→**「导出」**；
+- `lib/app/console_app.dart`（**改**）：新增 import `replay_export_page.dart` ＋ `ReplayListPage` 接 `onOpenExport` ＋
+  新增 `_openReplayExport`（push 导出面板）——三端口**全闭包读 `_account!.accessToken`**；**生产端未注入 `saveBytes`**（不引依赖，
+  产物走 `downloadUrl`，同段 53 `pickImage` 口径）；
+- `test/console_widget_test.dart`（**改**）：新增 import `replay_export_page.dart`；新增助手 `asyncTaskOf` / `pumpReplayExport`；
+  **+10 例**（`复盘导出页（段 58）` **8** + `指挥端复盘导出接线（段 58）` **1** + `复盘列表页（段 57）` 组**行内「导出」1**）。
+
+**口径要点**：**只落 3 端点**（概览 `GET /replays/{replayId}` 仍**不复拉**——列表行整对象传入）；**导出是异步的**——
+`POST` **固定 202** 仅表示受理，**只对 `PENDING`/`RUNNING` 起 1s 轮询、终态即停表**；**轮询失败即停表**（不每拍重试、**不占单飞闸**）；
+**产物两条取用路径**——`downloadUrl`（**短时效 15 分钟、根相对、不带 `Bearer`**、每次重新签发）仅作文本提示，`downloadExport`（走 `Bearer` 按格式回二进制）
+交 `saveBytes` 落盘；**产物落地注入端口、不引依赖**（`saveBytes == null` 即**不渲染**「下载」按钮，生产端未注入——同段 53 `pickImage` 口径）；
+**缺失即不写该段、不臆造**（文件名缺失回退 `replay-<replayId>.<ext>`）；**`ExportFormat` 不与 `PlanTemplateFormat` 复用**（POST 体恒为 `{'format': <wire>}`）；
+**入口可选注入**（延续段 49~57 同口径）。
+
+门禁：`flutter test` → `All tests passed!`（**397 例**，较段 57 后半的 387 例 **+10**）、`flutter analyze` → `No issues found!`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。**未验项**：**未对着真实后端实例**跑真实导出
+（真实 202 合并语义、轮询进度、产物过期 409、OOXML / CSV 二进制回传、签名 URL 有效期均未验证）；集成层（`ReplayExportPage` +
+`ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端 `saveBytes` 为占位**（真实文件选择器 / 落盘未接，需另授权引依赖）。
+证据见 [testing](testing.md) **第 58 节**。
+
+**下一段（候选）**：**replay 域 UI 已收口**（列表 + 回放器 + 统计 + 导出四页全接线），可转他域；
+首选收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
+他域候选同前：
 **device 域**（约 15 端点 + `watchLinks` WS）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；
 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。

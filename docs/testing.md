@@ -3866,3 +3866,67 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 `GET .../exports/{taskId}/download` 三端点）**尚未接线**，另开段——用户已裁定产物落地口径为
 「**注入 `saveBytes` 端口、不引依赖（Recommended）**」（与段 53 `pickImage` 同口径），留待该段落地。
 本笔为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 58. M6 CLIENT-WINDOWS 续段（UI 接线）：replay 域——复盘导出面板
+
+承段 57「**replay 域 UI 前半（复盘列表页 + 数据驱动回放器）与后半（统计面板）已接线**」，用户裁定收口切入点
+「**导出面板**」，并在两处决策点选「入口＝**复盘列表页行内「导出」**」＋「进度＝**自动轮询（仅 `PENDING`/`RUNNING` 时 1s，终态停表）**」；
+本段落 replay 域 **`exports` 三端点**——`POST /replays/{replayId}/exports`（**固定 202** 受理 / 可能合并活跃任务）＋
+`GET /replays/{replayId}/exports/{taskId}`（轮询 `AsyncTask`）＋ `GET /replays/{replayId}/exports/{taskId}/download`（走 `Bearer` 按格式回二进制）
+——**replay 域 UI 至此全部接线**（列表 + 回放器 + 统计 + 导出）；产物落地口径延续段 57 后半**预先裁定**：
+「**注入 `saveBytes` 端口、不引依赖**」（与段 53 `pickImage`、段 54 同口径）；复盘概览 `GET /replays/{replayId}` **始终不复拉**（列表行整对象传递）。
+
+### 58.1 交付物（1 笔 = 4 文件，1 新 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/replay_export_page.dart`(新) | `ReplayExportPage`——复盘摘要 + 格式下拉（XLSX / CSV）+「开始导出」+ 任务状态（`state` / 进度 / 文件名 / 过期）+「下载」（**仅注入 `saveBytes` 且 `SUCCEEDED` 时**渲染）+ 下载 URL 文本；控件键 `kReplayExportAccountKey`/`kReplayExportSummaryKey`/`kReplayExportFormatKey`/`kReplayExportStartButtonKey`/`kReplayExportStateKey`/`kReplayExportMessageKey`/`kReplayExportDownloadUrlKey`/`kReplayExportDownloadButtonKey`/`kReplayExportErrorKey`；四端口 typedef `ReplayExportStarter`（`format`）/ `ReplayExportPoller`（`taskId`）/ `ReplayExportDownloader`（`taskId`）/ `ReplayExportSaver`（`filename`/`bytes`/`contentType`）；`const Duration kReplayExportPollInterval = Duration(seconds: 1)`；State `_format = ExportFormat.xlsx` / `_task` / `_taskFormat` / `_busy` / `_error` / `_pollTimer`；`_start()`（POST 受理后 `_syncPollTimer`）、`_download()`（走 `Bearer` 取字节交 `saveBytes` + SnackBar）、`_poll()`（失败即 `_stopPoll` + 文案）、`_syncPollTimer(task)`（仅 `PENDING`/`RUNNING` 起 1s 周期、终态即停表）、`_fileName(task)`（缺失回退 `replay-<replayId>.<ext>`）、`_describeTask`（`state.wire` + `｜进度 N%` + `｜文件 X` + `｜过期 ISO`，缺项不写）、`_describeFailure` |
+| `lib/features/console/replay_list_page.dart`(改) | 新增 `replayListExportKey(replayId)` + 端口 `typedef ReplayExportOpener`；构造 / 字段 `onOpenExport`（`null` **不渲染**「导出」）；行内按钮顺序＝「回放」→「统计」→**「导出」** |
+| `lib/app/console_app.dart`(改) | 新增 import `replay_export_page.dart`；`ReplayListPage` 接 `onOpenExport`；新增 `_openReplayExport`（push 导出面板）——三端口**全闭包读 `_account!.accessToken`**（续期换到的新令牌才生效）；**生产端未注入 `saveBytes`**（不引依赖，产物走 `downloadUrl`，同段 53 `pickImage` 口径） |
+| `test/console_widget_test.dart`(改) | **+10 例**：`复盘导出页（段 58）` **8** + `指挥端复盘导出接线（段 58）` **1** + `复盘列表页（段 57）` 组**行内「导出」1**；新增 import `replay_export_page.dart`；新增助手 `asyncTaskOf` / `pumpReplayExport` |
+
+### 58.2 用例与判据（新增 10 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 复盘导出页(8) | 发起导出 | 默认 XLSX：POST 受理后按 1s 轮询 `PENDING→RUNNING`（进度 40%）`→SUCCEEDED`（进度 100%｜文件 `r-1.csv`），**终态后 5s 不再轮询**（`pollCalls == 2`） |
+| | 格式可选 CSV | 下拉改 CSV 后 `startExport` 收到 `ExportFormat.csv` |
+| | 下载 | 走 Bearer 端口取字节交 `saveBytes`，文件名取任务 `fileName` |
+| | 服务端缺 `fileName` | 回退 `replay-r-9.xlsx` 作为落盘名 |
+| | 未注入落盘端口 | 即使 `SUCCEEDED` **也不渲染**「下载」按钮，但仍给出 `downloadUrl` 文本 |
+| | 可选字段缺失 + FAILED | 契约可选字段缺失不臆造，`FAILED` 如实显示失败原因 |
+| | 轮询失败 | 即停表（`pollCalls == 1`）并显示错误文案，**不每拍重试** |
+| | 错误码映射 | 409 `REPLAY_EXPORT_FAILED` / 404 `REPLAY_NOT_FOUND` / 403 `AUTH_FORBIDDEN` / 503 `INSTANCE_NOT_READY` 四种文案（`for` 循环断言） |
+| 复盘列表页(+1) | 行内「导出」 | 回调收到该行复盘（未注入入口时不渲染「导出」按钮） |
+| 指挥端接线(1) | 行内「导出」 | 进入 `ReplayExportPage` 并发起导出（POST，`Bearer access-1`，`body == {'format': 'XLSX'}`）；序列 `login→summary→replays→POST replays/r-1/exports`，无下载按钮（未注入 `saveBytes`） |
+
+### 58.3 口径要点
+
+- **只落 3 端点**：`POST .../exports`（**固定 202**，新建或复用同一复盘同格式活跃任务）＋ `GET .../exports/{taskId}`（轮询）＋
+  `GET .../exports/{taskId}/download`；**概览 `GET /replays/{replayId}` 仍不复拉**（列表行整对象传入）。
+- **导出是异步的**：POST 只表示**已受理**，产物要看任务状态；本页**只对 `PENDING`/`RUNNING` 起 1s 轮询**，
+  **终态（`SUCCEEDED`/`FAILED`）即停表**，不无条件常轮——避免对已完成任务空转。
+- **轮询失败即停表**：任何一次轮询抛 `ApiException` 都 `_stopPoll` 并落错误文案，**不每拍重试**（防止错误风暴）；正常轮询**不占单飞闸**。
+- **产物两条取用路径**：`AsyncTask.downloadUrl`（**短时效 15 分钟、根相对、不带 `Bearer`**，每次查询重新签发）交浏览器 / 下载器直取；
+  `downloadExport`（**走 `Bearer`、按格式回二进制**）由本页交 `saveBytes` 落盘——本页**优先走端口**，`downloadUrl` 仅作文本提示。
+- **产物落地注入端口、不引依赖**：`saveBytes` 与 `downloadExport` 端口成对；`saveBytes == null` 时**不渲染**「下载」按钮，
+  产物仍可经 `downloadUrl` 直取；**生产端未注入**（同段 53 `pickImage` 口径，真实文件选择器 / 落盘需另授权引依赖）。
+- **缺失即破折号 / 不臆造**：`progressPct`/`fileName`/`downloadUrl`/`expireAt` 皆非必填，缺项**不写该段**；
+  文件名缺失时**回退** `replay-<replayId>.<ext>`，不臆造服务端值。
+- **`ExportFormat` 不与 `PlanTemplateFormat` 复用**（同名不同 schema）：格式下拉用 `DropdownButton<ExportFormat>`，
+  默认 `xlsx`，POST 体恒为 `{'format': <wire>}`。
+- **入口可选注入**：`onOpenExport` 为 `null` 时复盘列表行**不渲染**「导出」按钮（延续段 49~57 同口径）。
+
+### 58.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**397 例** = 段 57 后半的 387 例 + **本段 10**）、
+  `flutter analyze` → `No issues found!`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件（1 新 3 改），破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、`device_app`；
+  **未新增依赖**（`pubspec.yaml` 未动）；共享层（`replay_models.dart` / `replay_api.dart`）**无需改动**（段 56 已就绪）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（`ScriptedTransport` 闭包桩 + 假数据），**未对着真实后端实例**跑真实
+导出（真实 202 合并语义、轮询进度、产物过期 409、OOXML / CSV 二进制回传、签名 URL 有效期均未验证）；集成层
+（`ReplayExportPage` + `ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端 `saveBytes` 为占位**（真实文件选择器 / 落盘未接，
+需另授权引依赖）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
