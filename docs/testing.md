@@ -4119,3 +4119,77 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 device 域**后半尚未接线**——每马甲链路状态（`getVestLink`）、UWB 基站（`anchors`）、链路状态与开关
 （`links`/`serial-ports`/`openVestSerial`/`closeVestSerial`/`openUwbLink`/`closeUwbLink`）、`watchLinks` WS 状态层**另开段**。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 62. M6 CLIENT-WINDOWS 续段（UI 接线）：device 域——链路与基站页（后 8 端点）
+
+承段 61「device 域**前 8 端点** UI 已接线」，按用户当次裁定切入点「**device 域 UI 续段**」，本段把 device 域**后 8 REST 端点**
+接进指挥端 UI——链路状态 1（`getLinks`）+ 本机串口 1（`listSerialPorts`）+ 串口链路开关 2（`openVestSerial`/`closeVestSerial`）
++ UWB 链路开关 2（`openUwbLink`/`closeUwbLink`）+ UWB 基站 2（`listAnchors`/`upsertAnchor`）。
+**每马甲链路状态**（`getVestLink`）与 **`watchLinks` WS 状态层** **另开段**（承接段 60「WS 刻意不入 REST 层、归状态层」口径）。
+
+### 62.1 交付物（1 笔 = 4 文件，1 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/link_panel_page.dart`(新) | **链路与基站页** `LinkPanelPage`：覆盖后 8 端点。八端口 typedef `LinkStatusReader`/`SerialPortLister`/`SerialLinkOpener`/`SerialLinkCloser`/`UwbLinkOpener`/`UwbLinkCloser`/`AnchorLister`/`AnchorWriter`（**全必填**，与段 61 可选端口不同——本页无「不注入即隐藏」语义）；`AnchorDraft` = `({int anchorId, AnchorUpsertRequest request})`（基站编号走路径、不进请求体）。控件键：页面 7（`kLinkPanel*Key`）+ 链路开关四按钮（`kLinkSerialOpenKey`/`kLinkSerialCloseKey`/`kLinkUwbOpenKey`/`kLinkUwbCloseKey`，**恒渲染**，不据轮询状态禁用）+ 行键函数 `linkStatusRowKey(LinkKind)`/`serialPortRowKey(int)`/`anchorRowKey(int)`/`anchorEditKey(int)` + 串口对话框 6（`kSerialLink*Key`）+ UWB 对话框 7（`kUwbLink*Key`）+ 基站表单 9（`kAnchorForm*Key`）。`_guard` 单飞、`_describeFailure(ApiException)` 按 `ApiErrorCode` switch；写后**重拉 `GET /links`**（基站保存后**重拉 `GET /anchors`**）+ SnackBar；`_SerialLinkDialog` / `_UwbLinkDialog`（串口先关再开、可选键留空即不传）/ `_AnchorFormDialog`（编辑以服务端快照预填、编号只读、四键整体提交、坐标 0~1 不翻转） |
+| `lib/features/console/team_summary_page.dart`(改) | 新增可选入口 `onOpenLinks` + 入口键 `kTeamSummaryLinksEntryKey`（`null` 时**不渲染**，既有用例渲染不变）；入口置于「马甲」之后 |
+| `lib/app/console_app.dart`(改) | 新增 import `../features/console/link_panel_page.dart` + `TeamSummaryPage` 接 `onOpenLinks` + `_openLinks`（**八端口全闭包，每次取用时读 `_account!.accessToken`**） |
+| `test/console_widget_test.dart`(改) | 新增助手 `linkStatusOf`/`portOf`/`anchorOf`/`pumpLinks` + 两组共 **18 例**（`链路与基站页（段 62）` 16 + `指挥端链路与基站接线（段 62）` 2） |
+
+### 62.2 用例与判据（新增 18 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 链路与基站页(16) | 首帧加载 / 契约字面量 | `GET /links` 与 `GET /anchors` 各 1 次；三种链路恒定各一行（`SERIAL_VEST`/`UWB_TCP_SERVER`/`UWB_SERIAL`）；行文本为契约字面量 |
+| | 基站空态 | 空列表渲染 `kLinkPanelAnchorsEmptyKey` |
+| | 「刷新」重拉 | 点刷新后 `linkCalls == 2` 且 `anchorCalls == 2` |
+| | 开启串口（对话框预填 + 留空不带上行） | 对话框端口预填首串口 `COM7`，改填 `COM9`；`sent!.portName == 'COM9'`、`baudRate == null`、`flowControlRtsCts == null`、`sent!.toJson() == {'portName': 'COM9'}`；开链后 `linkCalls == 2`（重拉） |
+| | 串口名为空 | 行内 `kSerialLinkErrorKey` 出现、**不发请求** |
+| | 关闭串口（幂等） | `closeCalls == 1`、`linkCalls == 2` |
+| | 开启 UWB（默认 TCP_SERVER） | 默认单选 `TCP_SERVER`；留空 host/port → `toJson() == {'dataSource': 'TCP_SERVER'}` |
+| | 关闭 UWB | `closeCalls == 1` |
+| | 已开启再开（409） | `DEVICE_LINK_ALREADY_OPEN` 落 `kLinkPanelErrorKey` |
+| | 串口占用（409） | `DEVICE_LINK_SERIAL_BUSY` 落 `kLinkPanelErrorKey` |
+| | 串口列表「尚未读取」→ 空态 | 未读取显示占位；读取为空渲染 `kLinkPanelPortsEmptyKey` |
+| | 串口逐条渲染 | `serialPortRowKey(0..1)` 均出现 |
+| | 新增基站（编号 + 请求体） | `savedId == 3`；`toJson() == {'name':'角3','xPx':0.25,'yPx':0.75,'enabled':true}`；保存后 `anchorCalls == 2` |
+| | 编辑基站（编号只读 + 快照预填） | `kAnchorFormIdFieldKey` 的 `enabled == false`、名称预填「角5」；四键完整回传 |
+| | 基站编号非法 | 编号 `9` → `kAnchorFormErrorKey`、**不发请求** |
+| | 基站坐标越界 | X 填 `1.5` → `kAnchorFormErrorKey`、**不发请求** |
+| 指挥端链路与基站接线(2) | 汇总页「链路」入口 | 点入即 `LinkPanelPage`；请求序列 `containsAllInOrder(['POST /api/v1/auth/login','GET /api/v1/situation/teams/summary','GET /api/v1/devices/links','GET /api/v1/devices/anchors'])` 且 `linksCall.authorization == 'Bearer access-1'`；行文本含 `COM7` |
+| | 未注入入口 | 汇总页不渲染「链路」按钮 |
+
+### 62.3 口径要点
+
+- **链路状态只读、开与关交服务端判定**：本页不据 `LinkStatus.state` 禁用按钮（四按钮恒渲染），开与关的合法性
+  （重复开启 / 未开启即关 / 串口占用）一律由服务端判定，客户端按 409 错误码如实提示；**写后重拉 `GET /links`**，
+  状态以服务端为准，**不本地乐观改写**。
+- **开启请求体只带非 null 键，不臆造缺省值**：`LinkOpenSerialRequest.toJson` / `LinkOpenUwbRequest.toJson` 只输出非 `null` 的键，
+  留空即走服务端默认（`baudRate` 115200 / `flowControlRtsCts` false / `host` `0.0.0.0` / `port` 12001 硬约束）；
+  落「留空字段不带上行」用例作判据（`toJson() == {'portName': 'COM9'}` / `{'dataSource': 'TCP_SERVER'}`）。
+- **串口必须先关再开**：开启前先 `GET /devices/serial-ports` 取候选串口（列表**不在首帧读取**，读取后空态才可见）；
+  同端口重复开启被服务端以 409 `DEVICE_LINK_SERIAL_BUSY` 拒，映射为「串口被占用或打开被系统拒绝」。
+- **UWB 基站坐标为 0~1 归一化、不翻转**：`xPx`/`yPx` 是归一化百分比（**不是像素**），**不得 `1-y`**；对话框本地校验
+  「0~1 且为数字」，越界（如 `1.5`）行内拦下；编号 1..8（客户端**只做范围提示**，最终由服务端裁决）。
+- **编号在编辑时只读**：`upsertAnchor` 契约要求路径编号与请求体一致，故编辑对话框编号框 `enabled: false`；新增可输入。
+- **基站表单为整体替换**：`AnchorUpsertRequest.toJson` 恒输出 `name`/`xPx`/`yPx`/`enabled` **四键**（服务端对在场字段照落），
+  故编辑 `initState` **以服务端快照预填**、保存时**完整四键提交**，留空即显式传 `null`（= 清空该字段），**不靠「省略」表达保留**。
+- **入口可选注入 + 全闭包读令牌**：`onOpenLinks == null` 时汇总页整块不渲染（沿用段 49~61 同口径）；`_openLinks` 的八端口闭包
+  **每次取用时读 `_account!.accessToken`**，续期换令牌后自动生效；全部走同一条 `RefreshingApiTransport`，令牌到期自动续期并重试一次。
+
+### 62.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**462 例** = 段 61 的 444 例 + **本段 18**）；
+  单文件 `flutter test test/console_widget_test.dart` → **205 例全绿**（含本段 18 例逐条列出）；
+  `flutter analyze` → `No issues found! (ran in 2.6s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（1 新 + 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**（先例段 53 / 段 61）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（`pubspec.yaml` 未动）；`api_contract.dart` **无需改动**（错误码已预置）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩 + 假传输），**未对着真实后端实例**跑过真实链路开关与基站配置
+（真实串口枚举与占用语义、开链 409 `DEVICE_LINK_ALREADY_OPEN` / `DEVICE_LINK_SERIAL_BUSY`、关链 409 `DEVICE_LINK_NOT_OPEN`、
+UWB TCP_SERVER 取 `0.0.0.0:12001` 默认、基站 1..8 边界与坐标归一化落库均未验证）；
+集成层（`LinkPanelPage` + `DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
+device 域**仍未接线**——每马甲链路状态（`getVestLink`）与 `watchLinks` WS 状态层**另开段**。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。

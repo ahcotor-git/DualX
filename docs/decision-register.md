@@ -2236,13 +2236,53 @@ device 域 **UI 接线尚未开段**。证据见 [testing](testing.md) **第 60 
 集成层（`VestLedgerPage` + `DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；device 域**后半尚未接线**，另开段。
 证据见 [testing](testing.md) **第 61 节**。
 
-**下一段（候选）**：**device 域前半 UI 已就位**（马甲台账页 + 绑定闭环，前 8 端点），下一步候选（按推荐序）：
-① **device 域 UI 续段**（每马甲链路状态 `getVestLink` / UWB 基站 `anchors` / 链路状态与开关
-`links`+`serial-ports`+`openVestSerial`+`closeVestSerial`+`openUwbLink`+`closeUwbLink` / `watchLinks` WS 状态层）——承本段、属最近一步；
+**段 62 落地（2026-11-04，UI 接线：device 域——链路与基站页（后 8 端点））**：承段 61「device 域**前 8 端点** UI 已接线」，
+按用户当次裁定切入点「**device 域 UI 续段（Recommended）**」，本段把 device 域**后 8 REST 端点**接进指挥端 UI——链路状态 1
+（`getLinks`）+ 本机串口 1（`listSerialPorts`）+ 串口链路开关 2（`openVestSerial`/`closeVestSerial`）+ UWB 链路开关 2
+（`openUwbLink`/`closeUwbLink`）+ UWB 基站 2（`listAnchors`/`upsertAnchor`）；**每马甲链路状态**（`getVestLink`）与
+**`watchLinks` WS 状态层** **另开段**。落**一笔**（**4 文件 / 1 新 3 改**，**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**，
+先例段 53 / 段 61）：
+
+- `lib/features/console/link_panel_page.dart`（**新**）：`LinkPanelPage`——链路状态（三种链路恒定各一行）+ 链路开关
+  （串口 / UWB 各「开启」「关闭」四按钮**恒渲染**，成否交服务端判定）+ 可用串口（开启链路时读取）+ UWB 基站（编号 1..8）；
+  控件键页面 7（`kLinkPanel*Key`）+ 四开关（`kLinkSerialOpenKey`/`kLinkSerialCloseKey`/`kLinkUwbOpenKey`/`kLinkUwbCloseKey`）
+  + 行键函数 `linkStatusRowKey(LinkKind)`/`serialPortRowKey(int)`/`anchorRowKey(int)`/`anchorEditKey(int)` + 串口对话框 6
+  （`kSerialLink*Key`）+ UWB 对话框 7（`kUwbLink*Key`）+ 基站表单 9（`kAnchorForm*Key`）；八端口 typedef
+  `LinkStatusReader`/`SerialPortLister`/`SerialLinkOpener`/`SerialLinkCloser`/`UwbLinkOpener`/`UwbLinkCloser`/`AnchorLister`/`AnchorWriter`
+  （**全必填**）＋ `AnchorDraft = ({int anchorId, AnchorUpsertRequest request})`（编号走路径、不进请求体）；`_guard` 单飞、
+  `_describeFailure(ApiException)` 按 `ApiErrorCode` switch（`deviceLinkAlreadyOpen` / `deviceLinkSerialBusy` / `deviceLinkNotOpen` /
+  `validationFailed` / `instanceNotReady`，兜底显示原码）；写后**重拉 `GET /links`**（基站保存后**重拉 `GET /anchors`**）+ SnackBar；
+  `_SerialLinkDialog`（端口必填）/ `_UwbLinkDialog`（默认 `TCP_SERVER`，可选键留空即不传）/ `_AnchorFormDialog`
+  （编辑 `initState` **以服务端快照预填**、编号只读、**四键整体提交**、坐标 0~1 不翻转）；
+- `lib/features/console/team_summary_page.dart`（**改**）：新增可选入口 `onOpenLinks` + 入口键 `kTeamSummaryLinksEntryKey`
+  （`null` 时**不渲染**，既有只读用例渲染不变）；入口置于「马甲」之后；
+- `lib/app/console_app.dart`（**改**）：新增 import `../features/console/link_panel_page.dart` ＋ `TeamSummaryPage` 接 `onOpenLinks` ＋
+  `_openLinks`（**八端口全闭包读 `_account!.accessToken`**，续期换到的新令牌才生效）；
+- `test/console_widget_test.dart`（**改**）：新增助手 `linkStatusOf` / `portOf` / `anchorOf` / `pumpLinks` + 两组共 **18 例**
+  （`链路与基站页（段 62）` **16** + `指挥端链路与基站接线（段 62）` **2**）。
+
+**口径要点**：**链路状态只读、开与关交服务端判定**——四按钮**恒渲染**，合法性（重复开启 / 未开启即关 / 串口占用）由服务端裁决，
+客户端按 409 错误码如实提示，**写后重拉 `GET /links`**、状态以服务端为准、**不本地乐观改写**；**开启请求体只带非 null 键**——
+`LinkOpenSerialRequest.toJson` / `LinkOpenUwbRequest.toJson` 只输出非 `null` 的键，留空即走服务端默认（115200 / false / `0.0.0.0` / 12001 硬约束）、
+**不臆造缺省值**；**串口必须先关再开**（开前先 `GET /devices/serial-ports`，列表不在首帧读取）；**UWB 基站坐标 0~1 归一化、不翻转**
+（`xPx`/`yPx` 是百分比不是像素、**不得 `1-y`**，编号 1..8 客户端只做范围提示）；**编号在编辑时只读**（契约要求路径编号与请求体一致）；
+**基站表单为整体替换**（`AnchorUpsertRequest.toJson` 恒输出四键，编辑以快照预填、**完整四键提交**、留空即显式传 `null`）；
+**入口可选注入 + 全闭包读令牌**（`onOpenLinks == null` 时汇总页整块不渲染，延续段 49~61 同口径）。
+
+门禁：`flutter test` → `All tests passed!`（**462 例**，较段 61 的 444 例 **+18**；单文件 `console_widget_test.dart` **205 例全绿**）、
+`flutter analyze` → `No issues found! (ran in 2.6s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑过真实链路开关与基站配置（真实串口枚举与占用语义、开链 409 `DEVICE_LINK_ALREADY_OPEN` /
+`DEVICE_LINK_SERIAL_BUSY`、关链 409 `DEVICE_LINK_NOT_OPEN`、UWB TCP_SERVER 取 `0.0.0.0:12001` 默认、基站 1..8 边界与坐标归一化落库均未验证）；
+集成层（`LinkPanelPage` + `DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**。证据见 [testing](testing.md) **第 62 节**。
+
+**下一段（候选）**：**device 域后 8 端点 UI 已接线**（链路状态与开关 + 串口 + UWB 基站），剩余 **`getVestLink`（每马甲链路状态）
+＋ `watchLinks` WS 状态层**待开段；下一步候选（按推荐序）：
+① **device 域收口**（`getVestLink` 单马甲链路状态接入马甲台账行 + `watchLinks` WS 状态层：链路状态实时推送）——承本段、属最近一步；
 ② `moveVest` 手动置位 UI（视联调需要再定）；③ T-PROD 部署；④ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
 ⑤ 接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
 ⑥ 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
-（背景：**exercise / replay / map 三域 UI 已收口**；device 域共享层已就位、**前 8 端点 UI 已接线**、后半待接线。）
+（背景：**exercise / replay / map 三域 UI 已收口**；device 域共享层已就位、**台账 + 绑定（前 8 端点）与链路 + 基站（后 8 端点）UI 均已接线**，
+剩 `getVestLink` + `watchLinks` WS 状态层。）
 
 **观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）。
 
