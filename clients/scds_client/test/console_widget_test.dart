@@ -14,6 +14,7 @@ import 'package:scds_client/features/console/floor_points_page.dart';
 import 'package:scds_client/features/console/map_manager_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
+import 'package:scds_client/features/console/replay_export_page.dart';
 import 'package:scds_client/features/console/replay_list_page.dart';
 import 'package:scds_client/features/console/replay_player_page.dart';
 import 'package:scds_client/features/console/replay_statistics_page.dart';
@@ -681,6 +682,7 @@ void main() {
     WidgetTester tester, {
     ReplayLister? list,
     ReplayOpener? onOpenReplay,
+    ReplayExportOpener? onOpenExport,
   }) async {
     tester.view.physicalSize = const Size(1400, 2400);
     tester.view.devicePixelRatio = 1.0;
@@ -694,6 +696,7 @@ void main() {
               ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async =>
                   replayPageOf(<Replay>[]),
           onOpenReplay: onOpenReplay,
+          onOpenExport: onOpenExport,
         ),
       ),
     );
@@ -808,6 +811,61 @@ void main() {
           replay: replay ?? replayOf('r-1'),
           load: load ??
               ({int? timelineBuckets}) async => statsOf('r-1'),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 58：造契约形状的异步任务（必填仅 `taskId` / `state`，其余按需）。
+  AsyncTask asyncTaskOf({
+    String taskId = 't-1',
+    AsyncTaskState state = AsyncTaskState.pending,
+    int? progressPct,
+    String? fileName,
+    String? downloadUrl,
+    DateTime? expireAt,
+    String? errorMessage,
+  }) =>
+      AsyncTask(
+        taskId: taskId,
+        state: state,
+        progressPct: progressPct,
+        fileName: fileName,
+        downloadUrl: downloadUrl,
+        expireAt: expireAt,
+        errorMessage: errorMessage,
+      );
+
+  /// 段 58：复盘导出面板直接挂树——三端口皆是闭包桩，**不发真实请求**。
+  ///
+  /// [saveBytes] 为 `null` 时不渲染「下载」按钮（生产端即如此，产物走 `downloadUrl`）。
+  Future<void> pumpReplayExport(
+    WidgetTester tester, {
+    Replay? replay,
+    ReplayExportStarter? startExport,
+    ReplayExportPoller? pollExport,
+    ReplayExportDownloader? downloadExport,
+    ReplayExportSaver? saveBytes,
+  }) async {
+    tester.view.physicalSize = const Size(1400, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReplayExportPage(
+          session: accountSession(),
+          replay: replay ?? replayOf('r-1'),
+          startExport: startExport ?? (ExportFormat format) async => asyncTaskOf(),
+          pollExport: pollExport ?? (String taskId) async => asyncTaskOf(taskId: taskId),
+          downloadExport: downloadExport ??
+              (String taskId) async => ApiResponse(
+                    statusCode: 200,
+                    contentType: 'text/csv',
+                    body: const <int>[1, 2, 3],
+                  ),
+          saveBytes: saveBytes,
         ),
       ),
     );
@@ -4319,7 +4377,26 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(replayListPlayKey('r-1')), findsNothing);
+      expect(find.byKey(replayListExportKey('r-1')), findsNothing);
       expect(find.byKey(replayListRowKey('r-1')), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('行内「导出」：回调收到该行复盘', (WidgetTester tester) async {
+      final List<Replay> opened = <Replay>[];
+      await pumpReplayList(
+        tester,
+        list: ({String? keyword, DateTime? from, DateTime? to, int? page, int? size}) async =>
+            replayPageOf(<Replay>[replayOf('r-1')]),
+        onOpenExport: (Replay replay) => opened.add(replay),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(replayListExportKey('r-1')));
+      await tester.pumpAndSettle();
+
+      expect(opened.single.replayId, 'r-1');
 
       await unmount(tester);
     });
@@ -4965,6 +5042,348 @@ void main() {
           'GET $kApiPrefix/replays/r-1/statistics',
         ]),
       );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 58：复盘导出面板——replay 域 exports 三端点（发起 202 / 轮询 / 下载）的指挥端接线。
+  group('复盘导出页（段 58）', () {
+    testWidgets('发起导出：携带所选格式，PENDING/RUNNING 期间 1s 轮询、SUCCEEDED 即停表',
+        (WidgetTester tester) async {
+      final List<ExportFormat> started = <ExportFormat>[];
+      int pollCalls = 0;
+      await pumpReplayExport(
+        tester,
+        startExport: (ExportFormat format) async {
+          started.add(format);
+          return asyncTaskOf(taskId: 't-9', state: AsyncTaskState.pending);
+        },
+        pollExport: (String taskId) async {
+          pollCalls++;
+          return switch (pollCalls) {
+            1 => asyncTaskOf(taskId: 't-9', state: AsyncTaskState.running, progressPct: 40),
+            _ => asyncTaskOf(
+                taskId: 't-9',
+                state: AsyncTaskState.succeeded,
+                progressPct: 100,
+                fileName: 'r-1.csv',
+                downloadUrl: '/api/v1/replays/r-1/exports/t-9/download?sig=abc',
+              ),
+          };
+        },
+        saveBytes: (String filename, List<int> bytes, String? contentType) async {},
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(kReplayExportAccountKey)).data, 'admin（OPERATOR）');
+      expect(find.byKey(kReplayExportFormatKey), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(kReplayExportStateKey)).data, '尚未发起导出');
+
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pump();
+      await tester.pump();
+
+      // 默认格式 XLSX；固定 202 即 PENDING，起 1s 定时器。
+      expect(started, <ExportFormat>[ExportFormat.xlsx]);
+      expect(tester.widget<Text>(find.byKey(kReplayExportStateKey)).data, 'PENDING');
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(tester.widget<Text>(find.byKey(kReplayExportStateKey)).data, 'RUNNING｜进度 40%');
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(
+        tester.widget<Text>(find.byKey(kReplayExportStateKey)).data,
+        'SUCCEEDED｜进度 100%｜文件 r-1.csv',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(kReplayExportDownloadUrlKey)).data,
+        '/api/v1/replays/r-1/exports/t-9/download?sig=abc',
+      );
+      expect(find.byKey(kReplayExportDownloadButtonKey), findsOneWidget);
+
+      // 终态后再推进 5s 不应再有轮询。
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(pollCalls, 2);
+
+      await unmount(tester);
+    });
+
+    testWidgets('格式可选 CSV：发起时携带所选格式', (WidgetTester tester) async {
+      final List<ExportFormat> started = <ExportFormat>[];
+      await pumpReplayExport(
+        tester,
+        startExport: (ExportFormat format) async {
+          started.add(format);
+          return asyncTaskOf(state: AsyncTaskState.succeeded, progressPct: 100);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kReplayExportFormatKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('CSV').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(started, <ExportFormat>[ExportFormat.csv]);
+
+      await unmount(tester);
+    });
+
+    testWidgets('下载：走 Bearer 端口取回字节并交落盘端口（文件名取服务端 fileName）',
+        (WidgetTester tester) async {
+      final List<String> taskIds = <String>[];
+      final List<String> savedNames = <String>[];
+      final List<List<int>> savedBytes = <List<int>>[];
+      final List<String?> savedTypes = <String?>[];
+      await pumpReplayExport(
+        tester,
+        startExport: (ExportFormat format) async => asyncTaskOf(
+          taskId: 't-7',
+          state: AsyncTaskState.succeeded,
+          fileName: 'r-1.csv',
+        ),
+        downloadExport: (String taskId) async {
+          taskIds.add(taskId);
+          return ApiResponse(
+            statusCode: 200,
+            contentType: 'text/csv',
+            body: const <int>[65, 66, 67],
+          );
+        },
+        saveBytes: (String filename, List<int> bytes, String? contentType) async {
+          savedNames.add(filename);
+          savedBytes.add(bytes);
+          savedTypes.add(contentType);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kReplayExportDownloadButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(taskIds, <String>['t-7']);
+      expect(savedNames, <String>['r-1.csv']);
+      expect(savedBytes.single, <int>[65, 66, 67]);
+      expect(savedTypes.single, 'text/csv');
+      expect(find.text('已保存 r-1.csv'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('服务端缺 fileName：以本地格式回退命名产物', (WidgetTester tester) async {
+      final List<String> savedNames = <String>[];
+      await pumpReplayExport(
+        tester,
+        replay: replayOf('r-9'),
+        startExport: (ExportFormat format) async => asyncTaskOf(state: AsyncTaskState.succeeded),
+        saveBytes: (String filename, List<int> bytes, String? contentType) async =>
+            savedNames.add(filename),
+      );
+      await tester.pumpAndSettle();
+
+      // 默认格式 XLSX（未改动下拉）。
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kReplayExportDownloadButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(savedNames, <String>['replay-r-9.xlsx']);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入落盘端口：SUCCEEDED 也不渲染「下载」按钮，但仍给出短时效 URL',
+        (WidgetTester tester) async {
+      await pumpReplayExport(
+        tester,
+        startExport: (ExportFormat format) async => asyncTaskOf(
+          state: AsyncTaskState.succeeded,
+          progressPct: 100,
+          downloadUrl: '/api/v1/replays/r-1/exports/t-1/download?sig=x',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kReplayExportDownloadButtonKey), findsNothing);
+      expect(
+        tester.widget<Text>(find.byKey(kReplayExportDownloadUrlKey)).data,
+        '/api/v1/replays/r-1/exports/t-1/download?sig=x',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约可选字段缺失：不臆造进度 / 文件名 / URL；FAILED 显示失败原因',
+        (WidgetTester tester) async {
+      await pumpReplayExport(
+        tester,
+        startExport: (ExportFormat format) async =>
+            asyncTaskOf(state: AsyncTaskState.failed, errorMessage: '磁盘空间不足'),
+        saveBytes: (String filename, List<int> bytes, String? contentType) async {},
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Text>(find.byKey(kReplayExportStateKey)).data, 'FAILED');
+      expect(tester.widget<Text>(find.byKey(kReplayExportMessageKey)).data, '磁盘空间不足');
+      expect(find.byKey(kReplayExportDownloadUrlKey), findsNothing);
+      // FAILED 不是 SUCCEEDED，不给下载按钮。
+      expect(find.byKey(kReplayExportDownloadButtonKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('轮询失败即停表：错误落页面且不每拍重试', (WidgetTester tester) async {
+      int pollCalls = 0;
+      await pumpReplayExport(
+        tester,
+        startExport: (ExportFormat format) async =>
+            asyncTaskOf(taskId: 't-3', state: AsyncTaskState.running),
+        pollExport: (String taskId) async {
+          pollCalls++;
+          throw apiFailure(409, ApiErrorCode.replayExportFailed);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pump();
+      await tester.pump();
+      expect(tester.widget<Text>(find.byKey(kReplayExportStateKey)).data, 'RUNNING');
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(pollCalls, 1);
+      expect(
+        tester.widget<Text>(find.byKey(kReplayExportErrorKey)).data,
+        '导出失败或产物已过期，请重新发起导出（REPLAY_EXPORT_FAILED）',
+      );
+
+      // 停表后不再自动重试。
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(pollCalls, 1);
+
+      await unmount(tester);
+    });
+
+    testWidgets('错误码映射为现场文案（409 导出失败 / 404 / 403 / 503）', (WidgetTester tester) async {
+      final Map<String, String> cases = <String, String>{
+        ApiErrorCode.replayExportFailed: '导出失败或产物已过期，请重新发起导出（REPLAY_EXPORT_FAILED）',
+        ApiErrorCode.replayNotFound: '复盘不存在（REPLAY_NOT_FOUND）',
+        ApiErrorCode.authForbidden: '当前账号无权导出该复盘（AUTH_FORBIDDEN）',
+        ApiErrorCode.instanceNotReady: '实例尚未就绪，请稍后重试（INSTANCE_NOT_READY）',
+      };
+      for (final MapEntry<String, String> entry in cases.entries) {
+        await pumpReplayExport(
+          tester,
+          startExport: (ExportFormat format) async => throw apiFailure(409, entry.key),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(kReplayExportStartButtonKey));
+        await tester.pumpAndSettle();
+
+        expect(tester.widget<Text>(find.byKey(kReplayExportErrorKey)).data, entry.value);
+      }
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 58：复盘导出接线——列表行内「导出」进入导出面板，发起导出带登录令牌与所选格式。
+  group('指挥端复盘导出接线（段 58）', () {
+    testWidgets('行内「导出」：进入导出页并按登录令牌发起导出（固定 202）', (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/replays':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'replayId': 'r-1',
+                  'planName': '红方突袭',
+                  'startedAt': '2026-10-01T08:00:00Z',
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'POST $kApiPrefix/replays/r-1/exports':
+            return jsonResponse(
+              <String, dynamic>{
+                'taskId': 't-1',
+                'state': 'SUCCEEDED',
+                'progressPct': 100,
+                'fileName': 'r-1.xlsx',
+              },
+              statusCode: 202,
+            );
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryReplaysEntryKey));
+      await tester.pumpAndSettle();
+
+      // 行内「导出」→ 导出面板。
+      await tester.tap(find.byKey(replayListExportKey('r-1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReplayExportPage), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(kReplayExportStateKey)).data, '尚未发起导出');
+
+      // 发起导出：按同一令牌 POST，请求体只带 format（默认 XLSX）。
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pumpAndSettle();
+
+      final ScriptedCall exportCall = transport.calls
+          .lastWhere((ScriptedCall call) => call.key == 'POST $kApiPrefix/replays/r-1/exports');
+      expect(exportCall.authorization, 'Bearer access-1');
+      expect(exportCall.body, <String, Object?>{'format': 'XLSX'});
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/replays',
+          'POST $kApiPrefix/replays/r-1/exports',
+        ]),
+      );
+      // 生产端未注入落盘端口，故不给「下载」按钮（产物走 downloadUrl）。
+      expect(find.byKey(kReplayExportDownloadButtonKey), findsNothing);
 
       await unmount(tester);
     });

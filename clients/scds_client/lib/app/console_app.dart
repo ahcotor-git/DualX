@@ -9,6 +9,7 @@ import '../features/console/floor_points_page.dart';
 import '../features/console/map_manager_page.dart';
 import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
+import '../features/console/replay_export_page.dart';
 import '../features/console/replay_list_page.dart';
 import '../features/console/replay_player_page.dart';
 import '../features/console/replay_statistics_page.dart';
@@ -659,6 +660,11 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             replays: replays,
             replay: replay,
           ),
+          onOpenExport: (Replay replay) => _openReplayExport(
+            navigator: navigator,
+            replays: replays,
+            replay: replay,
+          ),
         ),
       ),
     );
@@ -716,6 +722,51 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             token: _account!.accessToken,
             replayId: replay.replayId,
             timelineBuckets: timelineBuckets,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 58：打开复盘导出面板（`POST /replays/{replayId}/exports` + 轮询 + 下载）。
+  ///
+  /// 三端口都走同一条 [RefreshingApiTransport]，**全闭包读 `_account!.accessToken`**
+  /// （续期换到的新令牌才生效）；令牌到期由装饰器自动续期并重试一次。
+  ///
+  /// 注：`saveBytes` 是**落盘端口**——Flutter 桌面 / Android 没有内置写文件对话框，
+  /// 本段**刻意不引第三方依赖**（与段 53 的选文件端口同口径），故生产端暂不注入
+  /// （「下载」按钮不渲染）；产物仍可经任务回带的 `downloadUrl`（短时效签名 URL）
+  /// 交浏览器 / 下载器直取，真实落盘待后续接入。数据链路（发起 202 / 轮询 / 下载）
+  /// 已按契约接齐，测试用注入假件驱动全流程。
+  void _openReplayExport({
+    required NavigatorState navigator,
+    required ReplayApi replays,
+    required Replay replay,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => ReplayExportPage(
+          session: session,
+          replay: replay,
+          startExport: (ExportFormat format) => replays.exportReplay(
+            token: _account!.accessToken,
+            replayId: replay.replayId,
+            request: ExportRequest(format: format),
+          ),
+          pollExport: (String taskId) => replays.getExportTask(
+            token: _account!.accessToken,
+            replayId: replay.replayId,
+            taskId: taskId,
+          ),
+          downloadExport: (String taskId) => replays.downloadExport(
+            token: _account!.accessToken,
+            replayId: replay.replayId,
+            taskId: taskId,
           ),
         ),
       ),

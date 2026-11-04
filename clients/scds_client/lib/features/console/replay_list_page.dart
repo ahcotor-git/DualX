@@ -20,10 +20,11 @@ const Key kReplayListPageKey = Key('replayList.page');
 const Key kReplayListPrevButtonKey = Key('replayList.prevButton');
 const Key kReplayListNextButtonKey = Key('replayList.nextButton');
 
-/// 按复盘编号取行文本与行内「回放」/「统计」入口键。
+/// 按复盘编号取行文本与行内「回放」/「统计」/「导出」入口键。
 Key replayListRowKey(String replayId) => Key('replayList.row.$replayId');
 Key replayListPlayKey(String replayId) => Key('replayList.play.$replayId');
 Key replayListStatisticsKey(String replayId) => Key('replayList.statistics.$replayId');
+Key replayListExportKey(String replayId) => Key('replayList.export.$replayId');
 
 /// 复盘列表端口（`GET /replays`）——按结束时间倒序。
 ///
@@ -44,6 +45,9 @@ typedef ReplayOpener = void Function(Replay replay);
 
 /// 打开某场复盘统计面板的入口；为 `null` 时不渲染行内「统计」。
 typedef ReplayStatisticsOpener = void Function(Replay replay);
+
+/// 打开某场复盘导出面板的入口；为 `null` 时不渲染行内「导出」。
+typedef ReplayExportOpener = void Function(Replay replay);
 
 /// 本页固定每页条数（契约 `size` 1..200）。
 const int kReplayListPageSize = 20;
@@ -67,6 +71,7 @@ class ReplayListPage extends StatefulWidget {
     required this.list,
     this.onOpenReplay,
     this.onOpenStatistics,
+    this.onOpenExport,
   });
 
   /// 已登录的账号会话（提供身份快照）。
@@ -79,6 +84,9 @@ class ReplayListPage extends StatefulWidget {
 
   /// 打开该场复盘统计面板的入口；为 `null` 时不渲染行内「统计」。
   final ReplayStatisticsOpener? onOpenStatistics;
+
+  /// 打开该场复盘导出面板的入口；为 `null` 时不渲染行内「导出」。
+  final ReplayExportOpener? onOpenExport;
 
   @override
   State<ReplayListPage> createState() => _ReplayListPageState();
@@ -197,6 +205,12 @@ class _ReplayListPageState extends State<ReplayListPage> {
                 key: replayListStatisticsKey(replay.replayId),
                 onPressed: _busy ? null : () => widget.onOpenStatistics!(replay),
                 child: const Text('统计'),
+              ),
+            if (widget.onOpenExport != null)
+              TextButton(
+                key: replayListExportKey(replay.replayId),
+                onPressed: _busy ? null : () => widget.onOpenExport!(replay),
+                child: const Text('导出'),
               ),
           ],
         ),
