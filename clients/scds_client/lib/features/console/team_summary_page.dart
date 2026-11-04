@@ -28,6 +28,9 @@ const Key kTeamSummaryMapsEntryKey = Key('teamSummary.mapsEntry');
 /// 段 57 新增：进入「复盘」页的入口（未注入回调时整块不渲染）。
 const Key kTeamSummaryReplaysEntryKey = Key('teamSummary.replaysEntry');
 
+/// 段 61 新增：进入「马甲台账」页的入口（未注入回调时整块不渲染）。
+const Key kTeamSummaryVestsEntryKey = Key('teamSummary.vestsEntry');
+
 /// 按队伍取行键（`TeamSummary` 每队一行）。
 Key teamSummaryRowKey(Team team) => Key('teamSummary.row.${team.wire}');
 
@@ -57,6 +60,7 @@ class TeamSummaryPage extends StatefulWidget {
     this.onOpenExercise,
     this.onOpenMaps,
     this.onOpenReplays,
+    this.onOpenVests,
   });
 
   /// 已登录的账号会话（提供 `accessToken` 与身份快照）。
@@ -85,6 +89,9 @@ class TeamSummaryPage extends StatefulWidget {
 
   /// 段 57 新增：打开「复盘」页（replay 域只读面）；为 `null` 时不渲染入口。
   final VoidCallback? onOpenReplays;
+
+  /// 段 61 新增：打开「马甲台账」页（device 域台账与绑定闭环）；为 `null` 时不渲染入口。
+  final VoidCallback? onOpenVests;
 
   @override
   State<TeamSummaryPage> createState() => _TeamSummaryPageState();
@@ -137,6 +144,12 @@ class _TeamSummaryPageState extends State<TeamSummaryPage> {
               key: kTeamSummaryMapsEntryKey,
               onPressed: widget.onOpenMaps,
               child: const Text('底图'),
+            ),
+          if (widget.onOpenVests != null)
+            TextButton(
+              key: kTeamSummaryVestsEntryKey,
+              onPressed: widget.onOpenVests,
+              child: const Text('马甲'),
             ),
           if (widget.onOpenSituation != null)
             TextButton(

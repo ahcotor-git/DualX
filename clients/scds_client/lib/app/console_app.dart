@@ -16,11 +16,14 @@ import '../features/console/replay_statistics_page.dart';
 import '../features/console/roster_editor_page.dart';
 import '../features/console/team_summary_page.dart';
 import '../features/console/uwb_calibration_page.dart';
+import '../features/console/vest_ledger_page.dart';
 import '../shared/api/api_client.dart';
 import '../shared/api/auth_api.dart';
 import '../shared/api/auth_models.dart';
 import '../shared/api/command_api.dart';
 import '../shared/api/command_models.dart';
+import '../shared/api/device_api.dart';
+import '../shared/api/device_models.dart';
 import '../shared/api/exercise_api.dart';
 import '../shared/api/exercise_models.dart';
 import '../shared/api/health_api.dart';
@@ -154,6 +157,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
               final ExerciseApi exercises = ExerciseApi(transport);
               final MapApi maps = MapApi(transport);
               final ReplayApi replays = ReplayApi(transport);
+              final DeviceApi devices = DeviceApi(transport);
 
               navigator.push(
                 MaterialPageRoute<void>(
@@ -207,6 +211,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                             onOpenReplays: () => _openReplays(
                               navigator: navigator,
                               replays: replays,
+                            ),
+                            onOpenVests: () => _openVests(
+                              navigator: navigator,
+                              devices: devices,
                             ),
                           ),
                         ),
@@ -785,6 +793,64 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             token: _account!.accessToken,
             replayId: replay.replayId,
             taskId: taskId,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 61：打开「马甲台账」页（device 域台账与绑定闭环）。
+  ///
+  /// 七个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
+  /// 令牌到期时自动续期并重试一次。
+  ///
+  /// 注：`bind` / `rebind` 是**同一端点族**的两种动词（`POST` 首次绑定 / `PUT` 换绑），
+  /// 页面按行上 `bound` 状态二选一；`unbind` 幂等。绑定 `secret` 明文只上行一次，
+  /// 页面不落日志、不本地存储。
+  void _openVests({
+    required NavigatorState navigator,
+    required DeviceApi devices,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => VestLedgerPage(
+          session: session,
+          list: ({String? keyword}) => devices.listVests(
+            token: _account!.accessToken,
+            keyword: keyword,
+          ),
+          create: (VestDeviceUpsertRequest request) => devices.createVest(
+            token: _account!.accessToken,
+            request: request,
+          ),
+          update: (int vestNum, VestDeviceUpsertRequest request) => devices.updateVest(
+            token: _account!.accessToken,
+            vestNum: vestNum,
+            request: request,
+          ),
+          remove: (int vestNum) => devices.deleteVest(
+            token: _account!.accessToken,
+            vestNum: vestNum,
+          ),
+          bind: (int vestNum, VestBindingRequest request) => devices.bindVest(
+            token: _account!.accessToken,
+            vestNum: vestNum,
+            request: request,
+          ),
+          rebind: (int vestNum, VestBindingRequest request) => devices.rebindVest(
+            token: _account!.accessToken,
+            vestNum: vestNum,
+            request: request,
+          ),
+          unbind: (int vestNum) => devices.unbindVest(
+            token: _account!.accessToken,
+            vestNum: vestNum,
           ),
         ),
       ),

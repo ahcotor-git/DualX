@@ -21,11 +21,13 @@ import 'package:scds_client/features/console/replay_statistics_page.dart';
 import 'package:scds_client/features/console/roster_editor_page.dart';
 import 'package:scds_client/features/console/team_summary_page.dart';
 import 'package:scds_client/features/console/uwb_calibration_page.dart';
+import 'package:scds_client/features/console/vest_ledger_page.dart';
 import 'package:scds_client/shared/api/api_client.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
 import 'package:scds_client/shared/api/api_problem.dart';
 import 'package:scds_client/shared/api/auth_models.dart';
 import 'package:scds_client/shared/api/command_models.dart';
+import 'package:scds_client/shared/api/device_models.dart';
 import 'package:scds_client/shared/api/exercise_models.dart';
 import 'package:scds_client/shared/api/health_api.dart';
 import 'package:scds_client/shared/api/map_models.dart';
@@ -882,6 +884,71 @@ void main() {
                     body: const <int>[1, 2, 3],
                   ),
           saveBytes: saveBytes,
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  /// 段 61：造一个契约形状的马甲台账行（必填仅 `vestNum`）。
+  VestDevice vestOf(
+    int vestNum, {
+    String? name,
+    Team? team,
+    String? simNo,
+    String? model,
+    String? firmwareVersion,
+    String? remark,
+    bool? bound,
+    bool? enabled,
+  }) =>
+      VestDevice(
+        vestNum: vestNum,
+        name: name,
+        team: team,
+        simNo: simNo,
+        model: model,
+        firmwareVersion: firmwareVersion,
+        remark: remark,
+        bound: bound,
+        enabled: enabled,
+      );
+
+  VestDevicePage vestPageOf(List<VestDevice> items, {int? total}) => VestDevicePage(
+        items: items,
+        meta: PageMeta(page: 1, size: 20, total: total ?? items.length),
+      );
+
+  /// 段 61：马甲台账页直接挂树——四个必填端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 绑定三端口（[bind] / [rebind] / [unbind]）可选：不注入即不渲染对应行内按钮。
+  /// 视口放大到一屏容纳行内动作按钮，免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpVests(
+    WidgetTester tester, {
+    VestLister? list,
+    VestCreator? create,
+    VestUpdater? update,
+    VestRemover? remove,
+    VestBindingWriter? bind,
+    VestBindingWriter? rebind,
+    VestUnbinder? unbind,
+  }) async {
+    tester.view.physicalSize = const Size(1600, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VestLedgerPage(
+          session: accountSession(),
+          list: list ?? ({String? keyword}) async => vestPageOf(<VestDevice>[]),
+          create: create ?? (VestDeviceUpsertRequest request) async => fail('未预期的登记马甲'),
+          update: update ??
+              (int vestNum, VestDeviceUpsertRequest request) async => fail('未预期的修改马甲'),
+          remove: remove ?? (int vestNum) async => fail('未预期的注销马甲'),
+          bind: bind,
+          rebind: rebind,
+          unbind: unbind,
         ),
       ),
     );
@@ -5659,6 +5726,438 @@ void main() {
             .where((ScriptedCall call) => call.key == 'POST $kApiPrefix/plans/import'),
         isEmpty,
       );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 61：马甲台账页——device 域前 8 端点（台账 5 + 绑定闭环 3）的指挥端接线。
+  group('马甲台账页（段 61）', () {
+    testWidgets('加载台账：展示账号；空列表显示空态', (WidgetTester tester) async {
+      int listCalls = 0;
+      await pumpVests(tester, list: ({String? keyword}) async {
+        listCalls++;
+        return vestPageOf(<VestDevice>[]);
+      });
+      await tester.pumpAndSettle();
+
+      expect(listCalls, 1);
+      expect(tester.widget<Text>(find.byKey(kVestLedgerAccountKey)).data, 'admin（OPERATOR）');
+      expect(find.byKey(kVestLedgerEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('行文本取契约字面量；缺字段如实显示破折号', (WidgetTester tester) async {
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async => vestPageOf(<VestDevice>[
+          vestOf(7, name: '张三', team: Team.red, simNo: '12345', bound: true, enabled: true),
+          vestOf(9),
+        ]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(vestLedgerRowKey(7))).data,
+        '编号 7｜姓名 张三｜阵营 RED｜SIM 12345｜绑定 已绑定｜启用 启用',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(vestLedgerRowKey(9))).data,
+        '编号 9｜姓名 —｜阵营 —｜SIM —｜绑定 —｜启用 —',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('关键字搜索：非空传 keyword，空白不传（走服务端默认）', (WidgetTester tester) async {
+      final List<String?> keywords = <String?>[];
+      await pumpVests(tester, list: ({String? keyword}) async {
+        keywords.add(keyword);
+        return vestPageOf(<VestDevice>[]);
+      });
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kVestLedgerKeywordFieldKey), ' 张三 ');
+      await tester.tap(find.byKey(kVestLedgerSearchButtonKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kVestLedgerKeywordFieldKey), '   ');
+      await tester.tap(find.byKey(kVestLedgerSearchButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(keywords, <String?>[null, '张三', null]);
+
+      await unmount(tester);
+    });
+
+    testWidgets('登记马甲：提交整体替换五键（姓名两端空白被裁）', (WidgetTester tester) async {
+      final List<VestDeviceUpsertRequest> created = <VestDeviceUpsertRequest>[];
+      await pumpVests(tester, create: (VestDeviceUpsertRequest request) async {
+        created.add(request);
+        return vestOf(request.vestNum);
+      });
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kVestLedgerCreateButtonKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kVestFormNumFieldKey), '7');
+      await tester.enterText(find.byKey(kVestFormNameFieldKey), ' 张三 ');
+      await tester.tap(find.byKey(kVestFormTeamKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('RED').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kVestFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(created.single.toJson(), <String, Object?>{
+        'vestNum': 7,
+        'name': '张三',
+        'team': 'RED',
+        'model': null,
+        'remark': null,
+      });
+      expect(find.text('已登记马甲 7'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('编号非法：不发请求、对话框保留并显示行内错误', (WidgetTester tester) async {
+      await pumpVests(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kVestLedgerCreateButtonKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kVestFormNumFieldKey), '70000');
+      await tester.tap(find.byKey(kVestFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kVestFormErrorKey), findsOneWidget);
+      expect(find.byKey(kVestFormSaveKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kVestFormCancelKey));
+      await tester.pumpAndSettle();
+
+      await unmount(tester);
+    });
+
+    testWidgets('姓名超 64 字符：不发请求、行内错误', (WidgetTester tester) async {
+      await pumpVests(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kVestLedgerCreateButtonKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(kVestFormNumFieldKey), '7');
+      await tester.enterText(
+        find.byKey(kVestFormNameFieldKey),
+        List<String>.filled(65, 'x').join(),
+      );
+      await tester.tap(find.byKey(kVestFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kVestFormErrorKey), findsOneWidget);
+      expect(find.byKey(kVestFormSaveKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kVestFormCancelKey));
+      await tester.pumpAndSettle();
+
+      await unmount(tester);
+    });
+
+    testWidgets('编辑马甲：快照预填、编号只读，仅改姓名仍提交全部五键', (WidgetTester tester) async {
+      final List<VestDeviceUpsertRequest> updated = <VestDeviceUpsertRequest>[];
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async => vestPageOf(<VestDevice>[
+          vestOf(7, name: '旧名', team: Team.blue, model: 'V2', remark: '旧备注'),
+        ]),
+        update: (int vestNum, VestDeviceUpsertRequest request) async {
+          updated.add(request);
+          return vestOf(vestNum);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerEditKey(7)));
+      await tester.pumpAndSettle();
+
+      // 快照预填：不动的字段必须原样出现在表单里，否则整体替换会误伤它们。
+      expect(fieldText(tester, kVestFormNumFieldKey), '7');
+      expect(tester.widget<TextField>(find.byKey(kVestFormNumFieldKey)).enabled, isFalse);
+      expect(fieldText(tester, kVestFormNameFieldKey), '旧名');
+      expect(
+        tester.widget<DropdownButton<String>>(find.byKey(kVestFormTeamKey)).value,
+        'BLUE',
+      );
+
+      await tester.enterText(find.byKey(kVestFormNameFieldKey), '新名');
+      await tester.tap(find.byKey(kVestFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(updated.single.toJson(), <String, Object?>{
+        'vestNum': 7,
+        'name': '新名',
+        'team': 'BLUE',
+        'model': 'V2',
+        'remark': '旧备注',
+      });
+
+      await unmount(tester);
+    });
+
+    testWidgets('注销马甲：确认后调用注销端口并重拉列表', (WidgetTester tester) async {
+      final List<int> removed = <int>[];
+      int listCalls = 0;
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async {
+          listCalls++;
+          return vestPageOf(<VestDevice>[vestOf(7, name: '张三')]);
+        },
+        remove: (int vestNum) async => removed.add(vestNum),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerDeleteKey(7)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kVestConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(removed, <int>[7]);
+      expect(listCalls, 2);
+      expect(find.text('已注销马甲 7'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未绑定行：给「绑定」（POST），提交密钥并重拉列表', (WidgetTester tester) async {
+      final List<VestBindingRequest> bound = <VestBindingRequest>[];
+      int listCalls = 0;
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async {
+          listCalls++;
+          return vestPageOf(<VestDevice>[vestOf(7, name: '张三', bound: false)]);
+        },
+        bind: (int vestNum, VestBindingRequest request) async {
+          bound.add(request);
+          return vestOf(vestNum, bound: true);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(vestLedgerBindKey(7)), findsOneWidget);
+      expect(find.byKey(vestLedgerRebindKey(7)), findsNothing);
+      expect(find.byKey(vestLedgerUnbindKey(7)), findsNothing);
+
+      await tester.tap(find.byKey(vestLedgerBindKey(7)));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kVestBindingSecretFieldKey), 'secret-123');
+      await tester.tap(find.byKey(kVestBindingSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(bound.single.toJson(), <String, Object?>{'secret': 'secret-123'});
+      expect(listCalls, 2);
+      expect(find.text('已绑定马甲 7'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('已绑定行：给「换绑」（PUT），提交密钥并重拉列表', (WidgetTester tester) async {
+      final List<VestBindingRequest> rebound = <VestBindingRequest>[];
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async =>
+            vestPageOf(<VestDevice>[vestOf(7, name: '张三', bound: true)]),
+        rebind: (int vestNum, VestBindingRequest request) async {
+          rebound.add(request);
+          return vestOf(vestNum, bound: true);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(vestLedgerBindKey(7)), findsNothing);
+      expect(find.byKey(vestLedgerRebindKey(7)), findsOneWidget);
+      expect(find.byKey(vestLedgerUnbindKey(7)), findsNothing);
+
+      await tester.tap(find.byKey(vestLedgerRebindKey(7)));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kVestBindingSecretFieldKey), 'new-secret-1');
+      await tester.tap(find.byKey(kVestBindingSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(rebound.single.toJson(), <String, Object?>{'secret': 'new-secret-1'});
+      expect(find.text('已换绑马甲 7'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('已绑定行：解绑确认后调用解绑端口并重拉列表', (WidgetTester tester) async {
+      final List<int> unbound = <int>[];
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async =>
+            vestPageOf(<VestDevice>[vestOf(7, name: '张三', bound: true)]),
+        unbind: (int vestNum) async {
+          unbound.add(vestNum);
+          return vestOf(vestNum, bound: false);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerUnbindKey(7)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kVestConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(unbound, <int>[7]);
+      expect(find.text('已解绑马甲 7'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('密钥不足 8 位：不发请求、对话框保留并显示行内错误', (WidgetTester tester) async {
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async =>
+            vestPageOf(<VestDevice>[vestOf(7, bound: false)]),
+        bind: (int vestNum, VestBindingRequest request) async => fail('未预期的绑定'),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerBindKey(7)));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kVestBindingSecretFieldKey), '1234567');
+      await tester.tap(find.byKey(kVestBindingSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kVestBindingErrorKey), findsOneWidget);
+      expect(find.byKey(kVestBindingSaveKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kVestBindingCancelKey));
+      await tester.pumpAndSettle();
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入绑定端口：不渲染绑定 / 换绑 / 解绑，编辑与注销仍在',
+        (WidgetTester tester) async {
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async => vestPageOf(<VestDevice>[
+          vestOf(7, name: '张三', bound: false),
+          vestOf(8, name: '李四', bound: true),
+        ]),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(vestLedgerBindKey(7)), findsNothing);
+      expect(find.byKey(vestLedgerRebindKey(8)), findsNothing);
+      expect(find.byKey(vestLedgerUnbindKey(8)), findsNothing);
+      expect(find.byKey(vestLedgerEditKey(7)), findsOneWidget);
+      expect(find.byKey(vestLedgerDeleteKey(8)), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('契约错误码映射：409 DEVICE_VEST_ALREADY_BOUND 落顶部提示',
+        (WidgetTester tester) async {
+      await pumpVests(
+        tester,
+        list: ({String? keyword}) async =>
+            vestPageOf(<VestDevice>[vestOf(7, bound: false)]),
+        bind: (int vestNum, VestBindingRequest request) async =>
+            throw apiFailure(409, ApiErrorCode.deviceVestAlreadyBound),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(vestLedgerBindKey(7)));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kVestBindingSecretFieldKey), 'secret-123');
+      await tester.tap(find.byKey(kVestBindingSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kVestLedgerErrorKey)).data,
+        contains('已绑定'),
+      );
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 61：指挥端装配接线——队伍汇总页「马甲」入口 → 马甲台账页。
+  group('指挥端马甲台账接线（段 61）', () {
+    testWidgets('汇总页「马甲」入口：进入马甲台账页并按登录令牌拉列表',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/devices/vests':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'vestNum': 7,
+                  'name': '张三',
+                  'bound': true,
+                  'enabled': true,
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryVestsEntryKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(VestLedgerPage), findsOneWidget);
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/devices/vests',
+        ]),
+      );
+      final ScriptedCall listCall = transport.calls
+          .lastWhere((ScriptedCall call) => call.key == 'GET $kApiPrefix/devices/vests');
+      expect(listCall.authorization, 'Bearer access-1');
+      expect(
+        tester.widget<Text>(find.byKey(vestLedgerRowKey(7))).data,
+        contains('张三'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：汇总页不渲染「马甲」按钮', (WidgetTester tester) async {
+      await pumpSummary(tester, () async => <TeamSummary>[]);
+
+      expect(find.byKey(kTeamSummaryVestsEntryKey), findsNothing);
 
       await unmount(tester);
     });
