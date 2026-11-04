@@ -3930,3 +3930,65 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 导出（真实 202 合并语义、轮询进度、产物过期 409、OOXML / CSV 二进制回传、签名 URL 有效期均未验证）；集成层
 （`ReplayExportPage` + `ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端 `saveBytes` 为占位**（真实文件选择器 / 落盘未接，
 需另授权引依赖）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 59. M6 CLIENT-WINDOWS 续段（UI 接线）：exercise 域收口——想定模板下载与导入
+
+承段 58「**replay 域 UI 收口**（列表 + 回放器 + 统计 + 导出）」，按用户当次裁定收口切入点
+「**exercise 域收口：模板下载/导入 UI**」＋文件能力「**注入端口、不引依赖**」（同段 53 `pickImage` / 段 58 `saveBytes` 口径），
+本段落 exercise 域 **文件子域两端点**——`GET /api/v1/plans/template?format=`（回 XLSX / CSV **二进制**，走 `Bearer`）＋
+`POST /api/v1/plans/import`（`multipart/form-data`，201，**服务端整文件校验通过才落库**）——**exercise 域 UI 至此全部接线**
+（想定 / 编成 / 演习控制 / 模板与导入）。
+
+### 59.1 交付物（1 笔 = 3 文件）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/plan_manager_page.dart`(改) | 新增 import `api_client.dart`（`ApiResponse`）；新增控件键 `kPlanManagerTemplateFormatKey`/`kPlanManagerTemplateButtonKey`/`kPlanManagerImportButtonKey`；新增四端口 typedef `PlanTemplateDownloader`（`format`，回 `ApiResponse`）/ `PlanImporter`（`filename`/`bytes`/`name?`）/ `PlanFilePicker`（回 `PickedPlanFile?`）/ `PlanTemplateSaver`（`filename`/`bytes`/`contentType`）+ 载体 `PickedPlanFile`（`filename`/`bytes`）；构造新增可选参数 `downloadTemplate`/`importPlan`/`pickFile`/`saveBytes`；State `_format = PlanTemplateFormat.xlsx` + getter `_showTemplate = downloadTemplate != null && saveBytes != null` / `_showImport = importPlan != null && pickFile != null`；`_downloadTemplate()`（取二进制 → `saveBytes(_templateFileName(_format), response.body, response.contentType)` + SnackBar「已保存模板 X」）、`_importPlan()`（picker() → `null` 即 SnackBar「未选择文件」且**不发请求**、否则 `importer(filename, bytes, null)` → `_reloadAfterWrite('已导入想定「…」')`）；`Divider` 前插入 `if (_showTemplate || _showImport)` 的 `Wrap`（模板格式下拉 + 「下载模板」+ 「导入想定」）；文件末全局助手 `_templateFileName(format)`（`plan-template.<xlsx\|csv>`） |
+| `lib/app/console_app.dart`(改) | `_openPlans` 装配 `downloadTemplate`（`exercises.downloadPlanTemplate`）/`importPlan`（`exercises.importPlan`）两**真链路** + `pickFile` **占位** `() async => null`；**`saveBytes` 不注入**——故生产端「下载模板」**不渲染**、「导入想定」**在位但点击即「未选择文件」**（doc 注释明确文件能力口径，同段 53 `pickImage`） |
+| `test/console_widget_test.dart`(改) | **+8 例**：`想定模板与导入（段 59）` **7** + `指挥端想定导入接线（段 59）` **1**；`pumpPlans` 助手新增 `downloadTemplate`/`importPlan`/`pickFile`/`saveBytes` 四可选参数；新增助手 `pickedPlanFileOf` |
+
+### 59.2 用例与判据（新增 8 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 想定模板与导入(7) | 下载模板 | 默认 XLSX：`downloadTemplate` 收到 `PlanTemplateFormat.xlsx`，字节与 `contentType` **原样**交 `saveBytes`（`plan-template.xlsx`），**本页不解码**；SnackBar「已保存模板 plan-template.xlsx」 |
+| | 格式切 CSV | 下拉改 CSV 后请求携带 `csv`，落盘文件名 `plan-template.csv` |
+| | 未注入落盘端口 | 即便注入了 `downloadTemplate`，`saveBytes == null` 时「下载模板」与格式下拉**皆不渲染**（模板须落盘才有意义） |
+| | 导入想定 | 选文件（`roster.xlsx` / 字节）后 `importer` 收到 `filename`/`bytes`，**`name` 为 `null`**（由服务端取文件名）；`list` 调用 **2 次**（首帧 + 导入后重拉）、SnackBar「已导入想定「夜间行军」」 |
+| | 未选择文件 | `pickFile` 回 `null` 即**止步不发请求**（`importCalls == 0`、`listCalls == 1`），提示「未选择文件」 |
+| | 未注入选文件端口 | 即便注入了 `importPlan`，`pickFile == null` 时「导入想定」**不渲染** |
+| | 导入失败 | 400 `VALIDATION_FAILED`（服务端整文件校验失败）落页面顶部 `kPlanManagerErrorKey`（「参数校验失败（VALIDATION_FAILED）」），**不重拉列表** |
+| 指挥端接线(1) | 进入想定管理页 | 从队伍汇总页 `kTeamSummaryPlansEntryKey` 进入：「导入想定」**在位**、「下载模板」**不在**（生产端未注入 `saveBytes`）；点击「导入想定」得「未选择文件」；序列 `containsAllInOrder(login→summary→plans)`（汇总页另有周期轮询）+ **无 `POST /plans/import`** |
+
+### 59.3 口径要点
+
+- **只落文件子域 2 端点**：`GET /plans/template?format=`（**二进制回、走 Bearer**，本页保原始 `ApiResponse` 不解码）＋
+  `POST /plans/import`（`multipart/form-data`、201）。想定 CRUD / 编成 / 演习控制（段 48~51）**不动**。
+- **文件能力成对注入、缺一即不渲染**（延续段 53 `pickImage` / 段 58 `saveBytes` 口径）：
+  「下载模板」需 `downloadTemplate` + `saveBytes` **成对**在位；「导入想定」需 `importPlan` + `pickFile` **成对**在位；
+  `_showTemplate` / `_showImport` 为 `null` 即**不渲染**对应入口（**模板须能落盘才有意义**，故只注 `downloadTemplate` 不给按钮）。
+- **落盘注入端口、不引依赖**：Flutter 桌面 / Android 无内置写文件对话框，**刻意不引第三方依赖**；模板字节 + `contentType`
+  **原样**交 `saveBytes`，本页**不解码**；**生产端未注入 `saveBytes`**——「下载模板」不渲染（真实文件选择器 / 落盘需另授权引依赖）。
+- **选文件注入端口、不引依赖**：`pickFile` 回 `PickedPlanFile?`；**`null` 即「未选择」止步**——SnackBar 提示后**不发请求、不重拉列表**；
+  **生产端接「未选择」占位**（`() async => null`，等同系统对话框取消），「导入想定」在位但点击即提示「未选择文件」。
+- **`name` 恒不传**：`importer(filename, bytes, null)`——由服务端取文件名（契约口径），本页不臆造想定名。
+- **导入失败**（如 400 `VALIDATION_FAILED`，服务端整文件校验失败）落页面顶部错误提示，**不重拉列表**；**成功才重拉**（
+  `_reloadAfterWrite`）并以 SnackBar 回执新想定名。
+- **`PlanTemplateFormat` 复用共享枚举**（段 48 已就绪，`xlsx('XLSX')` / `csv('CSV')`），格式下拉 `DropdownButton<PlanTemplateFormat>`
+  默认 `xlsx`；**`ExportFormat` 不与之复用**（同名不同 schema，段 56 已定）。
+- **入口挂在既有想定管理页**（不新增页面）：两入口置于 `Divider` 之前的 `Wrap`，未注入时**整块不渲染**。
+
+### 59.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**405 例** = 段 58 的 397 例 + **本段 8**）、
+  `flutter analyze` → `No issues found!`（新页与测试三文件）；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务恰 3 文件（3 改）**，**未破「每原子任务 ≤3 文件」上限**；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、`device_app`；
+  **未新增依赖**（`pubspec.yaml` 未动）；共享层（`exercise_api.dart` / `exercise_models.dart`）**无需改动**（段 48 已就绪）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（`ScriptedTransport` 闭包桩 + 假数据），**未对着真实后端实例**跑真实模板下载 /
+真实 multipart 导入 / 真实整文件校验 400（真实 OOXML / CSV 二进制回传、`Content-Disposition` 文件名、multipart 边界、
+服务端整文件校验失败的具体分码均未验证）；集成层（`PlanManagerPage` + `ExerciseApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
+**生产端 `pickFile` 为占位**（恒回 `null`）、**`saveBytes` 未注入**——真实文件选择器 / 落盘需另授权引依赖。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。

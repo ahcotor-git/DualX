@@ -2126,11 +2126,43 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 `ReplayApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端 `saveBytes` 为占位**（真实文件选择器 / 落盘未接，需另授权引依赖）。
 证据见 [testing](testing.md) **第 58 节**。
 
-**下一段（候选）**：**replay 域 UI 已收口**（列表 + 回放器 + 统计 + 导出四页全接线），可转他域；
-首选收口 exercise 域：**模板下载 / multipart 导入** UI（需先定文件落盘路径与选文件依赖，属独立决策点）；
-他域候选同前：
-**device 域**（约 15 端点 + `watchLinks` WS）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
-平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；接真实**文件选择器**（`file_picker` 等，需另授权引依赖）；
+**段 59 落地（2026-11-04，UI 接线：exercise 域收口——想定模板下载与导入）**：承段 58「**replay 域 UI 收口**（列表 + 回放器 + 统计 + 导出）」，
+按用户当次裁定收口切入点「**exercise 域收口：模板下载/导入 UI**」＋文件能力「**注入端口、不引依赖**」（同段 53 `pickImage` /
+段 58 `saveBytes` 口径），本段落 exercise 域 **文件子域两端点**（`GET /plans/template?format=` 二进制 / `POST /plans/import` multipart），
+**exercise 域 UI 至此全部接线**（想定 / 编成 / 演习控制 / 模板与导入）：
+
+- `lib/features/console/plan_manager_page.dart`（**改**）：新增 import `api_client.dart`（`ApiResponse`）；新增控件键
+  `kPlanManagerTemplateFormat|TemplateButton|ImportButtonKey`；四端口 typedef `PlanTemplateDownloader`（`format`，回 `ApiResponse`）/
+  `PlanImporter`（`filename`/`bytes`/`name?`）/ `PlanFilePicker`（回 `PickedPlanFile?`）/ `PlanTemplateSaver`（`filename`/`bytes`/`contentType`）
+  + 载体 `PickedPlanFile`（`filename`/`bytes`）；构造新增可选参数 `downloadTemplate`/`importPlan`/`pickFile`/`saveBytes`；
+  State `_format = PlanTemplateFormat.xlsx` + getter `_showTemplate = downloadTemplate != null && saveBytes != null` /
+  `_showImport = importPlan != null && pickFile != null`；`_downloadTemplate()`（取二进制 → `saveBytes(_templateFileName(_format),`
+  `response.body, response.contentType)` + SnackBar）、`_importPlan()`（picker() → `null` 即 SnackBar「未选择文件」且**不发请求**、
+  否则 `importer(filename, bytes, null)` → `_reloadAfterWrite`）；`Divider` 前 `Wrap`（格式下拉 + 「下载模板」+ 「导入想定」）；
+  文件末 `_templateFileName(format)`；
+- `lib/app/console_app.dart`（**改**）：`_openPlans` 装配 `downloadTemplate`/`importPlan` 两**真链路** + `pickFile` **占位**
+  （`() async => null`）；**`saveBytes` 不注入**——生产端「下载模板」**不渲染**、「导入想定」**在位但点击即「未选择文件」**（同段 53 `pickImage`）；
+- `test/console_widget_test.dart`（**改**）：`pumpPlans` 新增四可选参数 + 新助手 `pickedPlanFileOf`；**+8 例**
+  （`想定模板与导入（段 59）` **7** + `指挥端想定导入接线（段 59）` **1**）。
+
+**口径要点**：**只落文件子域 2 端点**（模板二进制 / multipart 导入，本页**不解码**二进制、保原始 `ApiResponse`）；
+**文件能力成对注入、缺一即不渲染**（「下载模板」＝`downloadTemplate`+`saveBytes`；「导入想定」＝`importPlan`+`pickFile`；
+只注 `downloadTemplate` 不给按钮——**模板须能落盘才有意义**）；**落盘 / 选文件注入端口、不引依赖**（生产端 `saveBytes` 未注入、
+`pickFile` 接「未选择」占位）；**`name` 恒不传**（由服务端取文件名）；**未选择即止步**（SnackBar 后**不发请求、不重拉列表**）；
+**导入失败不重拉列表**、**成功才重拉**（`_reloadAfterWrite`）；**`PlanTemplateFormat` 复用共享枚举**（段 48 已就绪）、
+**`ExportFormat` 不与之复用**；**入口挂在既有想定管理页**（不新增页面）。
+
+门禁：`flutter test` → `All tests passed!`（**405 例**，较段 58 的 397 例 **+8**）、`flutter analyze` → `No issues found!`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。**未验项**：**未对着真实后端实例**跑真实模板下载 /
+multipart 导入 / 整文件校验 400（真实 OOXML / CSV 二进制回传、`Content-Disposition`、multipart 边界均未验证）；集成层
+（`PlanManagerPage` + `ExerciseApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**生产端 `pickFile` 为占位**、**`saveBytes` 未注入**。
+证据见 [testing](testing.md) **第 59 节**。
+
+**下一段（候选）**：**exercise 域 UI 已收口**（想定 / 编成 / 演习控制 / 模板与导入）、**replay 域 UI 已收口**（列表 + 回放器 + 统计 + 导出）、
+**map 域 UI 已收口**（底图 5 + 图片 2 + 楼层点位 2 + UWB 标定 5）；**主功能域 UI 基本接线完毕**，可转下列候选：
+**device 域**（约 15 端点 + `watchLinks` WS，规模最大）；`moveVest` 手动置位 UI（视联调需要再定）；T-PROD 部署；
+平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
+接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
 
 **观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）。
