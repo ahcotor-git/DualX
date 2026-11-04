@@ -2196,12 +2196,53 @@ host 0.0.0.0 / port 12001 兜底）；**解析口径不臆造缺省值**（契�
 UWB `openUwbLink` 真实链路建立均未验证）；集成层（`DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；**`watchLinks` WS 未纳入本层**；
 device 域 **UI 接线尚未开段**。证据见 [testing](testing.md) **第 60 节**。
 
-**下一段（候选）**：**device 域共享层已就位**（契约模型 + 17 端点客户端 + 23 例契约测试），下一步候选（按推荐序）：
-① **device 域 UI 接线**（马甲台账页 / 绑定闭环 / 链路状态与开关 / UWB 基站；含 `watchLinks` WS 状态层）；
+**段 61 落地（2026-11-04，UI 接线：device 域——马甲台账页 + 绑定闭环（前 8 端点））**：承段 60「**device 域共享层已就位**，UI 待接线」，
+按用户当次裁定切入点「**马甲台账页先行（Recommended）**」，本段把 device 域**前 8 端点**接进指挥端 UI——台账 5
+（`listVests`/`createVest`/`getVest`/`updateVest`/`deleteVest`）+ 绑定闭环 3（`bindVest`/`rebindVest`/`unbindVest`）；
+**每马甲链路状态**（`getVestLink`）、**UWB 基站**（`anchors`）、**链路状态与开关**（`links`/`serial-ports`/`linkSerial`/`linkUwb`）、
+**`watchLinks` WS 状态层** **另开段**。落**一笔**（**4 文件 / 1 新 3 改**，**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**，先例段 53）：
+
+- `lib/features/console/vest_ledger_page.dart`（**新**）：`VestLedgerPage`——台账列表 + 关键字搜索 + 登记 / 编辑 / 注销 + 行内绑定闭环
+  （未绑定→「绑定」=`POST`；已绑定→「换绑」=`PUT` + 「解绑」=`DELETE`）；控件键页面 8（`kVestLedger*Key`）+ 行键函数
+  `vestLedgerRowKey|EditKey|DeleteKey|BindKey|RebindKey|UnbindKey(int)` + 表单 9（`kVestForm*Key`）+ 确认 2
+  （`kVestConfirmKey`/`kVestCancelKey`，注销与解绑**共用**）+ 绑定对话框 5（`kVestBinding*Key`）；六端口 typedef
+  `VestLister`/`VestCreator`/`VestUpdater`/`VestRemover`/`VestBindingWriter`（`bind` 与 `rebind` 共用签名）/`VestUnbinder`，
+  其中 `bind`/`rebind`/`unbind` 为**可选**（各自为 `null` 时该行内入口**不渲染**）；`_guard` 单飞、`_describeFailure(ApiException)`
+  按 `ApiErrorCode` switch（`deviceVestNotFound` / `deviceVestNumConflict` / `deviceVestAlreadyBound` / `deviceVestNotBound` /
+  `exerciseAlreadyRunning` / `validationFailed` / `instanceNotReady`，兜底显示原码）；写后**重拉列表** + SnackBar；
+  `_VestFormDialog`（编辑 `initState` **以服务端快照预填**、编号只读、**五键整体提交**、留空即显式传 `null`）、
+  `_VestBindingDialog`（密钥 8..128、**只上行一次、不回显**）；
+- `lib/features/console/team_summary_page.dart`（**改**）：新增可选入口 `onOpenVests` + 入口键 `kTeamSummaryVestsEntryKey`
+  （`null` 时**不渲染**，既有只读用例渲染不变）；入口置于「底图」之后；
+- `lib/app/console_app.dart`（**改**）：新增 import（`vest_ledger_page` / `device_api` / `device_models`）＋ `DeviceApi(transport)` 装配 ＋
+  `TeamSummaryPage` 接 `onOpenVests` ＋ `_openVests`（**七端口全闭包读 `_account!.accessToken`**，续期换到的新令牌才生效）；
+- `test/console_widget_test.dart`（**改**）：新增助手 `vestOf` / `vestPageOf` / `pumpVests` + 两组共 **16 例**
+  （`马甲台账页（段 61）` **14** + `指挥端马甲台账接线（段 61）` **2**）。
+
+**口径要点**：**整体替换在 UI 层的兜底＝快照预填 + 留空即显式传 `null`**——`VestDeviceUpsertRequest.toJson` 恒输出
+`vestNum`/`name`/`team`/`model`/`remark` **五键**（服务端对在场字段照落），故编辑以**服务端快照预填**、保存时**完整五键提交**，
+表单**留空即传 `null`**（= 清空该字段）、**不靠「省略」表达保留**（落「仅改姓名仍提交五键」回归用例作判据）；
+**绑定的 `POST`/`PUT` 由行上 `bound` 决定**——`bound == true` → 换绑 + 解绑，否则 → 绑定，`bound == null`（未知）**按未绑定处理**、
+被 409 `DEVICE_VEST_ALREADY_BOUND` 拒时按错误码如实提示「请改用换绑」、**不臆造绑定态**；**编号在编辑时只读**（契约要求路径编号与请求体一致）；
+**密钥只上行一次**（明文只进请求体，页面**不落日志、不本地存储**，对话框不回显、列表不显示，8..128 校验由对话框负责、不据此预判服务端）；
+**注销是逻辑注销**（`DELETE` 置 `enabled=false`，演习中被 409 `EXERCISE_ALREADY_RUNNING` 拒时映射为「演习进行中，不能注销马甲」）；
+**可选端口不改变既有渲染**（`bind`/`rebind`/`unbind` 为 `null` 时对应行内按钮不渲染，编辑 / 注销仍在；`onOpenVests == null` 时汇总页整块不渲染，
+延续段 49~60 同口径）。
+
+门禁：`flutter test` → `All tests passed!`（**444 例**，较段 60 的 428 例 **+16**；单文件 `console_widget_test.dart` **187 例全绿**）、
+`flutter analyze` → `No issues found! (ran in 2.4s)`（实现期修掉 1 处 `unused_import` 后归零）；Dart 产物**不进 Maven reactor**，
+全量仍 **1151 项**（未改 Java / 契约，故未重跑）。**未验项**：**未对着真实后端实例**跑真实台账 CRUD 与绑定闭环（真实分页 / 过滤语义、
+绑定密钥长度校验 400、`bind`/`rebind` 的 409 分支、`deleteVest` 演习中 409 `EXERCISE_ALREADY_RUNNING`、`unbind` 幂等均未验证）；
+集成层（`VestLedgerPage` + `DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；device 域**后半尚未接线**，另开段。
+证据见 [testing](testing.md) **第 61 节**。
+
+**下一段（候选）**：**device 域前半 UI 已就位**（马甲台账页 + 绑定闭环，前 8 端点），下一步候选（按推荐序）：
+① **device 域 UI 续段**（每马甲链路状态 `getVestLink` / UWB 基站 `anchors` / 链路状态与开关
+`links`+`serial-ports`+`openVestSerial`+`closeVestSerial`+`openUwbLink`+`closeUwbLink` / `watchLinks` WS 状态层）——承本段、属最近一步；
 ② `moveVest` 手动置位 UI（视联调需要再定）；③ T-PROD 部署；④ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
 ⑤ 接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
 ⑥ 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
-（背景：**exercise / replay / map 三域 UI 已收口**，device 域共享层已就位、UI 待接线。）
+（背景：**exercise / replay / map 三域 UI 已收口**；device 域共享层已就位、**前 8 端点 UI 已接线**、后半待接线。）
 
 **观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）。
 

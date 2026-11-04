@@ -4046,3 +4046,76 @@ CRUD / 图片上传下载（真实的**图片头判型**、413 / 415 拦截、`M
 `EXERCISE_ALREADY_RUNNING`、UWB `openUwbLink` 真实链路建立均未验证）；集成层（`DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
 **`watchLinks` WS 未纳入本层**（连接 / 重连归状态层，另开段）；device 域 **UI 接线尚未开段**。
 本段为**实测前置的客户端共享层验收**，不是生产发布批准。
+
+## 61. M6 CLIENT-WINDOWS 续段（UI 接线）：device 域——马甲台账页 + 绑定闭环（前 8 端点）
+
+承段 60「device 域共享层先行」，按用户当次裁定切入点「**马甲台账页先行**」，本段把 device 域**前 8 端点**接进指挥端 UI——
+台账 5（`listVests`/`createVest`/`getVest`/`updateVest`/`deleteVest`）+ 绑定闭环 3（`bindVest`/`rebindVest`/`unbindVest`）。
+**每马甲链路状态**（`getVestLink`）、**UWB 基站**（`anchors`）、**链路状态与开关**（`links`/`serial-ports`/`linkSerial`/`linkUwb`）、
+**`watchLinks` WS 状态层** **另开段**（承接段 60「WS 刻意不入 REST 层、归状态层」口径）。
+
+### 61.1 交付物（1 笔 = 4 文件，1 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/vest_ledger_page.dart`(新) | **马甲台账页** `VestLedgerPage`：覆盖台账 5 + 绑定 3 共 8 端点。六端口 typedef `VestLister`（`{String? keyword}`，**空关键字不传键**）/ `VestCreator` / `VestUpdater`（`(int vestNum, VestDeviceUpsertRequest)`）/ `VestRemover`（`Future<void>`）/ `VestBindingWriter`（`bind` 与 `rebind` 共用签名）/ `VestUnbinder`；`bind`/`rebind`/`unbind` 为**可选**（各自为 `null` 时该行内入口**不渲染**）。控件键：页面 8（`kVestLedger*Key`）+ 行键函数 `vestLedgerRowKey`/`EditKey`/`DeleteKey`/`BindKey`/`RebindKey`/`UnbindKey(int)` + 表单 9（`kVestForm*Key`）+ 确认 2（`kVestConfirmKey`/`kVestCancelKey`，注销与解绑**共用**）+ 绑定对话框 5（`kVestBinding*Key`）。`_guard` 单飞、`_describeFailure(ApiException)` 按 `ApiErrorCode` switch；写后重拉列表 + SnackBar；`_VestFormDialog`（编辑以服务端快照预填、编号只读、五键整体提交）、`_VestBindingDialog`（密钥 8..128，不回显） |
+| `lib/features/console/team_summary_page.dart`(改) | 新增可选入口 `onOpenVests` + 入口键 `kTeamSummaryVestsEntryKey`（`null` 时**不渲染**，既有用例渲染不变）；入口置于「底图」之后 |
+| `lib/app/console_app.dart`(改) | 新增 `DeviceApi(transport)` 装配 + `TeamSummaryPage` 接 `onOpenVests` + `_openVests`（七端口全闭包，**每次取用时读 `_account!.accessToken`**） |
+| `test/console_widget_test.dart`(改) | 新增助手 `vestOf`/`vestPageOf`/`pumpVests` + 两组共 **16 例**（`马甲台账页（段 61）` 14 + `指挥端马甲台账接线（段 61）` 2） |
+
+### 61.2 用例与判据（新增 16 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 马甲台账页(14) | 首帧加载 / 空态 | `list` 恰 1 次；账号键显示 `admin（OPERATOR）`；空列表渲染空态键 |
+| | 行文本契约字面量 | 全字段行 `编号 7｜姓名 张三｜阵营 RED｜SIM 12345｜绑定 已绑定｜启用 启用`；缺字段行如实 `编号 9｜姓名 —｜阵营 —｜SIM —｜绑定 —｜启用 —` |
+| | 关键字搜索 | 输入后依次 `keywords == [null, '张三', null]`（清空后重拉回 `null`） |
+| | 登记（整体替换五键） | 提交体恰 `{'vestNum':7,'name':'张三','team':'RED','model':null,'remark':null}`（**恒五键**）；SnackBar「已登记马甲 7」 |
+| | 编号非法 | `70000` → **不发请求** 且 `kVestFormErrorKey` 出现（对话框保留） |
+| | 姓名超长 | 65 个 `x` → 行内错误键出现、**不发请求** |
+| | 编辑（快照预填 + 编号只读 + 五键回归） | 姓名框预填快照值、编号框 `enabled == false`；**仅改姓名**仍提交五键（`team: 'BLUE'`/`model: 'V2'`/`remark: '旧备注'` 原样回传） |
+| | 注销（逻辑注销） | 确认后 `removed == [7]`、`listCalls == 2`、SnackBar；文案注明**逻辑注销**（`enabled=false`） |
+| | 未绑定行 → 「绑定」 | `bound.single.toJson() == {'secret':'secret-123'}`；「换绑」/「解绑」键 **`findsNothing`** |
+| | 已绑定行 → 「换绑」 | `rebind.single` 收到 `{'secret':'new-secret-1'}`；「绑定」/「解绑」键 **`findsNothing`** |
+| | 已绑定行 → 「解绑」 | `unbound == [7]`（幂等端点） |
+| | 密钥不足 8 位 | `'1234567'` → **不发请求** 且 `kVestBindingErrorKey` 出现 |
+| | 未注入绑定端口 | `bind`/`rebind`/`unbind` 三键 **`findsNothing`**；编辑 / 注销仍在 |
+| | 契约错误码映射 | 409 `DEVICE_VEST_ALREADY_BOUND` → `kVestLedgerErrorKey` 文案 `contains('已绑定')` |
+| 指挥端马甲台账接线(2) | 汇总页「马甲」入口 | 点入即 `VestLedgerPage`；请求序列 `containsAllInOrder(['POST /api/v1/auth/login','GET /api/v1/situation/teams/summary','GET /api/v1/devices/vests'])` 且列表请求 `authorization == 'Bearer access-1'`；行文本含 `张三` |
+| | 未注入入口 | 汇总页不渲染「马甲」按钮 |
+
+### 61.3 口径要点
+
+- **整体替换在 UI 层的兜底＝快照预填 + 留空即显式传 `null`**：`VestDeviceUpsertRequest.toJson` 恒输出
+  `vestNum`/`name`/`team`/`model`/`remark` **五键**（服务端 `VestLedgerService.edited(...)` 对在场字段照落），故编辑对话框
+  `initState` **以服务端快照预填**、保存时**完整五键提交**；表单**留空即传 `null`**（= 清空该字段），
+  **不靠「省略」表达保留**——落「**仅改姓名仍提交五键**」回归用例作判据。
+- **绑定的 `POST` / `PUT` 由行上 `bound` 决定**：`bound == true` → 换绑（`PUT`）+ 解绑（`DELETE`）；否则 → 绑定（`POST`）。
+  `bound == null`（未知）**按未绑定处理**，只给「绑定」，被服务端以 409 `DEVICE_VEST_ALREADY_BOUND` 拒时按错误码如实提示
+  （提示「请改用换绑」），**不臆造绑定态**。
+- **编号在编辑时只读**：契约要求路径编号与请求体 `vestNum` 一致，故编辑对话框编号框 `enabled: false`；仅登记可输入。
+- **密钥只上行一次**：`secret` 明文只进请求体，页面**不落日志、不本地存储**，对话框不回显、列表不显示；
+  校验 8..128 由对话框负责，客户端**不据此预判服务端**（长度 / 摘要策略在服务端）。
+- **注销是逻辑注销**：`DELETE /devices/vests/{vestNum}` 置 `enabled=false`，确认文案已注明；演习中该设备被忽略，
+  被 409 `EXERCISE_ALREADY_RUNNING` 拒时映射为「演习进行中，不能注销马甲」。
+- **可选端口不改变既有渲染**：`bind`/`rebind`/`unbind` 为 `null` 时对应行内按钮**不渲染**（三端口各自成对判断），
+  编辑 / 注销仍在；`onOpenVests == null` 时汇总页整块不渲染（沿用段 49~59 同口径）。
+- **入口可选注入 + 全闭包读令牌**：`_openVests` 的七端口闭包**每次取用时读 `_account!.accessToken`**，续期换令牌后自动生效；
+  全部走同一条 `RefreshingApiTransport`，令牌到期自动续期并重试一次。
+
+### 61.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**444 例** = 段 60 的 428 例 + **本段 16**）；
+  单文件 `flutter test test/console_widget_test.dart` → **187 例全绿**（含本段 16 例逐条列出）；
+  `flutter analyze` → `No issues found! (ran in 2.4s)`（实现期修掉 1 处 `unused_import` 告警后归零）；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（1 新 + 3 改），**破「每原子任务 ≤3 文件」上限**——按无人值守授权**显式声明例外**（先例段 53）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（`pubspec.yaml` 未动）；`api_contract.dart` **无需改动**（错误码已预置）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩 + 假传输），**未对着真实后端实例**跑过真实台账 CRUD 与绑定闭环
+（真实分页 / 过滤语义、绑定密钥长度校验 400、`bind`/`rebind` 的 409 分支、`deleteVest` 演习中 409 `EXERCISE_ALREADY_RUNNING`、
+`unbind` 幂等语义均未验证）；集成层（`VestLedgerPage` + `DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
+device 域**后半尚未接线**——每马甲链路状态（`getVestLink`）、UWB 基站（`anchors`）、链路状态与开关
+（`links`/`serial-ports`/`openVestSerial`/`closeVestSerial`/`openUwbLink`/`closeUwbLink`）、`watchLinks` WS 状态层**另开段**。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。
