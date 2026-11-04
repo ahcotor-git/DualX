@@ -2275,14 +2275,43 @@ device 域 **UI 接线尚未开段**。证据见 [testing](testing.md) **第 60 
 `DEVICE_LINK_SERIAL_BUSY`、关链 409 `DEVICE_LINK_NOT_OPEN`、UWB TCP_SERVER 取 `0.0.0.0:12001` 默认、基站 1..8 边界与坐标归一化落库均未验证）；
 集成层（`LinkPanelPage` + `DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**。证据见 [testing](testing.md) **第 62 节**。
 
-**下一段（候选）**：**device 域后 8 端点 UI 已接线**（链路状态与开关 + 串口 + UWB 基站），剩余 **`getVestLink`（每马甲链路状态）
-＋ `watchLinks` WS 状态层**待开段；下一步候选（按推荐序）：
-① **device 域收口**（`getVestLink` 单马甲链路状态接入马甲台账行 + `watchLinks` WS 状态层：链路状态实时推送）——承本段、属最近一步；
+**段 63 落地（2026-11-04，UI 接线：device 域收口（一）——马甲台账行接入单马甲链路状态 `getVestLink`）**：承段 61 / 段 62
+「device 域**前 8 + 后 8 REST 端点** UI 均已接线」，本段把 device 域**第 9 个 REST 端点**——单马甲链路状态（`getVestLink`）
+——接进指挥端「马甲台账」页：**行内「链路」只读查询**（按行编号拉取、弹只读对话框展示契约字段）；
+**`watchLinks` WS 状态层另开段**（承接段 60「WS 刻意不入 REST 层、归状态层」口径）。落**一笔**（**3 文件 / 0 新 3 改**，
+**未破**「每原子任务 ≤3 文件」上限）：
+
+- `lib/features/console/vest_ledger_page.dart`（**改**）：新增只读端口 typedef `VestLinkReader` =
+  `Future<VestLink> Function(int vestNum)` ＋ 可选 `link`（`null` 时行内**不渲染**「链路」）＋ 行内「链路」按钮
+  （行键 `vestLedgerLinkKey(int)`）＋ 只读对话框 `_VestLinkDialog`（键 `kVestLinkDialogKey` / `kVestLinkTitleKey` /
+  `kVestLinkBodyKey` / `kVestLinkCloseKey`）＋ `_describeLink(VestLink)`；拉取走 `_guard`（单飞 ＋ 失败落
+  `kVestLedgerErrorKey`），**有结果才弹框**；
+- `lib/app/console_app.dart`（**改**）：`_openVests` 增 `link` 端口（**闭包读 `_account!.accessToken`**，走同一
+  `RefreshingApiTransport`，续期换到的新令牌才生效）；
+- `test/console_widget_test.dart`（**改**）：`pumpVests` 增 `link` 可选参数 ＋ 新增助手 `vestLinkOf`（该内联对象无 `required`、
+  全字段可空）＋ 两组共 **5 例**（`马甲台账页·单马甲链路（段 63）` **4** ＋ `指挥端马甲台账链路接线（段 63）` **1**）。
+
+**口径要点**：**链路状态只读、在线判定交服务端**（`getVestLink` 是纯读端点，页面**不重算**在线——契约硬约束：
+距最后一次心跳 `<= 5000ms` 为在线、由服务端给出；不据状态禁用任何既有按钮）；**该内联对象无 `required`、字段全 nullable**
+（契约未给它起名，缺失时**如实显示破折号**、**不臆造 `online=false` 或 `0`**）；**失败不臆造数据**（失败走 `_guard`
+单飞与错误出口、**有结果才弹框**，不弹空框、不显示陈旧数据）；**入口可选注入 ＋ 全闭包读令牌**（`link == null` 时行内不渲染「链路」，
+延续段 61 可选端口同口径）。
+
+门禁：`flutter test` → `All tests passed!`（**467 例**，较段 62 的 462 例 **+5**；单文件 `console_widget_test.dart` **210 例全绿**）、
+`flutter analyze` → `No issues found! (ran in 3.0s)`；Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑过真实单马甲链路查询（真实心跳窗口 5000ms 边界的在线判定、`lastHeartbeatAt` 时区与序列化形状、
+马甲不存在 404 语义均未验证）；集成层（`VestLedgerPage` + `DeviceApi.getVestLink` + 真实 `ApiClient` + 真实 HTTP）**未走通**。
+证据见 [testing](testing.md) **第 63 节**。
+
+**下一段（候选）**：**device 域前 8 ＋ 后 8 ＋ 单马甲链路（第 9 个）REST 端点 UI 均已接线**，剩余 **`watchLinks` WS 状态层**待开段；
+下一步候选（按推荐序）：
+① **device 域收口（二）**（`watchLinks` WS 状态层：链路状态实时推送——`ws://{host}:11001/ws/v1/devices/links`、子协议
+  `scds.links.v1`，推**完整列表快照**且**不替代** `GET /devices/links`（仍须低频轮询兜底），承段 60「WS 归状态层」与段 62 链路页）——承本段、属最近一步；
 ② `moveVest` 手动置位 UI（视联调需要再定）；③ T-PROD 部署；④ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
 ⑤ 接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
 ⑥ 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
-（背景：**exercise / replay / map 三域 UI 已收口**；device 域共享层已就位、**台账 + 绑定（前 8 端点）与链路 + 基站（后 8 端点）UI 均已接线**，
-剩 `getVestLink` + `watchLinks` WS 状态层。）
+（背景：**exercise / replay / map 三域 UI 已收口**；device 域共享层已就位、**台账 ＋ 绑定（前 8 端点）、链路 ＋ 基站（后 8 端点）
+与单马甲链路（第 9 个）UI 均已接线**，剩 `watchLinks` WS 状态层。）
 
 **观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）。
 

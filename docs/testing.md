@@ -4193,3 +4193,54 @@ UWB TCP_SERVER 取 `0.0.0.0:12001` 默认、基站 1..8 边界与坐标归一化
 集成层（`LinkPanelPage` + `DeviceApi` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
 device 域**仍未接线**——每马甲链路状态（`getVestLink`）与 `watchLinks` WS 状态层**另开段**。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 63. M6 CLIENT-WINDOWS 续段（UI 接线）：device 域收口（一）——马甲台账行接入单马甲链路状态
+
+承段 61/段 62「device 域**前 8 + 后 8 REST 端点** UI 均已接线」，本段把 device 域**第 9 个 REST 端点**
+——单马甲链路状态（`getVestLink`）——接进指挥端「马甲台账」页：**行内「链路」只读查询**（按行编号拉取、
+弹只读对话框展示契约字段）。`watchLinks` WS 状态层**另开段**（承接段 60「WS 刻意不入 REST 层、归状态层」口径）。
+
+### 63.1 交付物（1 笔 = 3 文件，0 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/vest_ledger_page.dart`(改) | 新增只读端口 typedef `VestLinkReader` = `Future<VestLink> Function(int vestNum)` + 可选 `link`（`null` 时行内**不渲染**「链路」）+ 行内「链路」按钮（行键 `vestLedgerLinkKey(int)`）+ 只读对话框 `_VestLinkDialog`（键 `kVestLinkDialogKey`/`kVestLinkTitleKey`/`kVestLinkBodyKey`/`kVestLinkCloseKey`）+ `_describeLink(VestLink)`；拉取走 `_guard`（单飞 + 失败落 `kVestLedgerErrorKey`），**有结果才弹框** |
+| `lib/app/console_app.dart`(改) | `_openVests` 增 `link` 端口（闭包读 `_account!.accessToken`，走同一 `RefreshingApiTransport`）；档注释 段 61/段 63 |
+| `test/console_widget_test.dart`(改) | `pumpVests` 增 `link` 可选参数 + 新增助手 `vestLinkOf`（该内联对象无 `required`，全字段可空）+ 两组共 **5 例**（`马甲台账页·单马甲链路（段 63）` 4 + `指挥端马甲台账链路接线（段 63）` 1） |
+
+### 63.2 用例与判据（新增 5 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 马甲台账页·单马甲链路(4) | 未注入链路端口 | `vestLedgerLinkKey(7)` **不渲染**（`findsNothing`），行内「编辑」/「注销」仍在 |
+| | 点击「链路」拉取并弹框 | `requested == [7]`；标题「马甲 7 链路状态」；正文 `编号 7｜在线 在线｜最后心跳 2026-11-04T01:02:03.000Z｜末帧 ff03｜收帧 120｜丢弃 3`；点「关闭」后对话框消失 |
+| | 链路字段缺失 | 正文 `编号 9｜在线 —｜最后心跳 —｜末帧 —｜收帧 —｜丢弃 —`（**不臆造 0 / 在线**） |
+| | 拉取失败 | `404 DEVICE_VEST_NOT_FOUND`：**不弹对话框**，错误落 `kVestLedgerErrorKey` |
+| 指挥端马甲台账链路接线(1) | 汇总页 → 马甲台账 → 行「链路」 | 点行「链路」后请求 `GET /api/v1/devices/vests/7/link`，`linkCall.authorization == 'Bearer access-1'`；正文 `编号 7｜在线 在线｜最后心跳 —｜末帧 ff03｜收帧 5｜丢弃 0` |
+
+### 63.3 口径要点
+
+- **链路状态只读、在线判定交服务端**：`getVestLink` 是纯读端点，页面**不重算**在线（契约硬约束：距最后一次心跳
+  `<= 5000ms` 为在线，由服务端给出）；本页也**不据状态禁用**任何既有按钮。
+- **该内联对象无 `required`，字段全 nullable**：契约未给它起名（`paths/device.yaml#/vestLink.get` 的内联对象），
+  各字段缺失时**如实显示破折号**，**不臆造 `online=false` 或 `0`**；落「字段缺失」用例作判据。
+- **失败不臆造数据**：拉取失败走 `_guard` 的单飞与错误出口（`kVestLedgerErrorKey`），**有结果才弹框**——
+  失败时**不弹空框、不显示上一次的陈旧数据**；错误码按 `ApiErrorCode` switch 映射（`deviceVestNotFound` 等）。
+- **入口可选注入 + 全闭包读令牌**：`link == null` 时行内不渲染「链路」（延续段 61 可选端口同口径）；
+  `_openVests` 的 `link` 闭包**每次取用时读 `_account!.accessToken`**，续期换令牌后自动生效。
+
+### 63.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**467 例** = 段 62 的 462 例 + **本段 5**）；
+  单文件 `flutter test test/console_widget_test.dart` → **210 例全绿**；
+  `flutter analyze` → `No issues found! (ran in 3.0s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 3 文件**（0 新 + 3 改），**未破**「每原子任务 ≤3 文件」上限；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、
+  `device_app`；**未新增依赖**（`pubspec.yaml` 未动）；`api_contract.dart` **无需改动**（错误码已预置）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩 + 假传输），**未对着真实后端实例**跑过真实单马甲链路查询
+（真实心跳窗口 5000ms 边界的在线判定、`lastHeartbeatAt` 时区与序列化形状、马甲不存在 404 语义均未验证）；
+集成层（`VestLedgerPage` + `DeviceApi.getVestLink` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
+device 域**仍未接线**——`watchLinks` WS 状态层（链路状态实时推送）**另开段**。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。
