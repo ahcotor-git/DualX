@@ -6,6 +6,7 @@ import '../features/console/command_page.dart';
 import '../features/console/console_login_page.dart';
 import '../features/console/exercise_control_page.dart';
 import '../features/console/floor_points_page.dart';
+import '../features/console/link_panel_page.dart';
 import '../features/console/map_manager_page.dart';
 import '../features/console/overall_situation_page.dart';
 import '../features/console/plan_manager_page.dart';
@@ -213,6 +214,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                               replays: replays,
                             ),
                             onOpenVests: () => _openVests(
+                              navigator: navigator,
+                              devices: devices,
+                            ),
+                            onOpenLinks: () => _openLinks(
                               navigator: navigator,
                               devices: devices,
                             ),
@@ -851,6 +856,51 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
           unbind: (int vestNum) => devices.unbindVest(
             token: _account!.accessToken,
             vestNum: vestNum,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 段 62：打开「链路与基站」页（device 域链路状态与开关 + UWB 基站）。
+  ///
+  /// 八个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
+  /// 令牌到期时自动续期并重试一次。
+  ///
+  /// 注：串口 / UWB 的开启请求体只带非 `null` 键（`LinkOpenSerialRequest` /
+  /// `LinkOpenUwbRequest` 的 `toJson` 口径）——留空即走服务端默认
+  /// （115200 / false / `0.0.0.0` / 12001），本层不臆造缺省值。
+  void _openLinks({
+    required NavigatorState navigator,
+    required DeviceApi devices,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => LinkPanelPage(
+          session: session,
+          loadLinks: () => devices.getLinks(token: _account!.accessToken),
+          loadPorts: () => devices.listSerialPorts(token: _account!.accessToken),
+          openSerial: (LinkOpenSerialRequest request) => devices.openVestSerial(
+            token: _account!.accessToken,
+            request: request,
+          ),
+          closeSerial: () => devices.closeVestSerial(token: _account!.accessToken),
+          openUwb: (LinkOpenUwbRequest request) => devices.openUwbLink(
+            token: _account!.accessToken,
+            request: request,
+          ),
+          closeUwb: () => devices.closeUwbLink(token: _account!.accessToken),
+          loadAnchors: () => devices.listAnchors(token: _account!.accessToken),
+          saveAnchor: (int anchorId, AnchorUpsertRequest request) => devices.upsertAnchor(
+            token: _account!.accessToken,
+            anchorId: anchorId,
+            request: request,
           ),
         ),
       ),

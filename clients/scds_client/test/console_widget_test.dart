@@ -11,6 +11,7 @@ import 'package:scds_client/features/console/command_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/exercise_control_page.dart';
 import 'package:scds_client/features/console/floor_points_page.dart';
+import 'package:scds_client/features/console/link_panel_page.dart';
 import 'package:scds_client/features/console/map_manager_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
 import 'package:scds_client/features/console/plan_manager_page.dart';
@@ -953,6 +954,84 @@ void main() {
       ),
     );
     await tester.pump();
+  }
+
+  /// 段 62：造一条契约形状的链路状态（必填仅 `kind` / `state`）。
+  LinkStatus linkStatusOf(
+    LinkKind kind, {
+    LinkState state = LinkState.closed,
+    String? target,
+    int? baudRate,
+    int? fdCount,
+    int? framesTotal,
+    int? droppedTotal,
+    int? crcErrorTotal,
+    String? errorMessage,
+  }) =>
+      LinkStatus(
+        kind: kind,
+        state: state,
+        target: target,
+        baudRate: baudRate,
+        fdCount: fdCount,
+        framesTotal: framesTotal,
+        droppedTotal: droppedTotal,
+        crcErrorTotal: crcErrorTotal,
+        errorMessage: errorMessage,
+      );
+
+  /// 段 62：造一条契约形状的本机串口。
+  SerialPortInfo portOf(String portName, {String? description}) =>
+      SerialPortInfo(portName: portName, description: description);
+
+  /// 段 62：造一行契约形状的 UWB 基站（必填仅 `anchorId`）。
+  Anchor anchorOf(
+    int anchorId, {
+    String? name,
+    double? xPx,
+    double? yPx,
+    bool? enabled,
+  }) =>
+      Anchor(anchorId: anchorId, name: name, xPx: xPx, yPx: yPx, enabled: enabled);
+
+  /// 段 62：链路与基站页直接挂树——八个端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 视口放大到一屏容纳全部小节（链路状态 / 开关 / 串口 / 基站），
+  /// 免得 `ListView` 懒构建漏掉控件。
+  Future<void> pumpLinks(
+    WidgetTester tester, {
+    LinkStatusReader? loadLinks,
+    SerialPortLister? loadPorts,
+    SerialLinkOpener? openSerial,
+    SerialLinkCloser? closeSerial,
+    UwbLinkOpener? openUwb,
+    UwbLinkCloser? closeUwb,
+    AnchorLister? loadAnchors,
+    AnchorWriter? saveAnchor,
+  }) async {
+    tester.view.physicalSize = const Size(1600, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LinkPanelPage(
+          session: accountSession(),
+          loadLinks: loadLinks ?? () async => <LinkStatus>[],
+          loadPorts: loadPorts ?? () async => <SerialPortInfo>[],
+          openSerial: openSerial ??
+              (LinkOpenSerialRequest request) async => fail('未预期的开启串口链路'),
+          closeSerial: closeSerial ?? () async => fail('未预期的关闭串口链路'),
+          openUwb: openUwb ??
+              (LinkOpenUwbRequest request) async => fail('未预期的开启 UWB 链路'),
+          closeUwb: closeUwb ?? () async => fail('未预期的关闭 UWB 链路'),
+          loadAnchors: loadAnchors ?? () async => <Anchor>[],
+          saveAnchor: saveAnchor ??
+              (int anchorId, AnchorUpsertRequest request) async => fail('未预期的配置基站'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
   }
 
   group('指挥端外壳装配', () {
@@ -6158,6 +6237,487 @@ void main() {
       await pumpSummary(tester, () async => <TeamSummary>[]);
 
       expect(find.byKey(kTeamSummaryVestsEntryKey), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  group('链路与基站页（段 62）', () {
+    testWidgets('加载链路状态与基站台账并渲染契约字面量', (WidgetTester tester) async {
+      await pumpLinks(
+        tester,
+        loadLinks: () async => <LinkStatus>[
+          linkStatusOf(
+            LinkKind.serialVest,
+            state: LinkState.open,
+            target: 'COM7',
+            baudRate: 115200,
+            framesTotal: 120,
+            droppedTotal: 3,
+            crcErrorTotal: 1,
+          ),
+          linkStatusOf(LinkKind.uwbTcpServer),
+          linkStatusOf(LinkKind.uwbSerial, state: LinkState.error, errorMessage: '打开被拒'),
+        ],
+        loadAnchors: () async => <Anchor>[
+          anchorOf(1, name: '角1', xPx: 0.1, yPx: 0.2, enabled: true),
+        ],
+      );
+
+      final Text serial =
+          tester.widget<Text>(find.byKey(linkStatusRowKey(LinkKind.serialVest)));
+      expect(serial.data, contains('SERIAL_VEST'));
+      expect(serial.data, contains('OPEN'));
+      expect(serial.data, contains('COM7'));
+      expect(serial.data, contains('帧 120'));
+      expect(serial.data, contains('丢帧 3'));
+
+      final Text uwbError =
+          tester.widget<Text>(find.byKey(linkStatusRowKey(LinkKind.uwbSerial)));
+      expect(uwbError.data, contains('ERROR'));
+      expect(uwbError.data, contains('打开被拒'));
+
+      final Text anchor = tester.widget<Text>(find.byKey(anchorRowKey(1)));
+      expect(anchor.data, contains('角1'));
+      expect(anchor.data, contains('0.1'));
+      expect(anchor.data, contains('启用'));
+
+      await unmount(tester);
+    });
+
+    testWidgets('没有基站时给出空态提示', (WidgetTester tester) async {
+      await pumpLinks(tester);
+
+      expect(find.byKey(kLinkPanelAnchorsEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('「刷新」重拉链路状态与基站台账', (WidgetTester tester) async {
+      int linkCalls = 0;
+      int anchorCalls = 0;
+      await pumpLinks(
+        tester,
+        loadLinks: () async {
+          linkCalls++;
+          return <LinkStatus>[];
+        },
+        loadAnchors: () async {
+          anchorCalls++;
+          return <Anchor>[];
+        },
+      );
+      expect(linkCalls, 1);
+      expect(anchorCalls, 1);
+
+      await tester.tap(find.byKey(kLinkPanelRefreshButtonKey));
+      await tester.pumpAndSettle();
+
+      expect(linkCalls, 2);
+      expect(anchorCalls, 2);
+
+      await unmount(tester);
+    });
+
+    testWidgets('开启串口链路：填端口后上行请求，留空字段不带上行，并按端口重拉',
+        (WidgetTester tester) async {
+      LinkOpenSerialRequest? sent;
+      int linkCalls = 0;
+      await pumpLinks(
+        tester,
+        loadLinks: () async {
+          linkCalls++;
+          return <LinkStatus>[];
+        },
+        loadPorts: () async => <SerialPortInfo>[
+          portOf('COM7', description: 'USB 转串口'),
+        ],
+        openSerial: (LinkOpenSerialRequest request) async {
+          sent = request;
+          return linkStatusOf(LinkKind.serialVest,
+              state: LinkState.open, target: request.portName);
+        },
+      );
+
+      await tester.tap(find.byKey(kLinkSerialOpenKey));
+      await tester.pumpAndSettle();
+
+      // 对话框预填首个可用串口。
+      expect(
+        tester.widget<TextField>(find.byKey(kSerialLinkPortKey)).controller!.text,
+        'COM7',
+      );
+      await tester.enterText(find.byKey(kSerialLinkPortKey), 'COM9');
+      await tester.tap(find.byKey(kSerialLinkSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(sent, isNotNull);
+      expect(sent!.portName, 'COM9');
+      expect(sent!.baudRate, isNull);
+      expect(sent!.flowControlRtsCts, isNull);
+      expect(sent!.toJson(), <String, Object?>{'portName': 'COM9'});
+      expect(linkCalls, 2);
+
+      await unmount(tester);
+    });
+
+    testWidgets('串口名为空：对话框内报错且不上行', (WidgetTester tester) async {
+      await pumpLinks(
+        tester,
+        loadPorts: () async => <SerialPortInfo>[],
+        openSerial: (LinkOpenSerialRequest request) async => fail('不应上行开启串口链路'),
+      );
+
+      await tester.tap(find.byKey(kLinkSerialOpenKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kSerialLinkPortKey), '   ');
+      await tester.tap(find.byKey(kSerialLinkSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kSerialLinkErrorKey), findsOneWidget);
+      expect(find.byKey(kSerialLinkPortKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('关闭串口链路：调用关闭端口并重拉（幂等）', (WidgetTester tester) async {
+      int closeCalls = 0;
+      int linkCalls = 0;
+      await pumpLinks(
+        tester,
+        loadLinks: () async {
+          linkCalls++;
+          return <LinkStatus>[];
+        },
+        closeSerial: () async {
+          closeCalls++;
+          return linkStatusOf(LinkKind.serialVest);
+        },
+      );
+
+      await tester.tap(find.byKey(kLinkSerialCloseKey));
+      await tester.pumpAndSettle();
+
+      expect(closeCalls, 1);
+      expect(linkCalls, 2);
+
+      await unmount(tester);
+    });
+
+    testWidgets('开启 UWB 链路：默认 TCP_SERVER，留空字段不带上行', (WidgetTester tester) async {
+      LinkOpenUwbRequest? sent;
+      await pumpLinks(
+        tester,
+        openUwb: (LinkOpenUwbRequest request) async {
+          sent = request;
+          return linkStatusOf(LinkKind.uwbTcpServer, state: LinkState.open);
+        },
+      );
+
+      await tester.tap(find.byKey(kLinkUwbOpenKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kUwbLinkSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(sent, isNotNull);
+      expect(sent!.dataSource, UwbDataSource.tcpServer);
+      expect(sent!.host, isNull);
+      expect(sent!.port, isNull);
+      expect(sent!.toJson(), <String, Object?>{'dataSource': 'TCP_SERVER'});
+
+      await unmount(tester);
+    });
+
+    testWidgets('关闭 UWB 链路：调用关闭端口', (WidgetTester tester) async {
+      int closeCalls = 0;
+      await pumpLinks(
+        tester,
+        closeUwb: () async {
+          closeCalls++;
+          return linkStatusOf(LinkKind.uwbTcpServer);
+        },
+      );
+
+      await tester.tap(find.byKey(kLinkUwbCloseKey));
+      await tester.pumpAndSettle();
+
+      expect(closeCalls, 1);
+
+      await unmount(tester);
+    });
+
+    testWidgets('已开启再开（409 DEVICE_LINK_ALREADY_OPEN）按错误码提示',
+        (WidgetTester tester) async {
+      await pumpLinks(
+        tester,
+        openSerial: (LinkOpenSerialRequest request) async =>
+            throw apiFailure(409, ApiErrorCode.deviceLinkAlreadyOpen),
+      );
+
+      await tester.tap(find.byKey(kLinkSerialOpenKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kSerialLinkPortKey), 'COM7');
+      await tester.tap(find.byKey(kSerialLinkSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kLinkPanelErrorKey)).data,
+        contains(ApiErrorCode.deviceLinkAlreadyOpen),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('串口占用（409 DEVICE_LINK_SERIAL_BUSY）按错误码提示',
+        (WidgetTester tester) async {
+      await pumpLinks(
+        tester,
+        openSerial: (LinkOpenSerialRequest request) async =>
+            throw apiFailure(409, ApiErrorCode.deviceLinkSerialBusy),
+      );
+
+      await tester.tap(find.byKey(kLinkSerialOpenKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kSerialLinkPortKey), 'COM7');
+      await tester.tap(find.byKey(kSerialLinkSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(kLinkPanelErrorKey)).data,
+        contains(ApiErrorCode.deviceLinkSerialBusy),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('串口列表未读取显示占位；读取为空显示空态', (WidgetTester tester) async {
+      await pumpLinks(tester, loadPorts: () async => <SerialPortInfo>[]);
+
+      expect(find.text('尚未读取'), findsOneWidget);
+      expect(find.byKey(kLinkPanelPortsEmptyKey), findsNothing);
+
+      await tester.tap(find.byKey(kLinkSerialOpenKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kSerialLinkCancelKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kLinkPanelPortsEmptyKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('串口列表逐条渲染', (WidgetTester tester) async {
+      await pumpLinks(
+        tester,
+        loadPorts: () async => <SerialPortInfo>[
+          portOf('COM7', description: 'USB 转串口'),
+          portOf('COM9'),
+        ],
+      );
+
+      await tester.tap(find.byKey(kLinkSerialOpenKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kSerialLinkCancelKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(serialPortRowKey(0))).data,
+        contains('COM7'),
+      );
+      expect(
+        tester.widget<Text>(find.byKey(serialPortRowKey(1))).data,
+        contains('COM9'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('新增基站：编号 + 请求体上行并按返回重拉', (WidgetTester tester) async {
+      int? savedId;
+      AnchorUpsertRequest? savedRequest;
+      int anchorCalls = 0;
+      await pumpLinks(
+        tester,
+        loadAnchors: () async {
+          anchorCalls++;
+          return <Anchor>[];
+        },
+        saveAnchor: (int anchorId, AnchorUpsertRequest request) async {
+          savedId = anchorId;
+          savedRequest = request;
+          return anchorOf(anchorId, name: request.name);
+        },
+      );
+
+      await tester.tap(find.byKey(kLinkPanelAnchorCreateKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kAnchorFormIdFieldKey), '3');
+      await tester.enterText(find.byKey(kAnchorFormNameFieldKey), '角3');
+      await tester.enterText(find.byKey(kAnchorFormXFieldKey), '0.25');
+      await tester.enterText(find.byKey(kAnchorFormYFieldKey), '0.75');
+      await tester.tap(find.byKey(kAnchorFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(savedId, 3);
+      expect(savedRequest!.xPx, 0.25);
+      expect(savedRequest!.yPx, 0.75);
+      expect(savedRequest!.enabled, isTrue);
+      expect(savedRequest!.toJson(), <String, Object?>{
+        'name': '角3',
+        'xPx': 0.25,
+        'yPx': 0.75,
+        'enabled': true,
+      });
+      expect(anchorCalls, 2);
+
+      await unmount(tester);
+    });
+
+    testWidgets('编辑基站：编号只读并以快照预填四键', (WidgetTester tester) async {
+      AnchorUpsertRequest? savedRequest;
+      await pumpLinks(
+        tester,
+        loadAnchors: () async => <Anchor>[
+          anchorOf(5, name: '角5', xPx: 0.4, yPx: 0.6, enabled: false),
+        ],
+        saveAnchor: (int anchorId, AnchorUpsertRequest request) async {
+          savedRequest = request;
+          return anchorOf(anchorId);
+        },
+      );
+
+      await tester.tap(find.byKey(anchorEditKey(5)));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<TextField>(find.byKey(kAnchorFormIdFieldKey)).enabled,
+        isFalse,
+      );
+      expect(
+        tester.widget<TextField>(find.byKey(kAnchorFormNameFieldKey)).controller!.text,
+        '角5',
+      );
+
+      await tester.tap(find.byKey(kAnchorFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(savedRequest!.name, '角5');
+      expect(savedRequest!.xPx, 0.4);
+      expect(savedRequest!.yPx, 0.6);
+      expect(savedRequest!.enabled, isFalse);
+
+      await unmount(tester);
+    });
+
+    testWidgets('基站编号非法：对话框内报错且不上行', (WidgetTester tester) async {
+      await pumpLinks(
+        tester,
+        saveAnchor: (int anchorId, AnchorUpsertRequest request) async => fail('不应上行配置基站'),
+      );
+
+      await tester.tap(find.byKey(kLinkPanelAnchorCreateKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kAnchorFormIdFieldKey), '9');
+      await tester.tap(find.byKey(kAnchorFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAnchorFormErrorKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('基站坐标越界：对话框内报错且不上行', (WidgetTester tester) async {
+      await pumpLinks(
+        tester,
+        saveAnchor: (int anchorId, AnchorUpsertRequest request) async => fail('不应上行配置基站'),
+      );
+
+      await tester.tap(find.byKey(kLinkPanelAnchorCreateKey));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(kAnchorFormIdFieldKey), '1');
+      await tester.enterText(find.byKey(kAnchorFormXFieldKey), '1.5');
+      await tester.tap(find.byKey(kAnchorFormSaveKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAnchorFormErrorKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
+  group('指挥端链路与基站接线（段 62）', () {
+    testWidgets('汇总页「链路」入口：进入链路与基站页并按登录令牌拉链路状态与基站',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/devices/links':
+            return jsonResponse(<Object>[
+              <String, dynamic>{'kind': 'SERIAL_VEST', 'state': 'OPEN', 'target': 'COM7'},
+              <String, dynamic>{'kind': 'UWB_TCP_SERVER', 'state': 'CLOSED'},
+              <String, dynamic>{'kind': 'UWB_SERIAL', 'state': 'CLOSED'},
+            ]);
+          case 'GET $kApiPrefix/devices/anchors':
+            return jsonResponse(<Object>[
+              <String, dynamic>{
+                'anchorId': 1,
+                'name': '角1',
+                'xPx': 0.1,
+                'yPx': 0.2,
+                'enabled': true,
+              },
+            ]);
+        }
+        fail('未预期的请求：${call.key}');
+      };
+
+      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryLinksEntryKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LinkPanelPage), findsOneWidget);
+      expect(
+        transport.sequence,
+        containsAllInOrder(<String>[
+          'POST $kApiPrefix/auth/login',
+          'GET $kApiPrefix/situation/teams/summary',
+          'GET $kApiPrefix/devices/links',
+          'GET $kApiPrefix/devices/anchors',
+        ]),
+      );
+      final ScriptedCall linksCall = transport.calls
+          .lastWhere((ScriptedCall call) => call.key == 'GET $kApiPrefix/devices/links');
+      expect(linksCall.authorization, 'Bearer access-1');
+      expect(
+        tester.widget<Text>(find.byKey(linkStatusRowKey(LinkKind.serialVest))).data,
+        contains('COM7'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入入口：汇总页不渲染「链路」按钮', (WidgetTester tester) async {
+      await pumpSummary(tester, () async => <TeamSummary>[]);
+
+      expect(find.byKey(kTeamSummaryLinksEntryKey), findsNothing);
 
       await unmount(tester);
     });
