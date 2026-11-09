@@ -4479,3 +4479,92 @@ Engine daemon 未运行**（`docs/environments.md` §1），`scds-app/target/scd
 `AUTH_BAD_CREDENTIALS`、限流 429、`start/stop` 全链等**未纳入**本段。**集成层的「真依赖」仍未走通**——
 本段打通的是「客户端各层之间的真 HTTP / WS 接缝」，**不是**「客户端对真实后端实例」。本段为**集成层前置的
 客户端内验收**，不是生产发布批准。
+
+## 68. M3 COMMAND 硬件 ACK 解析：指令「链路级确认」（`SENT → ACKED`）＋ 修复 `sent_at` 未落库
+
+承段 67「下一段（候选）⑤ 硬件 ACK 解析（『已发送』≠『已确认』）」与用户裁定：口径「**链路级确认**」、
+落点「**core 定时任务**」、广播「**不 ACK，按超时 EXPIRED**」、`sent_at` 缺陷「**一并修复**」。
+
+### 68.1 调研结论（本段立论前提）
+
+- **协议 A 没有回执帧**：[PROTOCOL.md](PROTOCOL.md) §1.4 + §6.3 只实现 **6 种**上行帧
+  （`SerialFrameType`：`ff03` 心跳/状态、`ff04` 室外 GPS、`ff05` 击中、`ff06` 旧室内定位、`ff07` 迫击炮、
+  `ff0a` SIM 号），其余帧类型**一律丢弃**；**没有任何「指令已执行」的回执字节**。⇒ 设备是否**按指令执行**
+  在协议层**不可观测**，本段**不臆造**。
+- **`ACKED` 此前无生产写入者**：`ExerciseCommandState` 五态（`PENDING`/`SENT`/`ACKED`/`FAILED`/`EXPIRED`）中，
+  `ExerciseCommandRepository.markAcked(id, finishedAt)` 的 `SENT → ACKED` 流转**没有任何生产调用方**；
+  `CommandService.deliver()` 恒把落库行一次性置 `SENT`，于是 `ExerciseCommandExpiryTask` 把**每一条** SENT
+  都记成「无回音」（超时 → `EXPIRED` / `SENT_TIMEOUT`）。
+- **发现并核实一处既存缺陷**：`deliver()` 落库时 `sentAt` 传 `null`，且 `enqueue()` 的 INSERT 语句
+  **根本不包含 `sent_at` 列** ⇒ 生产上每条 SENT 行 `sent_at` 恒 `NULL`；而 `findSentBefore(deadline, …)`
+  的条件是 `sent_at < :deadline`，对 `NULL` **永不命中** ⇒ **`EXPIRED` 超时扫描在生产上从不触发**
+  （既有 `ExerciseCommandExpiryTaskIT` 因用 `markSent()` 手工造 `sent_at` 才通过，掩盖了它）。
+  该列与本段「`sent_at` 之后是否再收到心跳」的判据**同源**，故用户裁定**一并修复**。
+
+### 68.2 交付物（1 笔 = 6 文件，2 新 + 4 改）
+
+| 文件 | 内容 |
+|---|---|
+| `scds-core/.../repository/ExerciseCommandRepository.java`(改) | §68.1 缺陷修复：`enqueue()` 的 INSERT 补入 `sent_at` 列（`SqlTime.toDb(command.sentAt())`，null 安全）；新增 `findSent(int limit)`（`state='SENT'` 按 id 升序、**无时间窗**——服务链路级确认；与带时间窗的 `findSentBefore` 分工不同） |
+| `scds-core/.../command/CommandService.java`(改) | §68.1 缺陷修复：`deliver()` 落 SENT 时第 10 参数由 `null` 改 `now`（`sent_at = queued_at`，同源）；javadoc 声明二者同源及原因 |
+| `scds-core/.../command/CommandAckTask.java`(新) | 链路级确认节拍：`@Scheduled(fixedDelay=1000)` + `@Transactional`，扫 `findSent(200)`，对「目标马甲在 `sent_at` 之后仍上报过心跳」者 `markAcked(id, now)` |
+| `scds-app/.../config/CommandConfig.java`(改) | 装配 `CommandAckTask` bean（与 `CommandService` 同处置；`CommandAckTask` 依赖 `SituationStateService`，core 测试上下文无该 bean，故**不做 `@Component`**） |
+| `scds-core/src/test/.../command/CommandAckTaskTest.java`(新) | **9 例**无 DB 单测（Mockito 桩 `ExerciseCommandRepository` + `SituationStateService`，`Clock.fixed`） |
+| `scds-core/src/test/.../repository/ExerciseCommandRepositoryIT.java`(改) | **+2 例**：`enqueue_persistsSentAt_forAlreadySentRow`（SENT 行 `sent_at` 落库）、`findSent_returnsOnlySentRowsInIdOrder`（只挑 SENT、按 id 升序） |
+
+### 68.3 用例与判据（新增 9 例无 DB 单测 + 2 例 IT）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| `CommandAckTaskTest`（9） | 心跳在 `sent_at` 之后 | `markAcked(7L, NOW)` 被调用 |
+| | 心跳恰等于 `sent_at` | ACK（边界取 `!last.isBefore(sentAt)`） |
+| | 心跳早于 `sent_at` | 不 ACK |
+| | 马甲不在态势（`vestLink` 空） | 不 ACK |
+| | 马甲在册但从未心跳（`lastHeartbeatAt=null`） | 不 ACK |
+| | 广播（`vest_num=0`） | 不 ACK，且 `verifyNoInteractions(state)` |
+| | `sent_at` 缺失（`null`） | 不 ACK，且不碰 `state` |
+| | 无在途指令 | 不触发任何流转 |
+| | 混合批（已确认 + 未确认各一） | 只 ACK 已确认那条 |
+| `ExerciseCommandRepositoryIT`（+2） | 落 SENT 行携带 `sent_at` | 按场次过滤后 `queuedAt=QUEUED_1` 且 `sentAt=SENT_AT` |
+| | `findSent` 只回 `SENT` 且按 id 升序 | 三条（SENT/PENDING/SENT）只挑出两条，升序 |
+
+### 68.4 口径要点
+
+- **「确认」是链路级、不是执行级**：协议无回执帧（§68.1），故本段定义的 `ACKED` 是——指令字节下发
+  （`sent_at`）之后，目标马甲在链路上**再次上报过心跳**（`ff03` 轮询应答），即字节确已进入一条**双向可用、
+  且马甲仍在应答**的链路。它**不等于**「马甲已按指令执行」；契约/UI 标注「确认」时须带此限定。
+- **判据为什么成立**：`sent_at` 是「字节出去的那一刻」，此后收到该马甲心跳 ⇒ 下行通道与上行通道**都在工作**，
+  这是**协议 A 允许范围内最强的**「已送达」证据；不引入任何协议外字节、不轮询设备。
+- **两类不确认**（恒 `false`）：① **广播**（`vest_num=0`，一次发给全体）——「哪个马甲确认」语义不成立，
+  按用户裁定**不 ACK**，只等 `ExerciseCommandExpiryTask` 按超时判 `EXPIRED`；② **`sent_at` 缺失**——无从判定
+  「之后」，保守不确认。
+- **落 core、不落 gateway**：gateway 按设计是**哑管道**（`HardwareEventSink` 只把帧搬进核心侧队列，帧 → 业务
+  事件的翻译**全在核心侧**），「哪条指令、发给哪个马甲、什么时候」是**业务上下文**，故 `CommandAckTask` 落
+  `scds-core`，与 `SituationStateService`（态势单一所有者，暴露 `vestLink(int)`）同侧，读它即可。
+- **为什么不做 `@Component`**：`CommandAckTask` 依赖 `SituationStateService`，而 core 的测试上下文
+  （`TestCoreApplication`）**没有该 bean**（只补桩 `SituationSessionBinder` / `DeviceLinkAdmin`）。若标
+  `@Component` 会让 core 现存的一批 `@SpringBootTest` IT **因缺依赖而启动失败**。故与 `CommandService`
+  同样处置：**普通类**，装配点在 `scds-app` 的 `CommandConfig`。
+- **广播「不 ACK 只超时」依赖 §68.1 缺陷已修**：修复前 `sent_at` 恒 `NULL`、`findSentBefore` 永不命中，
+  广播连「超时 `EXPIRED`」也走不到；本段一并修复后，广播条目才真正会到期收敛。
+
+### 68.5 门禁与边界
+
+- **定向无 DB 单测**：`mvn -B -pl scds-core -am test -Dtest=CommandAckTaskTest -Dsurefire.failIfNoSpecifiedTests=false`
+  → `Tests run: 9, Failures: 0, Errors: 0, Skipped: 0`（`BUILD SUCCESS`）；
+- **全反应堆编译**：`mvn -B compile` → 8 模块全 `SUCCESS`（含 `scds-app` 的 `CommandConfig` 装配改动）；
+- **全量 `mvn test` 未重跑**：本机 **Docker Desktop Linux Engine daemon 未运行**（`docs/environments.md` §1），
+  `scds-local-mysql`（`127.0.0.1:13306`）不可达 ⇒ 依赖真 MySQL 的 `@SpringBootTest` 集成测试**当前跑不了**；
+  本段新增 **2 例 IT**（`ExerciseCommandRepositoryIT`）及其余 IT **未执行**。全量基准 **1151 项**，本段 **+11**
+  （9 单测 + 2 IT），**预期 1162 项**（core 611 → 622），**待 Docker 恢复后补验**。
+- **本原子任务 6 文件**（2 新 + 4 改），**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**
+  （先例段 53 / 段 61 / 段 62 / 段 65）。
+- **未改动**：协议冻结字节（`docs/PROTOCOL.md` 未动）、端口（HTTP 11001 / UWB TCP 12001）、
+  `docs/api/**` 契约、Flyway 迁移（`t_exercise_command` DDL 未改——`sent_at` 列**本就存在**且可空，
+  本段只修「写入侧漏写」，**未加列、未改迁移**）、`scds-solver`；**未新增依赖**。
+
+**未验项**：**未对着真实硬件 / 真实后端实例**验证——「马甲确实回了一个 `ff03` 心跳」这一链路级证据
+**在本机不可能产生**（无硬件、无 `scds-local-mysql`）；`EXPIRED` 超时收敛（含广播）修复后**未在真库上跑过**
+（依赖 Docker 恢复）；`CommandAckTask` 的 `@Scheduled` **仅在 `scds-app` 运行态生效**，本次**未起真实例**、
+自动节拍**未在真装配下观测**（单测为手工调 `tick()`，与 `ExerciseCommandExpiryTaskIT` 口径一致）。
+本段为**协议 A 范围内的最强推断**，不是「设备已执行」的证明。

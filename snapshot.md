@@ -1,7 +1,28 @@
 # scds-next 交接快照
 
 > 更新：2026-11-09，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**M6 集成层（客户端内集成 harness）：一条代表性端到端链跑通真实 HTTP / WS（testing 第 67 节）**——
+> 当前任务：**M3 COMMAND 硬件 ACK 解析：指令「链路级确认」（`SENT → ACKED`）＋ 修复 `sent_at` 未落库（testing 第 68 节）**——
+> 承段 67「下一段（候选）⑤ 硬件 ACK 解析（『已发送』≠『已确认』）」与用户裁定（口径「**链路级确认**」、落点「**core 定时任务**」、
+> 广播「**不 ACK，按超时 EXPIRED**」、`sent_at` 缺陷「**一并修复**」）。协议 A **没有回执帧**（`PROTOCOL.md §6.3` 只 6 种上行帧
+> `ff03/ff04/ff05/ff06/ff07/ff0a`），故 `ACKED` 定义为**链路级确认**：指令字节下发（`sent_at`）之后，目标马甲**再次上报过心跳**（`ff03`）
+> 即认为字节已进入一条双向可用链路；它**不等于**「马甲已执行」（不臆造协议外语义）。**一笔**（**6 文件 / 2 新 4 改**，
+> **破「≤3 文件」上限，已显式声明例外**）：`CommandAckTask.java`（**新**：`@Scheduled(1000ms)` + `@Transactional`，扫 `findSent(200)`，
+> 对「`sent_at` 之后仍心跳」者 `markAcked`）＋ `ExerciseCommandRepository.java`（**改**：`enqueue` 的 INSERT 补 `sent_at` 列 +
+> 新增无时间窗 `findSent(int)`）＋ `CommandService.java`（**改**：`deliver` 落 `sent_at = queued_at`）＋ `CommandConfig.java`（**改**：
+> 装配 `CommandAckTask` bean，与 `CommandService` 同处置）＋ `CommandAckTaskTest.java`（**新**，9 例无 DB 单测）＋
+> `ExerciseCommandRepositoryIT.java`（**改**，+2 例）。
+> **口径要点**：**协议 A 无回执帧 ⇒ 只能链路级推断，不臆造「设备已执行」**/ **广播（`vest_num=0`）不 ACK**，只等超时 `EXPIRED`
+> （`sent_at` 缺失亦不确认）/ **顺带修复既存缺陷**——`deliver` 落 `sent_at=null` 且 `enqueue` INSERT 不含该列 ⇒ 生产每条 SENT 行
+> `sent_at=NULL` ⇒ `findSentBefore(sent_at < :deadline)` **永不命中** ⇒ **`EXPIRED` 扫描在生产上从不触发**（IT 用 `markSent()` 造数掩盖）；
+> **落 core 不落 gateway**（网关是哑管道，ACK 判定需业务上下文）/ **非 `@Component`**（依赖 `SituationStateService`，core 测试上下文无该 bean，
+> 标 `@Component` 会让 core 现存 IT 启动失败）。
+> **本原子任务 6 文件（2 新 4 改），破「≤3 文件」上限，已按无人值守授权显式声明例外**（先例段 53 / 段 61 / 段 62 / 段 65）。
+> 门禁：`mvn -B compile` → 8 模块全绿；定向无 DB 单测 `CommandAckTaskTest` → **9/9 绿**（`BUILD SUCCESS`）；**全量 `mvn test` 未重跑**
+> （本机 **Docker Desktop Linux Engine daemon 未运行**，`scds-local-mysql` 不可达 ⇒ 真 MySQL 的 IT 跑不了），基准 **1151 项**，
+> 本段 **+11**（9 单测 + 2 IT），**预期 1162 项**（core 611 → 622；待 Docker 恢复补验）。
+> **未验项**：**未对着真实硬件 / 真实后端实例**验证（「马甲确实回了一个 `ff03` 心跳」在本机不可能产生）；`EXPIRED` / ACK 真库收敛未跑；
+> `@Scheduled` 自动节拍未在真装配下观测（单测为手工调 `tick()`，与 `ExerciseCommandExpiryTaskIT` 口径一致）。
+> 本任务紧接 **M6 集成层（客户端内集成 harness）：一条代表性端到端链跑通真实 HTTP / WS（testing 第 67 节）**——
 > 承段 66「下一段（候选）① 段 59~66 集成层走通」与用户裁定（集成方式「**客户端内集成 harness**」、覆盖范围「**先一条代表性端到端链**」）。
 > 段 59~66 各段均为**层内单测**（`*Api` 注入假传输 / 状态层注入假连接），**跨层接缝从未被验证**；本段搭**进程内假后端**
 > （真 `dart:io` `HttpServer` + 真 WS 升级），让**真** `ApiClient`（真 TCP）/ 真 `RefreshingApiTransport` / 真 `connectSituationSocket` /
@@ -1317,6 +1338,16 @@ M6 CLIENT-RESILIENCE 段 D（后半，指挥端「全体态势」页接 `Situati
 测试用假件 `TestSituationSocket`（**单订阅** `StreamController`）/`TestSituationConnector`（`silent` 档返回**永不落地** future），**未引入 mock 库**；
 **未验项**：**未对着真实后端实例跑过真实 WS 握手 / 真实 close `4000` / 真实增量归并**；本段两笔（代码 `8bdd6d7` / docs `3adf094`）
 **尚未入远端**（两次 `git push origin main` 均因 `Failed to connect to github.com:443` 网络失败）；详见 testing 第 44 节。
+段 68（M3 COMMAND 硬件 ACK 解析：链路级确认 `SENT → ACKED` + 修复 `sent_at` 未落库）证据：**本段改 Java（core + app）**——
+core `ExerciseCommandRepositoryIT` **+2 例**（IT，真库真事务：`enqueue` 落 `sent_at`、无时间窗 `findSent` 只挑 SENT 且按 id 升序）、
+core 新增 `CommandAckTaskTest` **9 例**（无 DB 单测：Mockito 桩 `ExerciseCommandRepository` + `SituationStateService`，`Clock.fixed`，
+`tick()` 手工驱动，与 `ExerciseCommandExpiryTaskIT` 同口径）；定向
+`mvn -B -pl scds-core -am test -Dtest=CommandAckTaskTest -Dsurefire.failIfNoSpecifiedTests=false` → **9/9 绿**（`BUILD SUCCESS`）、
+`mvn -B compile` → 8 模块全绿。**全量 `mvn test` 未重跑**——本机 **Docker Desktop Linux Engine daemon 未运行**、
+`scds-local-mysql`（`127.0.0.1:13306`）不可达 ⇒ 依赖真 MySQL 的 `@SpringBootTest` IT 当前跑不了；基准 **1151 项**，
+本段 **+11**（9 单测 + 2 IT），**预期 1162 项**（core 611 → 622），**待 Docker 恢复后补验**。
+**未验项**：无硬件 / 无真后端，「马甲确实回了一个 `ff03` 心跳」在本机不可能产生；`EXPIRED` / ACK 真库收敛未跑；
+`CommandAckTask` 的 `@Scheduled` 自动节拍未在真装配下观测。详见 testing 第 68 节。
 M3 LIFE 开演链路就绪 409 硬前置新增证据：core `ExerciseLifecycleServiceIT` **+1**（610 → 611，
 新增 `startExercise_withVestLinkClosed_isDeviceLinkNotOpen` 并加 `@BeforeEach openVestLink()` 补前置）；
 app `ExerciseLifecycleHttpIT` **+1**（331 → 333 中的一笔，新增 `startWithVestLinkClosedIsRejectedAs409`）、
