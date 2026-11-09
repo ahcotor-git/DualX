@@ -111,6 +111,9 @@ class LinksFeed extends ChangeNotifier {
     unawaited(_connectWs());
   }
 
+  /// 立刻拉一拍 HTTP（页面「刷新」等手动催取用）；在途时由单飞闸自动跳过。
+  Future<void> pollNow() => _pollTick();
+
   /// 停止：撤掉所有定时器并断开 WS（可再次 [start]）。
   void stop() {
     if (_disposed) {

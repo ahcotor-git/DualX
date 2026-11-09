@@ -37,6 +37,7 @@ import '../shared/auth/refreshing_api_transport.dart';
 import '../shared/auth/session_store.dart';
 import '../shared/config/connection_config.dart';
 import '../shared/config/connection_config_store.dart';
+import '../shared/state/links_socket.dart';
 import '../shared/state/situation_socket.dart';
 import 'client_factory.dart';
 
@@ -219,6 +220,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
                             ),
                             onOpenLinks: () => _openLinks(
                               navigator: navigator,
+                              baseUri: baseUri,
                               devices: devices,
                             ),
                           ),
@@ -867,17 +869,20 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
     );
   }
 
-  /// 段 62：打开「链路与基站」页（device 域链路状态与开关 + UWB 基站）。
+  /// 段 62 + 段 65：打开「链路与基站」页（device 域链路状态与开关 + UWB 基站）。
   ///
-  /// 八个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// 八个数据端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
   /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
-  /// 令牌到期时自动续期并重试一次。
+  /// 令牌到期时自动续期并重试一次。段 65 增 `connect` 端口：链路状态交
+  /// `LinksFeed` 双通道，WS 主通道走 `ws(s)://{host}:11001/ws/v1/devices/links`，
+  /// `GET /links` 作低频兜底轮询——契约明写「WS 不替代 `GET /links`」。
   ///
   /// 注：串口 / UWB 的开启请求体只带非 `null` 键（`LinkOpenSerialRequest` /
   /// `LinkOpenUwbRequest` 的 `toJson` 口径）——留空即走服务端默认
   /// （115200 / false / `0.0.0.0` / 12001），本层不臆造缺省值。
   void _openLinks({
     required NavigatorState navigator,
+    required Uri baseUri,
     required DeviceApi devices,
   }) {
     final AccountSession? session = _account;
@@ -890,6 +895,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
         builder: (BuildContext pageContext) => LinkPanelPage(
           session: session,
           loadLinks: () => devices.getLinks(token: _account!.accessToken),
+          connect: () => connectLinkSocket(
+            baseUri: baseUri,
+            accessToken: _account!.accessToken,
+          ),
           loadPorts: () => devices.listSerialPorts(token: _account!.accessToken),
           openSerial: (LinkOpenSerialRequest request) => devices.openVestSerial(
             token: _account!.accessToken,

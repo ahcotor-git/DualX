@@ -4,12 +4,18 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/device_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/state/links_feed.dart';
+import '../../shared/state/links_socket.dart';
 
 /// 供测试与后续集成定位的控件键（段 62：device 域链路与基站 UI）。
 const Key kLinkPanelAccountKey = Key('linkPanel.account');
 const Key kLinkPanelRefreshButtonKey = Key('linkPanel.refreshButton');
 const Key kLinkPanelLoadingKey = Key('linkPanel.loading');
 const Key kLinkPanelErrorKey = Key('linkPanel.error');
+
+/// 段 65：链路状态双通道的通道描述与状态层错误出口（与「全体态势」页同口径）。
+const Key kLinkPanelChannelKey = Key('linkPanel.channel');
+const Key kLinkPanelFeedErrorKey = Key('linkPanel.feedError');
 const Key kLinkPanelPortsEmptyKey = Key('linkPanel.ports.empty');
 const Key kLinkPanelAnchorsEmptyKey = Key('linkPanel.anchors.empty');
 
@@ -89,20 +95,23 @@ typedef AnchorWriter = Future<Anchor> Function(int anchorId, AnchorUpsertRequest
 /// 基站配置对话框产物：编号 + 请求体（`AnchorUpsertRequest` 本身不含编号，编号走路径）。
 typedef AnchorDraft = ({int anchorId, AnchorUpsertRequest request});
 
-/// 链路与基站页（M6 CLIENT-WINDOWS 段 62）——device 域后半的指挥端接线。
+/// 链路与基站页（M6 CLIENT-WINDOWS 段 62 + 段 65）——device 域后半的指挥端接线。
 ///
 /// 覆盖 `docs/api/paths/device.yaml` 17 端点中、段 61 未接的 **8 个**：
 /// 链路状态 1（`getLinks`）、本机串口 1（`serial-ports`）、串口链路开关 2
 /// （`linkSerial` POST/DELETE）、UWB 链路开关 2（`linkUwb` POST/DELETE）、
-/// UWB 基站 2（`anchors` 列表 + 逐台 upsert）。单马甲链路（`getVestLink`）与
-/// `watchLinks` WS 状态层**另开段**。
+/// UWB 基站 2（`anchors` 列表 + 逐台 upsert）。单马甲链路（`getVestLink`）**另开段**；
+/// `watchLinks`（`wsLinks`）WS 状态层已由段 65 接到本页「链路状态」区（见下）。
 ///
 /// 口径：
+/// - **链路状态交 [LinksFeed] 双通道驱动**：WS 主通道 + `GET /links` 低频兜底
+///   （WS 在线仍须 ≤10s 轮询，契约明写「WS 不替代 `GET /links`」）；页面自建并在
+///   `dispose` 释放——状态随页面生灭，不跨会话泄漏；
 /// - **状态只读展示 + 开关交服务端判定**：`OPENING` 是异步打开的中间态、`ERROR` 不计入
 ///   「正在用」（据 `errorMessage` 呈现）；开启 / 关闭按钮不据本地轮询状态禁用——
 ///   已开再开由服务端回 409 `DEVICE_LINK_ALREADY_OPEN`，端口占用回 409
 ///   `DEVICE_LINK_SERIAL_BUSY`，页面按错误码如实提示；
-/// - **写后重拉 `GET /links`**（不拿单条返回硬合并：开关可能同时改动两族链路）；
+/// - **写后催一拍链路状态**（[LinksFeed.pollNow]，不拿单条返回硬合并：开关可能同时改动两族链路）；
 /// - **串口必须先关闭再重开**：契约明确「不隐式先关再开」，切换接入方式亦须先关；
 /// - **基站坐标是归一化 0~1**（`xPx` / `yPx`，原点左上），**不是像素**，前端不做任何翻转；
 /// - **`AnchorUpsertRequest` 是整体替换**（`toJson` 恒输出四键，服务端对缺席项落
@@ -112,6 +121,7 @@ class LinkPanelPage extends StatefulWidget {
     super.key,
     required this.session,
     required this.loadLinks,
+    required this.connect,
     required this.loadPorts,
     required this.openSerial,
     required this.closeSerial,
@@ -124,7 +134,12 @@ class LinkPanelPage extends StatefulWidget {
   /// 已登录的账号会话（提供身份快照）。
   final AccountSession session;
 
+  /// HTTP 兜底轮询（生产接线见 `app/console_app.dart`：`DeviceApi.getLinks`）。
   final LinkStatusReader loadLinks;
+
+  /// WS 主通道连接器（生产接线：`connectLinkSocket`，令牌由调用方绑定）。
+  final LinkSocketConnector connect;
+
   final SerialPortLister loadPorts;
   final SerialLinkOpener openSerial;
   final SerialLinkCloser closeSerial;
@@ -138,7 +153,9 @@ class LinkPanelPage extends StatefulWidget {
 }
 
 class _LinkPanelPageState extends State<LinkPanelPage> {
-  List<LinkStatus>? _links;
+  /// 链路状态双通道（WS 主通道 + `GET /links` 兜底轮询）；随页面生灭。
+  late final LinksFeed _feed;
+
   List<SerialPortInfo>? _ports;
   List<Anchor>? _anchors;
 
@@ -149,20 +166,33 @@ class _LinkPanelPageState extends State<LinkPanelPage> {
   @override
   void initState() {
     super.initState();
+    _feed = LinksFeed(fetch: widget.loadLinks, connect: widget.connect)..start();
     _load();
   }
 
-  /// 拉链路状态与基站台账（串口列表按需在开链对话框前读取）。
+  @override
+  void dispose() {
+    _feed.dispose();
+    super.dispose();
+  }
+
+  /// 拉基站台账（链路状态已交 [_feed] 双通道驱动，本页不再直读）。
   Future<void> _load() => _guard(() async {
-        final List<LinkStatus> links = await widget.loadLinks();
         final List<Anchor> anchors = await widget.loadAnchors();
         if (!mounted) {
           return;
         }
-        setState(() {
-          _links = links;
-          _anchors = anchors;
-        });
+        setState(() => _anchors = anchors);
+      });
+
+  /// 手动刷新：重拉基站台账 + 立刻催一拍链路状态（[LinksFeed] 单飞，在途时自动跳过）。
+  Future<void> _refresh() => _guard(() async {
+        final List<Anchor> anchors = await widget.loadAnchors();
+        if (!mounted) {
+          return;
+        }
+        setState(() => _anchors = anchors);
+        await _feed.pollNow();
       });
 
   /// 读取本机串口列表并缓存；失败返回 `null`（错误已落 [_error]）。
@@ -177,13 +207,12 @@ class _LinkPanelPageState extends State<LinkPanelPage> {
     return ports;
   }
 
-  /// 写成功后重拉 `GET /links` 并以 SnackBar 回执。
+  /// 写成功后催一拍链路状态（[LinksFeed.pollNow]）并以 SnackBar 回执。
   Future<void> _reloadLinks(String notice) async {
-    final List<LinkStatus> links = await widget.loadLinks();
+    await _feed.pollNow();
     if (!mounted) {
       return;
     }
-    setState(() => _links = links);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(notice)));
   }
 
@@ -365,7 +394,6 @@ class _LinkPanelPageState extends State<LinkPanelPage> {
 
   @override
   Widget build(BuildContext context) {
-    final List<LinkStatus>? links = _links;
     final List<SerialPortInfo>? ports = _ports;
     final List<Anchor>? anchors = _anchors;
     return Scaffold(
@@ -374,7 +402,7 @@ class _LinkPanelPageState extends State<LinkPanelPage> {
         actions: <Widget>[
           TextButton(
             key: kLinkPanelRefreshButtonKey,
-            onPressed: _busy ? null : _load,
+            onPressed: _busy ? null : _refresh,
             child: const Text('刷新'),
           ),
         ],
@@ -386,70 +414,88 @@ class _LinkPanelPageState extends State<LinkPanelPage> {
         label: const Text('配置基站'),
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: <Widget>[
-            Text(
-              _describeAccount(widget.session),
-              key: kLinkPanelAccountKey,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kLinkPanelErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
-            const Divider(height: 32),
-            _sectionTitle('链路状态（三种链路恒定各一条）'),
-            if (links == null)
-              const Text('加载中…', key: kLinkPanelLoadingKey)
-            else
-              ...links.map(_linkRow),
-            const SizedBox(height: 16),
-            _sectionTitle('链路开关'),
-            _switchRow(
-              label: '马甲串口链路（SERIAL_VEST）',
-              openKey: kLinkSerialOpenKey,
-              closeKey: kLinkSerialCloseKey,
-              onOpen: _openSerialDialog,
-              onClose: _closeSerial,
-            ),
-            _switchRow(
-              label: 'UWB 链路（TCP_SERVER / SERIAL 二选一）',
-              openKey: kLinkUwbOpenKey,
-              closeKey: kLinkUwbCloseKey,
-              onOpen: _openUwbDialog,
-              onClose: _closeUwb,
-            ),
-            const SizedBox(height: 16),
-            _sectionTitle('可用串口（开启链路时读取）'),
-            if (ports == null)
-              const Text('尚未读取')
-            else if (ports.isEmpty)
-              const Text('本机没有可用串口', key: kLinkPanelPortsEmptyKey)
-            else
-              ...List<Widget>.generate(
-                ports.length,
-                (int index) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Text(
-                    _describePort(ports[index]),
-                    key: serialPortRowKey(index),
-                  ),
+        child: ListenableBuilder(
+          listenable: _feed,
+          builder: (BuildContext context, Widget? child) {
+            // 「首帧」指任一通道**被采纳**过：在此之前空列表不代表「三条链路都没有」。
+            final bool gotFirstFrame =
+                _feed.pollSuccessCount > 0 || _feed.wsFrameCount > 0;
+            final List<LinkStatus> links = _feed.links;
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: <Widget>[
+                Text(
+                  _describeAccount(widget.session),
+                  key: kLinkPanelAccountKey,
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-              ),
-            const SizedBox(height: 16),
-            _sectionTitle('UWB 基站（编号 1..8）'),
-            if (anchors == null)
-              const Text('加载中…')
-            else if (anchors.isEmpty)
-              const Text('还没有配置的基站', key: kLinkPanelAnchorsEmptyKey)
-            else
-              ...anchors.map(_anchorRow),
-          ],
+                if (_error != null) ...<Widget>[
+                  const SizedBox(height: 8),
+                  Text(
+                    _error!,
+                    key: kLinkPanelErrorKey,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                ],
+                const Divider(height: 32),
+                _sectionTitle('链路状态（三种链路恒定各一条）'),
+                Text(_describeChannel(_feed.wsConnected), key: kLinkPanelChannelKey),
+                if (_feed.lastError != null) ...<Widget>[
+                  const SizedBox(height: 4),
+                  Text(
+                    _feed.lastError!,
+                    key: kLinkPanelFeedErrorKey,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                ],
+                if (!gotFirstFrame)
+                  const Text('加载中…', key: kLinkPanelLoadingKey)
+                else
+                  ...links.map(_linkRow),
+                const SizedBox(height: 16),
+                _sectionTitle('链路开关'),
+                _switchRow(
+                  label: '马甲串口链路（SERIAL_VEST）',
+                  openKey: kLinkSerialOpenKey,
+                  closeKey: kLinkSerialCloseKey,
+                  onOpen: _openSerialDialog,
+                  onClose: _closeSerial,
+                ),
+                _switchRow(
+                  label: 'UWB 链路（TCP_SERVER / SERIAL 二选一）',
+                  openKey: kLinkUwbOpenKey,
+                  closeKey: kLinkUwbCloseKey,
+                  onOpen: _openUwbDialog,
+                  onClose: _closeUwb,
+                ),
+                const SizedBox(height: 16),
+                _sectionTitle('可用串口（开启链路时读取）'),
+                if (ports == null)
+                  const Text('尚未读取')
+                else if (ports.isEmpty)
+                  const Text('本机没有可用串口', key: kLinkPanelPortsEmptyKey)
+                else
+                  ...List<Widget>.generate(
+                    ports.length,
+                    (int index) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Text(
+                        _describePort(ports[index]),
+                        key: serialPortRowKey(index),
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 16),
+                _sectionTitle('UWB 基站（编号 1..8）'),
+                if (anchors == null)
+                  const Text('加载中…')
+                else if (anchors.isEmpty)
+                  const Text('还没有配置的基站', key: kLinkPanelAnchorsEmptyKey)
+                else
+                  ...anchors.map(_anchorRow),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -889,6 +935,10 @@ String _describeAccount(AccountSession session) {
   final List<String> roles = session.user?.roles ?? const <String>[];
   return roles.isEmpty ? name : '$name（${roles.join(' / ')}）';
 }
+
+/// 链路状态双通道的通道描述（与「全体态势」页同口径）：未连 2s 轮询档，已连 ≤10s 兜底档。
+String _describeChannel(bool wsConnected) =>
+    wsConnected ? '实时（WS 已连，兜底轮询 ≤10s）' : '轮询中（WS 未连，每 2s）';
 
 /// 契约里除 `kind` / `state` 外都可选——缺失时如实显示破折号，不臆造 0 / 空串。
 String _describeLink(LinkStatus link) => '${link.kind.wire}'

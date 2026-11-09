@@ -37,6 +37,7 @@ import 'package:scds_client/shared/api/situation_models.dart';
 import 'package:scds_client/shared/auth/session_store.dart';
 import 'package:scds_client/shared/config/connection_config.dart';
 import 'package:scds_client/shared/config/connection_config_store.dart';
+import 'package:scds_client/shared/state/links_socket.dart';
 import 'package:scds_client/shared/state/situation_socket.dart';
 
 /// M6 CLIENT-WINDOWS 段 5：指挥端外壳装配 + 连接配置页健康诊断 + 账号登录页 + 队伍汇总总览页。
@@ -1015,13 +1016,17 @@ void main() {
   }) =>
       Anchor(anchorId: anchorId, name: name, xPx: xPx, yPx: yPx, enabled: enabled);
 
-  /// 段 62：链路与基站页直接挂树——八个端口都是闭包桩，**不发真实请求**。
+  /// 段 62：链路与基站页直接挂树——九个端口都是闭包桩，**不发真实请求**。
+  ///
+  /// 段 65：`connect` 缺省为**永不落地**的连接器（把用例按在「WS 未连」的纯轮询档，
+  /// 与段 62 既有用例的断言口径一致）。
   ///
   /// 视口放大到一屏容纳全部小节（链路状态 / 开关 / 串口 / 基站），
   /// 免得 `ListView` 懒构建漏掉控件。
   Future<void> pumpLinks(
     WidgetTester tester, {
     LinkStatusReader? loadLinks,
+    LinkSocketConnector? connect,
     SerialPortLister? loadPorts,
     SerialLinkOpener? openSerial,
     SerialLinkCloser? closeSerial,
@@ -1039,6 +1044,7 @@ void main() {
         home: LinkPanelPage(
           session: accountSession(),
           loadLinks: loadLinks ?? () async => <LinkStatus>[],
+          connect: connect ?? (() => Completer<LinkSocket>().future),
           loadPorts: loadPorts ?? () async => <SerialPortInfo>[],
           openSerial: openSerial ??
               (LinkOpenSerialRequest request) async => fail('未预期的开启串口链路'),
@@ -6828,6 +6834,119 @@ void main() {
     });
   });
 
+  /// 段 65：链路状态区接 `LinksFeed` 双通道（WS 主通道 + `GET /links` 低频兜底）。
+  ///
+  /// 用例注入假 `fetch` 与假连接器——**不建真实连接**；判据是三条：
+  /// WS 与 HTTP 同源归并（整表快照）、WS 不得替代 HTTP 兜底轮询、
+  /// 状态层错误据实提示（未获首帧时如实显示「加载中」）。
+  group('指挥端链路与基站状态层（段 65）', () {
+    testWidgets('WS 未连：按 HTTP 轮询展示链路状态，通道提示为轮询中',
+        (WidgetTester tester) async {
+      final TestLinkConnector connector = TestLinkConnector(silent: true);
+      await pumpLinks(
+        tester,
+        connect: connector.call,
+        loadLinks: () async => <LinkStatus>[
+          linkStatusOf(LinkKind.serialVest, state: LinkState.open, target: 'COM7'),
+          linkStatusOf(LinkKind.uwbTcpServer),
+          linkStatusOf(LinkKind.uwbSerial),
+        ],
+      );
+
+      expect(
+        tester.widget<Text>(find.byKey(kLinkPanelChannelKey)).data,
+        contains('WS 未连'),
+      );
+      expect(find.byKey(kLinkPanelLoadingKey), findsNothing);
+      expect(
+        tester.widget<Text>(find.byKey(linkStatusRowKey(LinkKind.serialVest))).data,
+        contains('COM7'),
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('WS 连上：通道切为实时，且收到的整表快照同源归并进链路状态',
+        (WidgetTester tester) async {
+      final TestLinkConnector connector = TestLinkConnector();
+      await pumpLinks(
+        tester,
+        connect: connector.call,
+        loadLinks: () async => <LinkStatus>[
+          linkStatusOf(LinkKind.serialVest),
+          linkStatusOf(LinkKind.uwbTcpServer),
+          linkStatusOf(LinkKind.uwbSerial),
+        ],
+      );
+
+      expect(
+        tester.widget<Text>(find.byKey(kLinkPanelChannelKey)).data,
+        contains('WS 已连'),
+      );
+
+      connector.last.emit(jsonEncode(<Object>[
+        <String, dynamic>{'kind': 'SERIAL_VEST', 'state': 'OPEN', 'target': 'COM9'},
+        <String, dynamic>{'kind': 'UWB_TCP_SERVER', 'state': 'CLOSED'},
+        <String, dynamic>{'kind': 'UWB_SERIAL', 'state': 'CLOSED'},
+      ]));
+      // 一拍投递流事件（异步），一拍重建。
+      await tester.pump();
+      await tester.pump();
+
+      final Text serial =
+          tester.widget<Text>(find.byKey(linkStatusRowKey(LinkKind.serialVest)));
+      expect(serial.data, contains('OPEN'));
+      expect(serial.data, contains('COM9'));
+
+      await unmount(tester);
+    });
+
+    testWidgets('WS 已连仍保留 GET /links 低频兜底（≤10s 一拍）', (WidgetTester tester) async {
+      final TestLinkConnector connector = TestLinkConnector();
+      int calls = 0;
+      await pumpLinks(
+        tester,
+        connect: connector.call,
+        loadLinks: () async {
+          calls++;
+          return <LinkStatus>[
+            linkStatusOf(LinkKind.serialVest),
+            linkStatusOf(LinkKind.uwbTcpServer),
+            linkStatusOf(LinkKind.uwbSerial),
+          ];
+        },
+      );
+
+      // start 立刻拉一拍；WS 随后连上，2s 轮询档被 ≤10s 兜底档取代。
+      expect(calls, 1);
+      expect(
+        tester.widget<Text>(find.byKey(kLinkPanelChannelKey)).data,
+        contains('WS 已连'),
+      );
+
+      await tester.pump(const Duration(seconds: 10));
+      expect(calls, 2);
+
+      await unmount(tester);
+    });
+
+    testWidgets('拉取失败：状态层错误出口如实提示，且未获首帧时显示加载中',
+        (WidgetTester tester) async {
+      await pumpLinks(
+        tester,
+        loadLinks: () async => throw apiFailure(503, ApiErrorCode.instanceNotReady),
+      );
+
+      expect(
+        tester.widget<Text>(find.byKey(kLinkPanelFeedErrorKey)).data,
+        contains(ApiErrorCode.instanceNotReady),
+      );
+      expect(find.byKey(kLinkPanelLoadingKey), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
   group('指挥端链路与基站接线（段 62）', () {
     testWidgets('汇总页「链路」入口：进入链路与基站页并按登录令牌拉链路状态与基站',
         (WidgetTester tester) async {
@@ -7082,5 +7201,63 @@ class TestSituationConnector {
     final TestSituationSocket socket = TestSituationSocket();
     opened.add(socket);
     return Future<SituationSocket>.value(socket);
+  }
+}
+
+/// 段 65：假链路 WS 连接——手动投喂下行帧、记录上行帧，**不建真实连接**。
+class TestLinkSocket implements LinkSocket {
+  // 单订阅控制器（与 `links_feed_test.dart` 一致）：仅 `LinksFeed` 一个监听者。
+  final StreamController<String> _controller = StreamController<String>();
+
+  /// 客户端上行的文本帧（保活 `PING`）。
+  final List<String> sent = <String>[];
+
+  int closeCallCount = 0;
+
+  @override
+  Stream<String> get messages => _controller.stream;
+
+  @override
+  void send(String text) => sent.add(text);
+
+  @override
+  int? get closeCode => null;
+
+  @override
+  String? get closeReason => null;
+
+  @override
+  Future<void> close([int? code, String? reason]) async {
+    closeCallCount++;
+    if (!_controller.isClosed) {
+      await _controller.close();
+    }
+  }
+
+  /// 投喂一帧下行文本（与 `GET /links` 同构的整表快照）。
+  void emit(String raw) {
+    if (!_controller.isClosed) {
+      _controller.add(raw);
+    }
+  }
+}
+
+/// 段 65：假链路连接器；`silent=true` 时返回**永不落地**的 future（按在「WS 未连」档）。
+class TestLinkConnector {
+  TestLinkConnector({this.silent = false});
+
+  final bool silent;
+
+  final List<TestLinkSocket> opened = <TestLinkSocket>[];
+
+  TestLinkSocket get last => opened.last;
+
+  Future<LinkSocket> call() {
+    if (silent) {
+      return Completer<LinkSocket>().future;
+    }
+    final TestLinkSocket socket = TestLinkSocket();
+    opened.add(socket);
+    return Future<LinkSocket>.value(socket);
   }
 }
