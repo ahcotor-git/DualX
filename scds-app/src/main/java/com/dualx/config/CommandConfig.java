@@ -1,5 +1,6 @@
 package com.dualx.config;
 
+import com.dualx.core.command.CommandAckTask;
 import com.dualx.core.command.CommandService;
 import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.map.MapLedgerService;
@@ -43,5 +44,19 @@ public class CommandConfig {
                                          Clock clock) {
         return new CommandService(lifecycle, situations, planRoster, deviceLinkAdmin, commands, logs,
                 accounts, mapLedger, situationState, clock);
+    }
+
+    /**
+     * 指令链路级确认的节拍（{@link CommandAckTask}）：把「已发送」推进到「已确认」。
+     *
+     * <p>它同时读两个来源——命令队列（{@code ExerciseCommandRepository}）与态势的「每马甲最近心跳」
+     * （{@link SituationStateService}）。两者都是容器里的既有单例，直接注入即可；本配置不引入新依赖，
+     * 也无装配环。{@code @Scheduled} 随 {@code ScdsNextApplication} 的 {@code @EnableScheduling} 生效。</p>
+     */
+    @Bean
+    public CommandAckTask commandAckTask(ExerciseCommandRepository commands,
+                                         SituationStateService situationState,
+                                         Clock clock) {
+        return new CommandAckTask(commands, situationState, clock);
     }
 }

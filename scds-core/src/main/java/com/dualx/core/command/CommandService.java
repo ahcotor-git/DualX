@@ -279,7 +279,14 @@ public final class CommandService {
                 auditType, detail);
     }
 
-    /** 下发 + 落队列 + 记日志（{@link #dispatch} 与 {@link #broadcast} 共用的尾段）。 */
+    /**
+     * 下发 + 落队列 + 记日志（{@link #dispatch} 与 {@link #broadcast} 共用的尾段）。
+     *
+     * <p><b>{@code queued_at} 与 {@code sent_at} 同源</b>：本段走「先发字节、成功后一次性落
+     * {@code SENT}」，队列行落定时字节已经出去，故两个时刻都是那一瞬的 {@code now}。{@code sent_at}
+     * 不是可有可无的装饰——超时作废（{@code sent_at < deadline}）与链路级确认（{@code sent_at} 之后
+     * 是否再收到该马甲心跳）都以它为准，漏写会让「已发送 ≠ 已确认」的两条收敛路径同时失效。</p>
+     */
     private Ack deliver(Exercise exercise, int vestNum, String command, byte[] frame, String payloadJson,
                         UUID operatorId, ExerciseLogType auditType, String detail) {
         Instant now = clock.instant();
@@ -299,7 +306,7 @@ public final class CommandService {
         String operatorName = accounts.findById(operatorId).map(account -> account.username()).orElse(null);
         commands.enqueue(new ExerciseCommand(0L, exercise.id(), vestNum, command,
                 ExerciseCommandState.SENT, payloadJson, downlinkHex, operatorName,
-                now, null, null, null));
+                now, now, null, null));
         if (auditType != null) {
             // 广播指令不指向具体马甲：日志的 vest_num 记 NULL（与建表注释「系统级日志为 NULL」一致）
             logs.append(new ExerciseLogEntry(0L, exercise.id(), now, auditType,

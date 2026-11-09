@@ -44,14 +44,22 @@ public class ExerciseCommandRepository {
                 .optional();
     }
 
-    /** 入队（PENDING）。{@code command.id()} 被忽略，由库自增。 */
+    /**
+     * 入队。{@code command.id()} 被忽略，由库自增。
+     *
+     * <p>同时写入 {@code sent_at}：{@code CommandService} 走「先发字节、成功后一次性落
+     * {@code SENT}」，那条路径的 {@code queued_at} 与 {@code sent_at} 同源（同一瞬的
+     * {@code clock.instant()}）；{@code PENDING} 派发路径则传 {@code null}。此列是超时扫描
+     * （{@code sent_at < deadline}）与链路级确认（{@code sent_at} 之后是否再收到心跳）的
+     * 共同依据，漏写会让两条路都失效。</p>
+     */
     public int enqueue(ExerciseCommand command) {
         return jdbc.sql("""
                         INSERT INTO t_exercise_command
                             (exercise_id, vest_num, command, state, payload_json, downlink_hex,
-                             operator_name, queued_at)
+                             operator_name, queued_at, sent_at)
                         VALUES (:exerciseId, :vestNum, :command, :state, :payloadJson, :downlinkHex,
-                                :operatorName, :queuedAt)
+                                :operatorName, :queuedAt, :sentAt)
                         """)
                 .param("exerciseId", command.exerciseId().toString())
                 .param("vestNum", command.vestNum())
@@ -61,6 +69,7 @@ public class ExerciseCommandRepository {
                 .param("downlinkHex", command.downlinkHex())
                 .param("operatorName", command.operatorName())
                 .param("queuedAt", SqlTime.toDb(command.queuedAt()))
+                .param("sentAt", SqlTime.toDb(command.sentAt()))
                 .update();
     }
 
@@ -72,6 +81,24 @@ public class ExerciseCommandRepository {
         return jdbc.sql("SELECT " + COLUMNS
                         + " FROM t_exercise_command WHERE state = :state ORDER BY queued_at LIMIT :limit")
                 .param("state", ExerciseCommandState.PENDING.name())
+                .param("limit", limit)
+                .query(ExerciseCommandRepository::map)
+                .list();
+    }
+
+    /**
+     * 当前「已发未确认」的指令（{@code state='SENT'}），按 id 升序。
+     *
+     * <p>与 {@link #findSentBefore(Instant, int)} 的区别是口径：那个带时间窗、服务于**超时作废**；
+     * 这个不带时间窗、服务于**链路级确认**——只要还没被别的路径推进过，就要逐条判它是否已收到
+     * 目标马甲的下一次上报。用 {@code ix_exercise_command_pending (state, queued_at)} 命中。</p>
+     *
+     * @param limit 单拍最多挑出多少条，避免积压时把整个队列读进内存
+     */
+    public List<ExerciseCommand> findSent(int limit) {
+        return jdbc.sql("SELECT " + COLUMNS
+                        + " FROM t_exercise_command WHERE state = :sent ORDER BY id LIMIT :limit")
+                .param("sent", ExerciseCommandState.SENT.name())
                 .param("limit", limit)
                 .query(ExerciseCommandRepository::map)
                 .list();

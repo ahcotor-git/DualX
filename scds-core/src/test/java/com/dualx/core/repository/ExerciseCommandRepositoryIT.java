@@ -81,6 +81,40 @@ class ExerciseCommandRepositoryIT {
     }
 
     @Test
+    void enqueue_persistsSentAt_forAlreadySentRow() {
+        UUID exerciseId = UuidV7.generate();
+        // 一次性落 SENT 的路径（CommandService.deliver）：queued_at 与 sent_at 同源
+        commands.enqueue(new ExerciseCommand(0L, exerciseId, 1001, "DIE", ExerciseCommandState.SENT,
+                "{}", "0009ff03e9a1affa", "指挥员", QUEUED_1, SENT_AT, null, null));
+
+        ExerciseCommand found = commands.findSent(10).stream()
+                .filter(c -> c.exerciseId().equals(exerciseId))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(found.state()).isEqualTo(ExerciseCommandState.SENT);
+        assertThat(found.queuedAt()).isEqualTo(QUEUED_1);
+        assertThat(found.sentAt()).isEqualTo(SENT_AT);
+    }
+
+    @Test
+    void findSent_returnsOnlySentRowsInIdOrder() {
+        UUID exerciseId = UuidV7.generate();
+        commands.enqueue(new ExerciseCommand(0L, exerciseId, 1001, "DIE", ExerciseCommandState.SENT,
+                "{}", "00", null, QUEUED_1, SENT_AT, null, null));
+        commands.enqueue(queued(exerciseId, 1002, "RELOAD", QUEUED_2));
+        commands.enqueue(new ExerciseCommand(0L, exerciseId, 1003, "DIE", ExerciseCommandState.SENT,
+                "{}", "00", null, QUEUED_3, SENT_AT, null, null));
+
+        List<ExerciseCommand> sent = commands.findSent(10).stream()
+                .filter(c -> c.exerciseId().equals(exerciseId))
+                .toList();
+
+        // 只挑 SENT（排除中间那条 PENDING），且按 id 升序
+        assertThat(sent).extracting(ExerciseCommand::vestNum).containsExactly(1001, 1003);
+    }
+
+    @Test
     void findById_unknown_returnsEmpty() {
         assertThat(commands.findById(987_654_321L)).isEmpty();
     }
