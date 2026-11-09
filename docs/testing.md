@@ -4244,3 +4244,60 @@ device 域**仍未接线**——每马甲链路状态（`getVestLink`）与 `wat
 集成层（`VestLedgerPage` + `DeviceApi.getVestLink` + 真实 `ApiClient` + 真实 HTTP）**未走通**；
 device 域**仍未接线**——`watchLinks` WS 状态层（链路状态实时推送）**另开段**。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 64. M6 CLIENT-WINDOWS 续段：device 域收口（二）——链路状态 `watchLinks` WS 状态层（双通道：WS + 兜底 Poll）
+
+承段 60「device 域共享层刻意不含 WS，连接 / 重连归状态层」与段 62「链路页已接线」，本段把 device 域**唯一一条 WS**
+——链路状态推送（`watchLinks`）——落成**共享状态层**：WS 与 HTTP 兜底轮询**双通道**，两通道载荷**同构**
+（都是完整 `LinkStatus` 列表快照），共用一套「整表替换」逻辑。**UI 接线另开段**（承段 44 态势 WS 状态层先例）。
+
+### 64.1 交付物（1 笔 = 4 文件，3 新 + 1 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/shared/state/links_socket.dart`(新) | 链路 WS 窄接口 `LinkSocket`（`messages`/`send`/`closeCode`/`closeReason`/`close`）+ `typedef LinkSocketConnector = Future<LinkSocket> Function()`（**无续传参数**：链路通道无 `revision`）+ 生产实现 `connectLinkSocket({baseUri, accessToken})`（`ws(s)://{host}:11001/ws/v1/devices/links`，子协议 `kLinksSubprotocol`，`Authorization: Bearer`）+ `IoWebSocketLinkSocket` 适配器 |
+| `lib/shared/state/links_feed.dart`(新) | 双通道调度器 `LinksFeed extends ChangeNotifier`：同源**整表替换**（`Map<LinkKind, LinkStatus>`）+ 双节奏轮询（WS 未连 2s / 已连 10s，两定时器互斥）+ 15s 上行 `PING` 保活 + 3s 退避重连 + HTTP 单飞 + 退出竞态；`links`（按 `LinkKind` 声明序）/`link(kind)` 只读快照；计数 `pollSuccessCount`/`wsFrameCount`/`discardedWsFrames`/`connectAttempts` |
+| `test/shared/state/links_feed_test.dart`(新) | 假时钟（`testWidgets`）下 **4 组 11 例** + `FakeLinkSocket` / `FakeLinkConnector`（可注入失败 / 闸门挂起） |
+| `lib/shared/api/api_contract.dart`(改) | 增常量 `kLinksSubprotocol = 'scds.links.v1'`（紧邻既有 `kSituationSubprotocol`；取值与 `paths/device.yaml#/wsLinks` 的 `x-websocket.subprotocol` 逐字一致） |
+
+### 64.2 用例与判据（新增 11 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| HTTP 通道（WS 未连，按 pollInterval）(3) | start 立刻拉一拍、随后 2s 轮询、整表替换 | 首拍 `pollSuccessCount == 1`、`links.length == 3`；第 2s 拍后对应链路 `state` 随快照变化；`wsConnected == false`、`isPolling == true` |
+| | 拉取失败：置 lastError、保留陈旧快照 | `HTTP_503` → `lastError == '拉取失败：HTTP_503'`；`pollSuccessCount` 不增；**上一次成功的 3 条快照仍在**（不空屏） |
+| | 单飞：在途未回时到期的那一拍不叠加请求 | 6s 内 `calls` 恒为 1；放行后 `pollSuccessCount == 1` |
+| WS 上线后的双通道(4) | WS 连上即切到 10s 兜底档，不再按 2s 拉 | 连接后 9s 内 HTTP 不拉（`calls == 1`），第 10s 拉第二拍 |
+| | WS 帧与 HTTP 同源：整表快照替换（谁后到以谁为准） | WS 帧（3 条）落 `wsFrameCount == 1` 且 `state` 变；10s 兜底 Poll 又以整表覆盖，**不叠加单条增量** |
+| | 保活：每 15s 上行一帧 PING | 15s 后 `sent == ['{"action":"PING"}']`，再 15s 累计 2 帧 |
+| | 控制帧 PONG 不入状态也不计丢弃；坏帧 / 对象 / 未知枚举计丢弃且不污染状态 | `{"action":"PONG"}` → `wsFrameCount == 0` 且 `discardedWsFrames == 0`；`not-json` / 无 `action` 的对象 / `[1,2]` / 未知 `kind` 各 +1；状态保持初始 3 条不被污染 |
+| 断线重连(3) | 普通断线：退回 2s 轮询档、按 reconnectDelay 退避重连 | 服务端收尾后立刻起 HTTP 轮询并拉一拍；3s 后 `attempts == 2` 且 `wsConnected == true`（链路通道**无超窗**，不需要改全量 / RESYNC） |
+| | WS 连接失败：置 lastError 并按 reconnectDelay 重连 | `contains('WS 连接失败')`；3s 后第 2 次、再 3s 第 3 次并连上（`lastError == null`） |
+| | stop 撤表断连，再次 start 可恢复 | `stop` 后 `wsConnected == false`、`isPolling == false`、旧连接 `closeCallCount == 1`；30s 内不再连；`start` 恢复 |
+| 退出竞态(1) | dispose 后连接才落地：直接关闭、不接管、不重连、不入状态 | 迟到的连接 `closeCallCount == 1`、`sent` 为空、`wsFrameCount == 0`、`attempts` 不再增 |
+
+### 64.3 口径要点
+
+- **WS 不替代 HTTP Poll**：契约 `paths/device.yaml#/wsLinks` 明写「本通道不替代 `GET /api/v1/devices/links`，
+  客户端仍需低频轮询兜底」；实现成双节奏定时器（WS 未连 2s / 已连 10s，互斥切换），任一条链路都不会因 WS 在线而停止呼吸。
+- **链路通道无代际、无续传**：与态势通道**刻意不同**——决策 07 D07「不增加链路 revision」。故无 `epoch`/`revision`/`RESYNC`、
+  无「超窗 close 4000 → 改全量」分支；每一帧都是**整表快照**，两通道共用同一套「整体替换」，不合并单条增量。
+- **控制帧不是数据**：服务端（`LinkWebSocketHandler`）对 `PING` 应答 `{"action":"PONG"}`；控制帧**既不入状态、也不计丢弃**，
+  只有「非数组 / 条目解析失败」才计入 `discardedWsFrames`，避免保活噪声污染「真的在收数据」的证据。
+- **失败不臆造状态**：HTTP 拉取失败置 `lastError` 而**保留陈旧快照**（不空屏、不清零）；WS 帧**任一条目解析失败即整帧丢弃**
+  （不臆造缺省值，不让半截数据进状态）；状态一律以服务端为准，**不本地乐观改写**。
+
+### 64.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**478 例** = 段 63 的 467 例 + **本段 11**）；
+  单文件 `flutter test test/shared/state/links_feed_test.dart` → **11 例全绿**；
+  `flutter analyze` → `No issues found! (ran in 3.2s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（3 新 + 1 改），**破**「每原子任务 ≤3 文件」上限，**按无人值守授权显式声明例外**（先例段 53 / 61 / 62）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`；
+  **未新增依赖**（`pubspec.yaml` 未动）；`api_contract.dart` 仅增一个常量（`ApiErrorCode` 已足，无需扩）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（假连接 / 假闸门），**未对着真实后端实例**跑过真实 WS 握手
+（子协议协商、首帧快照、`PING`/`PONG` 往返、30s 无上行服务端主动断开、`Authorization` 头在真实握手上的接受度均未验证）；
+双通道在真实网络下的「整表替换」一致性、断线重连的真实退避时序**未走通**；**`LinksFeed` 尚未接进任何页面**（UI 接线另开段）。
+本段为**实测前置的客户端骨架验收**，不是生产发布批准。
