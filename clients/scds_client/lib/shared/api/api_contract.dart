@@ -19,6 +19,9 @@ const String kWsPrefix = '/ws/v1';
 /// 态势 WS 子协议（`docs/api/paths/situation.yaml` 的 `x-websocket.subprotocol`）。
 const String kSituationSubprotocol = 'scds.situation.v1';
 
+/// 链路 WS 子协议（`docs/api/paths/device.yaml` 的 `wsLinks.x-websocket.subprotocol`）。
+const String kLinksSubprotocol = 'scds.links.v1';
+
 /// 错误响应媒体类型（RFC 7807）。
 const String kProblemMediaType = 'application/problem+json';
 
