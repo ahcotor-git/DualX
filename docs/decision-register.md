@@ -2379,4 +2379,50 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 **观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）；段 53/58/59 注入端口生产端仍未接真实
 文件选择器 / 落盘；段 59/60/61/62/63/64/65 集成层（对真实后端实例 + 真实 WS/HTTP）**均未走通**。
 
+**段 66 落地（2026-11-09，command 域收口：`moveVest` 手动置位接进「指挥指令页」）**：承接段 65「device 域 17 端点全链收官」，
+接线 **command 域最后一个未接 UI 的端点**——手动置位（`moveVest`，`POST /api/v1/command/vests/{vestNum}/move`，契约
+`paths/command.yaml#/vestMove`，`x-internal` 联调专用）。该端点**段 46 已落共享层**（`CommandApi.moveVest` + `MoveVestRequest`），
+**段 47 明确「不接 UI」**；本段按用户裁定切入点「**moveVest 手动置位 UI**」把它接进「指挥指令页」（`CommandPage`）。
+落**一笔** `dc37cfc`（**3 文件 / 0 新 3 改**，**未破**「每原子任务 ≤3 文件」上限）：
+
+- **口径修正**：本段之前的「下一段（候选）」把 `moveVest` 记作「**device 域**剩余最后一个未接线端点」，**该表述有误**——
+  `moveVest` 属 **command 域**（第 8 条指令，见本文「`moveVest` 口径（2026-10-28）」），与 device 域无关；
+  device 域 17 端点已在段 65 前收口完毕。本段起改称「**command 域最后一个未接 UI 的端点**」。
+- `lib/features/console/command_page.dart`（**改**）：新增 typedef `MoveCommand = Future<CommandAck> Function(MoveVestRequest request)`
+  + **可选**构造参数 `move`（`null` 时**区块不渲染**）；新增三键 `kCommandMoveFloorFieldKey` / `kCommandMovePosFieldKey` /
+  `kCommandMoveButtonKey`；状态增 `_moveFloor` / `_movePos` 两控制器（`dispose` 释放）；新增 `_move()` 与
+  `_requiredPositiveInt()`；build 追加「手动置位（联调专用）」区块；`_describeFailure` 增 403 `COMMAND_MOVE_FORBIDDEN` /
+  404 `MAP_NOT_FOUND` / 404 `MAP_FLOOR_POINT_NOT_FOUND` / 400 `VALIDATION_FAILED` 文案；
+  `describeCommandAck` 的「accepted=true 且无字节」分支改文案为「**已受理（无下发字节）**」。
+- `lib/app/console_app.dart`（**改**）：`_openCommand` 增 `move` 端口（`command.moveVest(vestNum:, request:, token: _account!.accessToken)`，
+  全闭包读令牌）；文档「六个端口」改「七个端口」。
+- `test/console_widget_test.dart`（**改**）：`pumpCommand` 增 `move` 可选参数；新增「指挥指令页·手动置位（段 66）」组 **5 例**。
+
+**口径要点**：**联调专用、可整块关掉**（`move` 为可选端口，`null` 时区块与三键都不渲染，正式部署可只装配前 6 个端口）；
+**403 是「这一场不允许」，不是「你没权限」**（`COMMAND_MOVE_FORBIDDEN` 与 `AUTH_FORBIDDEN` 分属两件事，换有权限的账号
+也过不了，故文案为「仅联调/训练可用」而**不引导去要权限**）；**不下发任何字节**（回执 `downlinkHex` 恒为 `null`，故
+`describeCommandAck` 在无字节时报「已受理（无下发字节）」**而不是**「已下发」——该分支改动不影响其余 7 条指令）；
+**两字段都必填、范围只挡非数与 <1**（契约 `MoveVestRequest.floorNum`/`posNum` 只声明 `int32`、未给上下界，点位是否存在
+交服务端 404 `MAP_FLOOR_POINT_NOT_FOUND` 判定，**不臆造点位表内容**）；**坐标来源在服务端**（UI 只传「第几层、第几个点」，
+不传坐标、不做 `xPct`/`yPct` 换算）。
+
+门禁：`flutter test` → `All tests passed!`（**487 例**，较段 65 的 482 例 **+5**）、`flutter analyze` → `No issues found! (ran in 2.9s)`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑过真实手动置位（403 在真实 `BATTLE` 模式下是否如期返回、404 两码在真实底图 / 点位表上的边界、
+置位后态势 `PositionSource.MANUAL` 是否如期出现均未验证）；集成层（`CommandPage` + `CommandApi.moveVest` + 真实 `ApiClient` + 真实 HTTP）
+**未走通**。证据见 [testing](testing.md) **第 66 节**。
+
+**下一段（候选）**：**command 域（8 条指令的共享层 ＋ UI）全链收官**——8 条指令的 API 层（段 46）与 UI（段 47 的 6 条 + 段 66 的
+手动置位；全体充弹入口在段 47 的「全体态势」页 AppBar）俱备。下一步候选（按推荐序）：
+① **段 59~66 集成层走通**（对真实后端实例 + 真实 HTTP/WS，逐域打通至少一条端到端链——**各段均只到闭包桩为止**，
+这是当前最大的未证事项）；② T-PROD 部署；③ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
+④ 接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
+⑤ 硬件 ACK 解析（「已发送」≠「已确认」，gateway 侧，需先读协议上行 ACK 帧与网关下行接线现状）；
+⑥ 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
+（背景：**exercise / replay / map 三域 UI 已收口**；**device 域 17 REST 端点 UI ＋ `watchLinks` WS 状态层 ＋ 接进链路页全链收官**；
+**command 域 8 条指令 API ＋ UI 全链收官**。）
+
+**观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）；段 53/58/59 注入端口生产端仍未接真实
+文件选择器 / 落盘；段 59/60/61/62/63/64/65/66 集成层（对真实后端实例 + 真实 WS/HTTP）**均未走通**。
+
 

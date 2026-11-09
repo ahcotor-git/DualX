@@ -4351,3 +4351,57 @@ device 域**仍未接线**——`watchLinks` WS 状态层（链路状态实时�
 **未验项**：本段只做 `flutter analyze` + `flutter test`（假连接 / 假闸门），**未对着真实后端实例**跑过真实 WS 握手
 （子协议协商、首帧快照、`PING`/`PONG` 往返、`Authorization` 头在真实握手上的接受度均未验证）；页面在真实网络下的
 双通道切换 / 断线重连时序**未走通**。本段为**实测前置的客户端接线验收**，不是生产发布批准。
+
+## 66. M6 CLIENT-WINDOWS 续段（UI 接线）：command 域收口——`moveVest` 手动置位接进指挥指令页
+
+承段 65「device 域 17 端点收口」，接线 command 域**最后一个未接 UI** 的端点——手动置位
+（`moveVest`，`POST /api/v1/command/vests/{vestNum}/move`，契约 `x-internal` 联调专用）。该端点在段 46 已落
+共享层（`CommandApi.moveVest` + `MoveVestRequest`），段 47 明确「不接 UI」；本段按裁定把它接进
+「指挥指令页」（`CommandPage`）——**可选端口**装配，不注入则整块不渲染。
+
+### 66.1 交付物（1 笔 = 3 文件，0 新 + 3 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/command_page.dart`(改) | 新增 typedef `MoveCommand = Future<CommandAck> Function(MoveVestRequest request)` + **可选**构造参数 `move`（`null` 时区块不渲染）；新增三键 `kCommandMoveFloorFieldKey` / `kCommandMovePosFieldKey` / `kCommandMoveButtonKey`；状态增 `_moveFloor` / `_movePos` 两控制器（`dispose` 释放）；新增 `_move()` 与 `_requiredPositiveInt()` 校验；build 追加「手动置位（联调专用）」区块；`_describeFailure` 增 403 `COMMAND_MOVE_FORBIDDEN` / 404 `MAP_NOT_FOUND` / 404 `MAP_FLOOR_POINT_NOT_FOUND` / 400 `VALIDATION_FAILED` 文案；`describeCommandAck` 无字节回执改文案「已受理（无下发字节）」 |
+| `lib/app/console_app.dart`(改) | `_openCommand` 增 `move` 端口（`command.moveVest(vestNum:, request:, token: _account!.accessToken)`，全闭包读令牌）；文档「六个端口」改「七个端口」 |
+| `test/console_widget_test.dart`(改) | `pumpCommand` 增 `move` 可选参数；新增「指挥指令页·手动置位（段 66）」组 **5 例** |
+
+### 66.2 用例与判据（新增 5 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 指挥指令页·手动置位（段 66）(5) | 未注入 move：区块与三个控件键都不渲染 | `find.text('手动置位（联调专用）')` 与三键均 `findsNothing`（回归固定） |
+| | 楼层号 / 点位号都必填：缺失不发请求，填齐则请求体恰两键 | 全空 → 错误含「楼层号 必填」且未发；只填楼层 → 错误含「点位号 必填」且未发；两填 → `toJson() == {floorNum: 2, posNum: 5}`、回执为 `MOVE → #14｜已受理（无下发字节）` |
+| | 非整数 / 小于 1 即拒：不发请求并给出范围提示 | 楼层 `0` → 未发、错误含「楼层号 需为 ≥1 的整数」 |
+| | 403 `COMMAND_MOVE_FORBIDDEN`：提示「仅联调/训练可用」而非引导要权限 | 错误含「仅联调/训练可用」；`kCommandAckKey` 不存在 |
+| | 404 `MAP_FLOOR_POINT_NOT_FOUND`：提示点位表里没有该点 | 错误含「没有该点」 |
+
+### 66.3 口径要点
+
+- **联调专用、可整块关掉**：`move` 为**可选端口**——`null` 时区块与三键都不渲染（正式部署可只装配前 6 个端口）；
+  `console_app` 装配它，故生产指挥端可见。
+- **403 是「这一场不允许」，不是「你没权限」**：`COMMAND_MOVE_FORBIDDEN` 与 `AUTH_FORBIDDEN` 分属两件事，
+  换有权限的账号也过不了，故文案是「仅联调/训练可用」而**不引导去要权限**（承接决策 07 `moveVest` 口径）。
+- **不下发任何字节**：该端点只把坐标置为本场底图楼层点位表的点，回执 `downlinkHex` 恒为 `null`；故
+  `describeCommandAck` 在「accepted=true 且无字节」时输出「已受理（无下发字节）」而**不是**「已下发」——
+  不让 UI 说一句与事实相反的话。此改动只影响 `null` 分支，其余 7 条指令的 `downlinkHex` 恒有值，行为不变。
+- **两字段都必填、范围只挡非数与 <1**：契约 `MoveVestRequest.floorNum`/`posNum` 只声明 `int32`、未给上下界，
+  故 UI **只挡「非整数」与「0 及负数」**（楼层号 / 点位号按定义为 1 起）；点位是否真在本场底图楼层点位表里，
+  交服务端判定（404 `MAP_FLOOR_POINT_NOT_FOUND`）——**不臆造点位表内容**。
+- **坐标来源在服务端**：UI 只传「第几层、第几个点」，不传坐标、不做 `xPct`/`yPct` 换算（承契约「前端不得自行换算」）。
+- **写操作单飞去重**：`_move` 走既有 `_run`（`_busy` 闸门），下发期间按钮禁用，不重复发起。
+
+### 66.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**487 例** = 段 65 的 482 例 + **本段 5**）；
+  `flutter analyze` → `No issues found! (ran in 2.9s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 3 文件**（0 新 + 3 改），**未破**「每原子任务 ≤3 文件」上限；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`；
+  **未新增依赖**（`pubspec.yaml` 未动）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（闭包桩），**未对着真实后端实例**跑过真实手动置位
+（403 在真实 `BATTLE` 模式下是否如期返回、404 两码在真实底图 / 点位表上的边界、置位后态势 `PositionSource.MANUAL`
+是否如期出现均未验证）；集成层（`CommandPage` + `CommandApi.moveVest` + 真实 `ApiClient` + 真实 HTTP）**未走通**。
+本段为**实测前置的客户端接线验收**，不是生产发布批准。
