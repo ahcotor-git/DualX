@@ -4301,3 +4301,53 @@ device 域**仍未接线**——`watchLinks` WS 状态层（链路状态实时�
 （子协议协商、首帧快照、`PING`/`PONG` 往返、30s 无上行服务端主动断开、`Authorization` 头在真实握手上的接受度均未验证）；
 双通道在真实网络下的「整表替换」一致性、断线重连的真实退避时序**未走通**；**`LinksFeed` 尚未接进任何页面**（UI 接线另开段）。
 本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 65. M6 CLIENT-WINDOWS 续段（UI 接线）：device 域收口（三）——`LinksFeed` 接进指挥端「链路与基站」页
+
+承段 64（共享状态层已落成、尚未接页面）与本段切入点裁定「LinksFeed 接进指挥端」，把链路状态**双通道**
+（WS 主通道 + `GET /links` 低频兜底）接到「链路与基站」页（段 62）的**链路状态区**：页面自建并持有 `LinksFeed`，
+进入 `start()` / 退出 `dispose()`，`ListenableBuilder` 驱动渲染；通道提示与状态层错误出口沿用「全体态势」页口径。
+
+### 65.1 交付物（1 笔 = 4 文件，0 新 + 4 改）
+
+| 文件 | 内容 |
+|---|---|
+| `lib/features/console/link_panel_page.dart`(改) | 新增 `connect` 端口（`LinkSocketConnector`）；`_LinkPanelPageState` 增 `late final LinksFeed _feed`，`initState` `..start()` / `dispose` 释放；「链路状态」区改 `ListenableBuilder` 驱动（`_feed.links` + 首帧判定 `pollSuccessCount > 0 \|\| wsFrameCount > 0`）；新增通道提示键 `kLinkPanelChannelKey` 与状态层错误键 `kLinkPanelFeedErrorKey`；「刷新」与写后回执改走 `_feed.pollNow()` |
+| `lib/shared/state/links_feed.dart`(改) | 新增公开 `pollNow()`（立刻拉一拍 HTTP，单飞在途时自动跳过），供页面手动刷新 / 写后催取 |
+| `lib/app/console_app.dart`(改) | `_openLinks` 增 `required Uri baseUri` 形参 + `connect` 端口（`connectLinkSocket(baseUri: baseUri, accessToken: _account!.accessToken)`，全闭包读令牌）；调用点传入 `baseUri`（取自 `client.baseUri`）；增 `links_socket.dart` import |
+| `test/console_widget_test.dart`(改) | `pumpLinks` 增 `connect` 可选端口（缺省为**永不落地**连接器，按在「WS 未连」档）+ `TestLinkSocket` / `TestLinkConnector` 假件；新增「指挥端链路与基站状态层（段 65）」组 **4 例** |
+
+### 65.2 用例与判据（新增 4 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 指挥端链路与基站状态层（段 65）(4) | WS 未连：按 HTTP 轮询展示链路状态，通道提示为轮询中 | 假连接器永不落地 → `kLinkPanelChannelKey` 含「WS 未连」；HTTP 首拍后 `kLinkPanelLoadingKey` 消失、`serialVest` 行含 `COM7` |
+| | WS 连上：通道切为实时，且收到的整表快照同源归并进链路状态 | 连上后 `kLinkPanelChannelKey` 含「WS 已连」；投喂 WS 整表快照后 `serialVest` 行含 `OPEN` / `COM9`（HTTP 曾报 `CLOSED`） |
+| | WS 已连仍保留 GET /links 低频兜底（≤10s 一拍） | `start` 立刻拉一拍（`calls == 1`）；连上后 10s 内不拉，第 10s 拉第二拍（`calls == 2`）——**WS 不替代 HTTP Poll** |
+| | 拉取失败：状态层错误出口如实提示，且未获首帧时显示加载中 | `INSTANCE_NOT_READY` → `kLinkPanelFeedErrorKey` 含该错误码；未获首帧故 `kLinkPanelLoadingKey` 仍在 |
+
+### 65.3 口径要点
+
+- **WS 不替代 HTTP Poll（落地到页面）**：链路状态区虽有 WS 主通道，仍保留 `GET /links` 低频兜底（WS 已连 ≤10s 一拍）；
+  页面不因 WS 在线而停表——与段 64 状态层同一口径，本段把它接到 UI。
+- **页面持有 feed、随生灭**：`LinksFeed` 由页面在 `initState` 建、`dispose` 释放（与「全体态势」页持 `SituationFeed`、
+  单兵端持 `PollingFeed` 同构）；状态随页面生灭，**不跨会话泄漏**。
+- **写后催取而非硬合并**：开关类写操作成功后走 `_feed.pollNow()` 催一拍（不拿单条返回硬合并——一次开关可能同时改动两族链路）；
+  SnackBar 回执保留。手动「刷新」同时重拉基站台账与催一拍链路状态。
+- **状态层错误与写错误分列**：feed 的 `lastError`（WS / 轮询失败）落 `kLinkPanelFeedErrorKey`；页面自身的写 / 读错误仍落
+  `kLinkPanelErrorKey`——两者互不覆盖，现场可辨。
+- **首帧语义**：`pollSuccessCount > 0 || wsFrameCount > 0` 之前显示「加载中…」（空列表**不代表**三条链路都没有）。
+
+### 65.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**482 例** = 段 64 的 478 例 + **本段 4**）；
+  `flutter analyze` → `No issues found! (ran in 3.0s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 4 文件**（0 新 + 4 改），**破**「每原子任务 ≤3 文件」上限，**按无人值守授权显式声明例外**（先例段 53 / 61 / 62 / 64）；
+  唯一超出计划的第 4 文件是 `links_feed.dart` 的 `pollNow()`（共享层最小增量，供页面手动刷新 / 写后催取）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`；
+  **未新增依赖**（`pubspec.yaml` 未动）。
+
+**未验项**：本段只做 `flutter analyze` + `flutter test`（假连接 / 假闸门），**未对着真实后端实例**跑过真实 WS 握手
+（子协议协商、首帧快照、`PING`/`PONG` 往返、`Authorization` 头在真实握手上的接受度均未验证）；页面在真实网络下的
+双通道切换 / 断线重连时序**未走通**。本段为**实测前置的客户端接线验收**，不是生产发布批准。

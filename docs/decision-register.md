@@ -2332,8 +2332,8 @@ device 域 **UI 接线尚未开段**。证据见 [testing](testing.md) **第 60 
 `Authorization` 头在真实握手上的接受度均未验证）；双通道在真实网络下的「整表替换」一致性、断线重连的真实退避时序**未走通**；
 **`LinksFeed` 尚未接进任何页面**（UI 接线另开段）。证据见 [testing](testing.md) **第 64 节**。
 
-**下一段（候选）**：**device 域 17 REST 端点 UI 已全部接线**，其**唯一 WS**（`watchLinks`）**状态层亦已就位**——device 域**共享层 ＋ UI ＋ WS 状态层**
-收官。下一步候选（按推荐序）：
+**下一段（候选）**：**device 域（17 REST 端点 UI ＋ `watchLinks` WS 状态层 ＋ 状态层接进链路页）全链收官**——REST、WS、UI 三层俱备。
+下一步候选（按推荐序）：
 ① **`LinksFeed` 接进指挥端**（把链路状态 WS 状态层接到「链路与基站」页：链路状态区改为 `LinksFeed` 驱动、
   页面进入 `start()` / 退出 `dispose()`，保留 `GET /links` 兜底）——承本段、属最近一步；
 ② `moveVest` 手动置位 UI（视联调需要再定）；③ T-PROD 部署；④ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
@@ -2342,6 +2342,41 @@ device 域 **UI 接线尚未开段**。证据见 [testing](testing.md) **第 60 
 （背景：**exercise / replay / map 三域 UI 已收口**；device 域**台账 ＋ 绑定（前 8 端点）、链路 ＋ 基站（后 8 端点）、
 单马甲链路（第 9 个）UI 均已接线**，**`watchLinks` WS 状态层本段已落地**，剩「状态层接进链路页」一步。）
 
-**观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）。
+**段 65 落地（2026-11-04，device 域收口（三）：`LinksFeed` 接进指挥端「链路与基站」页）**：承段 64（状态层已落成、
+尚未接页面）与本段切入点裁定「LinksFeed 接进指挥端」，把链路状态**双通道**（WS 主通道 + `GET /links` 低频兜底）接到
+「链路与基站」页（段 62）的**链路状态区**：页面自建并持有 `LinksFeed`（`initState` `..start()` / `dispose` 释放）、
+`ListenableBuilder` 驱动渲染；通道提示与状态层错误出口沿用「全体态势」页口径。落**一笔**（**4 文件 / 0 新 4 改**，
+**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**，先例段 53 / 61 / 62 / 64）：
+
+- `lib/features/console/link_panel_page.dart`（**改**）：新增 `connect` 端口（`LinkSocketConnector`）；`_LinkPanelPageState`
+  增 `late final LinksFeed _feed`，`initState` `..start()` / `dispose` 释放；「链路状态」区改 `ListenableBuilder` 驱动
+  （`_feed.links` + 首帧判定 `pollSuccessCount > 0 || wsFrameCount > 0`）；新增通道提示键 `kLinkPanelChannelKey` 与
+  状态层错误键 `kLinkPanelFeedErrorKey`；「刷新」与写后回执改走 `_feed.pollNow()`。
+- `lib/shared/state/links_feed.dart`（**改**）：新增公开 `pollNow()`（立刻拉一拍 HTTP，单飞在途自动跳过），供页面手动刷新 / 写后催取。
+- `lib/app/console_app.dart`（**改**）：`_openLinks` 增 `required Uri baseUri` 形参 + `connect` 端口
+  （`connectLinkSocket(baseUri: baseUri, accessToken: _account!.accessToken)`，全闭包读令牌）；调用点传入 `baseUri`（取自 `client.baseUri`）。
+- `test/console_widget_test.dart`（**改**）：`pumpLinks` 增 `connect` 可选端口（缺省为**永不落地**连接器，按在「WS 未连」档）
+  + `TestLinkSocket` / `TestLinkConnector` 假件；新增「指挥端链路与基站状态层（段 65）」组 **4 例**。
+
+**口径要点**：**WS 不替代 HTTP Poll（落地到页面）**（保留 `GET /links` 兜底，WS 已连 ≤10s 一拍）；**页面持有 feed、随生灭**
+（与「全体态势」页持 `SituationFeed` 同构，不跨会话泄漏）；**写后催取而非硬合并**（`pollNow()`——一次开关可能同时改动两族链路）；
+**状态层错误与写错误分列**（feed `lastError` → `kLinkPanelFeedErrorKey`；页面写 / 读错误 → `kLinkPanelErrorKey`，互不覆盖）。
+
+门禁：`flutter test` → `All tests passed!`（**482 例**，较段 64 的 478 例 **+4**）、`flutter analyze` → `No issues found! (ran in 3.0s)`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：**未对着真实后端实例**跑过真实 WS 握手（子协议协商、首帧快照、`PING`/`PONG` 往返、`Authorization` 头接受度均未验证）；
+页面在真实网络下的双通道切换 / 断线重连时序**未走通**。证据见 [testing](testing.md) **第 65 节**。
+
+**下一段（候选）**：**device 域（17 REST 端点 UI ＋ `watchLinks` WS 状态层 ＋ 状态层接进链路页）全链收官**——REST、WS、UI 三层俱备。
+下一步候选（按推荐序）：
+① **`moveVest` 手动置位 UI**（device 域剩余最后一个未接线端点；视联调需要再定）——承本段、属最近一步；
+② T-PROD 部署；③ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
+④ 接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
+⑤ 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
+（背景：**exercise / replay / map 三域 UI 已收口**；device 域**台账 ＋ 绑定（前 8 端点）、链路 ＋ 基站（后 8 端点）、
+单马甲链路（第 9 个）UI 均已接线**，**`watchLinks` WS 状态层（段 64）＋ 接进链路页（段 65）亦已落地**。）
+
+**观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）；段 53/58/59 注入端口生产端仍未接真实
+文件选择器 / 落盘；段 59/60/61/62/63/64/65 集成层（对真实后端实例 + 真实 WS/HTTP）**均未走通**。
 
 
