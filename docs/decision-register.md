@@ -2412,17 +2412,53 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 置位后态势 `PositionSource.MANUAL` 是否如期出现均未验证）；集成层（`CommandPage` + `CommandApi.moveVest` + 真实 `ApiClient` + 真实 HTTP）
 **未走通**。证据见 [testing](testing.md) **第 66 节**。
 
-**下一段（候选）**：**command 域（8 条指令的共享层 ＋ UI）全链收官**——8 条指令的 API 层（段 46）与 UI（段 47 的 6 条 + 段 66 的
-手动置位；全体充弹入口在段 47 的「全体态势」页 AppBar）俱备。下一步候选（按推荐序）：
-① **段 59~66 集成层走通**（对真实后端实例 + 真实 HTTP/WS，逐域打通至少一条端到端链——**各段均只到闭包桩为止**，
-这是当前最大的未证事项）；② T-PROD 部署；③ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
+**段 67 落地（2026-11-09，M6 集成层：客户端内集成 harness——一条代表性端到端链跑通真实 HTTP / WS）**：承接段 66「下一段（候选）①
+**段 59~66 集成层走通**」与用户裁定（集成方式「**客户端内集成 harness**」、覆盖范围「**先一条代表性端到端链**」）。段 59~66
+各段均为**层内单测**（业务域 `*Api` 注入**假传输**、状态层注入**假连接**），跨层接缝——真路径前缀（`/api/v1`）、真 `Bearer`
+鉴权头、真请求体形状、非 2xx → `ApiException` 错误码、真 WS 升级与子协议协商——**从未被验证**；本段补上这一步。落**一笔**
+（**2 文件 / 2 新 0 改**，**未破**「每原子任务 ≤3 文件」上限）：
+
+- `clients/scds_client/test/integration/support/stub_backend.dart`（**新**）：**进程内假后端**——真 `dart:io` `HttpServer`
+  （绑定 `InternetAddress.loopbackIPv4` 随机端口）+ 真 WS 升级（`WebSocketTransformer.upgrade` + `protocolSelector` 选回
+  `scds.situation.v1` / `scds.links.v1`）；按冻结契约分派 auth（`login`/`refresh`/`logout`/`me`）、exercise（`GET /exercise/current`）、
+  command（`kill`/`move`）、situation（`GET /situation` + `ws://…/ws/v1/situation`）、device（`GET /devices/links` + `ws://…/ws/v1/devices/links`）；
+  `battleMode` / `running` / `expireAccessToken` 可切换；观测并暴露 `received`（方法 / URI / `Authorization` / 请求体）与 `wsUpstream`；
+  所有 JSON 应答**显式** `charset:'utf-8'`、Problem 用 `kProblemMediaType`。
+- `clients/scds_client/test/integration/client_chain_test.dart`（**新**）：集成用例 **10 例**——真 `ApiClient(baseUri: 假后端)`
+  → 真 `RefreshingApiTransport` → 各域 `*Api`；WS 用真 `connectSituationSocket` / `connectLinkSocket`。
+
+**口径要点**：**不是 mock 库、不拦截方法调用**（客户端发真 HTTP / 真 WS 升级，断言落在**跨层接缝**上，恰是层内单测用
+假传输 / 假连接**照不到**之处）；**代表性链**（登录 → 当前用户 → 当前演习 → 判死 → 手动置位被拒，覆盖 auth / exercise / command
+三个域真 HTTP 读写 + 一个 403 Problem 两段式语义）；**403 由场次模式驱动**（`BATTLE` 回 403 `COMMAND_MOVE_FORBIDDEN`、
+`TRAIN` 放行且 `downlinkHex=null`，决策 07，同一端点两端都覆盖）；**`running=false` 仍回 200**（空态而非 404，D15-⑥ 在真 HTTP 上钉一次）；
+**WS 两通道同构性在真 WS 上复核**（态势 `full=true` 全量帧、链路**完整 `LinkStatus` 列表**）；**令牌续期是真 HTTP 上的单飞**
+（`expireAccessToken` → 401 `AUTH_TOKEN_EXPIRED` → 刷新一次 + 重试一次；刷新响应刻意不含 `user`，验证装饰器「变令牌不变身份」）；
+**零新依赖**（只用 `dart:io` / `dart:convert` 与既有 `flutter_test`，`pubspec.yaml` 未动；测试置于既有 `test/`，`flutter test` 默认递归，
+**未新增** `integration_test/` 目录或依赖）。
+
+**为何不接真后端实例**：真后端实例依赖 Docker（MySQL 容器 `scds-local-mysql`），本机 **Docker Desktop Linux Engine daemon
+未运行**（`docs/environments.md` §1），`scds-app/target/scds-next.jar` 虽在也无法起库起服务；故改用**进程内假后端**——它仍是
+**真 `dart:io` 服务端**，只是应答按冻结契约手工构造，因而**可无人值守、可重复、进 `flutter test` 门禁**。
+
+门禁：`flutter test` → `All tests passed!`（**497 例**，较段 66 的 487 例 **+10**）、`flutter analyze` → `No issues found! (ran in 2.6s)`；
+Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契约，故未重跑）。
+**未验项**：本段 harness 是**进程内假后端**、应答为**手工构造的契约样本**，故**未验证**——真实后端实例上的**业务判据**
+（403 是否真由 `BattleMode.BATTLE` 触发、`running` 是否真跟库内场次一致、刷新是否真为滚动刷新）、真实库 / 网关（UWB TCP 12001）、
+真实 `scds-next.jar` 进程与 `scds-local-mysql` 的交互；`login` 的 401 `AUTH_BAD_CREDENTIALS`、限流 429、`start/stop` 全链等**未纳入**。
+**集成层的「真依赖」仍未走通**——本段打通的是「**客户端各层之间的真 HTTP / WS 接缝**」，**不是**「客户端对真实后端实例」。
+证据见 [testing](testing.md) **第 67 节**。
+
+**下一段（候选）**：**段 59~66 集成层的「客户端内接缝」已由段 67 打通一条代表性链**（真 HTTP / 真 WS 跨层接缝已验），
+但**「真依赖」（对真实后端实例 + 真库 + 真网关）仍未走通**。下一步候选（按推荐序）：
+① **真后端实例端到端**（起 `scds-local-mysql` + `scds-next.jar`，把段 67 的同一条链对着真实例再跑一遍——**需 Docker daemon 可用**，
+当前不可行）；② T-PROD 部署；③ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；
 ④ 接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）；
 ⑤ 硬件 ACK 解析（「已发送」≠「已确认」，gateway 侧，需先读协议上行 ACK 帧与网关下行接线现状）；
 ⑥ 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
 （背景：**exercise / replay / map 三域 UI 已收口**；**device 域 17 REST 端点 UI ＋ `watchLinks` WS 状态层 ＋ 接进链路页全链收官**；
-**command 域 8 条指令 API ＋ UI 全链收官**。）
+**command 域 8 条指令 API ＋ UI 全链收官**；**段 59~66 的客户端内真 HTTP / WS 接缝已由段 67 走通一条代表性链**。）
 
 **观察项**：硬件 ACK 解析（「已发送」≠「已确认」仍无人写入 `ACKED`，且协议无回执帧）；段 53/58/59 注入端口生产端仍未接真实
-文件选择器 / 落盘；段 59/60/61/62/63/64/65/66 集成层（对真实后端实例 + 真实 WS/HTTP）**均未走通**。
+文件选择器 / 落盘；段 59/60/61/62/63/64/65/66 集成层——**客户端内接缝**已由段 67 覆盖一条代表性链，**对真实后端实例的真依赖**仍**均未走通**。
 
 

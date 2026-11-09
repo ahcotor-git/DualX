@@ -4405,3 +4405,77 @@ device 域**仍未接线**——`watchLinks` WS 状态层（链路状态实时�
 （403 在真实 `BATTLE` 模式下是否如期返回、404 两码在真实底图 / 点位表上的边界、置位后态势 `PositionSource.MANUAL`
 是否如期出现均未验证）；集成层（`CommandPage` + `CommandApi.moveVest` + 真实 `ApiClient` + 真实 HTTP）**未走通**。
 本段为**实测前置的客户端接线验收**，不是生产发布批准。
+
+## 67. M6 集成层（客户端内集成 harness）：一条代表性端到端链跑通真实 HTTP / WS
+
+承段 66「下一段（候选）① 段 59~66 集成层走通」与用户裁定（集成方式「**客户端内集成 harness**」、覆盖范围
+「**先一条代表性端到端链**」）。
+
+段 59~66 各段均为**层内单测**：业务域 `*Api` 注入**假传输**、状态层注入**假连接**——跨层接缝（真路径前缀、
+真鉴权头、真 JSON 形状、非 2xx → `ApiException` 错误码、真 WS 升级与子协议协商）**从未被验证**。本段按裁定
+搭建**客户端内集成 harness**：一个**进程内假后端**（真 `dart:io` `HttpServer` + 真 WebSocket 升级），让真
+`ApiClient`（真 TCP）/ 真 `RefreshingApiTransport` / 真 `connectSituationSocket` / `connectLinkSocket` 端到端打穿。
+
+**为何不接真后端实例**：真后端实例依赖 Docker（MySQL 容器 `scds-local-mysql`），本机 **Docker Desktop Linux
+Engine daemon 未运行**（`docs/environments.md` §1），`scds-app/target/scds-next.jar` 虽在也无法起库起服务；
+故改用**进程内假后端**——它仍是**真 `dart:io` 服务端**，只是应答按冻结契约手工构造，因而**可无人值守、可重复、
+进 `flutter test` 门禁**。
+
+### 67.1 交付物（1 笔 = 2 文件，2 新 + 0 改）
+
+| 文件 | 内容 |
+|---|---|
+| `test/integration/support/stub_backend.dart`(新) | 进程内假后端：真 `HttpServer`（绑定随机回环端口）+ 真 WS 升级（`WebSocketTransformer.upgrade` + 子协议协商）；按冻结契约分派 auth / exercise / command / situation / device 端点；`battleMode` / `running` / `expireAccessToken` 可切换；观测并暴露 `received`（方法 / URI / `Authorization` / 请求体）与 `wsUpstream` |
+| `test/integration/client_chain_test.dart`(新) | 集成用例 **10 例**：真 `ApiClient(baseUri: 假后端)` → `RefreshingApiTransport` → `AuthApi` / `ExerciseApi` / `CommandApi`；WS 用真 `connectSituationSocket` / `connectLinkSocket` |
+
+### 67.2 用例与判据（新增 10 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 代表性端到端链（真 HTTP / 真 WS）(5) | 登录 → 当前用户 → 当前演习 → 判死 → 手动置位被拒（BATTLE） | `me` 回 `roles=[DIRECTOR]`；`getCurrentExercise` 回 `running=true` / `battleMode=BATTLE` / 想定名「城区防守演练」；`killVest` 回 `accepted=true`、`downlinkHex='ff0100070007'`；`moveVest` 抛 `ApiException`（`403` / `COMMAND_MOVE_FORBIDDEN` / `problem.traceId='trace-stub-403'`） |
+| | 请求面：真 HTTP 带 `/api/v1` 前缀、`Bearer` 头与契约请求体 | `GET /api/v1/exercise/current` 方法 `GET` 且 `Authorization: Bearer access-local-1`；`POST /api/v1/command/vests/7/move` 体恰 `{floorNum:1,posNum:3}` |
+| | 无演习进行中：回 200 + `running=false`（不是 404） | `running=false`、`exerciseId` / `startedAt` 均为 `null` |
+| | TRAIN 场：手动置位放行，且不下发任何字节 | `accepted=true`、`downlinkHex=null` |
+| | 退出登录：204 空正文不抛异常 | 命中 `POST /api/v1/auth/logout` 且 `Authorization: Bearer access-local-1` |
+| 令牌续期（真 HTTP：到期 → 单飞刷新 → 重试一次）(2) | 401 `AUTH_TOKEN_EXPIRED` → 刷新一次 → 重试成功，且保留原身份 | `transport.refreshCount=1`、后端 `refreshCalls=1`、会话 `accessToken='access-local-2'`、`session.user.username='commander'`（刷新响应刻意不含 `user`） |
+| | 刷新后重试用的是新令牌（旧令牌已作废） | 重试的 `Authorization` 为 `Bearer access-local-2` |
+| WebSocket（真 WS 升级 + 子协议协商）(3) | 态势 WS：连上即收一帧 full 快照（与 HTTP Poll 同构） | `full=true` / `epoch='epoch-1'` / `revision=42` / `units.single.vestNum=7` 且 `status=LIVE` / `teamSummary.single.team=RED` |
+| | 链路 WS：连上即收整表快照（数组，非单条） | 数组长 3；`[0]=SERIAL_VEST/OPEN/COM7`；`[1]=UWB_TCP_SERVER` 且 `fdCount=2` |
+| | 态势 WS：上行 PING → 服务端回 PONG（保活） | 第二帧为 `{"action":"PONG"}`；后端 `wsUpstream` 含 `{"action":"PING"}` |
+
+### 67.3 口径要点
+
+- **不是 mock 库、不拦截方法调用**：客户端发的是真 HTTP 请求、真 WS 升级，故断言落在**跨层接缝**上——
+  路径前缀（`/api/v1` 由 `ApiClient` 拼）、`Authorization` 头（由 `*Api` 传 `bearerToken`）、请求体形状
+  （`MoveVestRequest.toJson` 只输出非 null 键）、非 2xx → `ApiException`（由 `ApiClient` 解析 Problem 得出错误码）、
+  WS 子协议协商（`kSituationSubprotocol` / `kLinksSubprotocol`）。这些恰是层内单测用假传输 / 假连接**照不到**的地方。
+- **代表性链**：登录 → 当前用户 → 当前演习 → 判死指令 → 手动置位。前四步覆盖 auth / exercise / command 三个域的
+  **真 HTTP 读写**；末步刻意撞 `403`，同时验证「非 2xx 有两段式语义（HTTP 状态码 + Problem `code`）」在真 HTTP 上成立。
+- **403 判据由场次模式驱动**：假后端 `battleMode=BATTLE` 时 `move` 回 403 `COMMAND_MOVE_FORBIDDEN`，
+  `TRAIN` 时放行且回执 `downlinkHex=null`（决策 07）——同一端点两种结果的**接缝**都被覆盖，而不是只测一端。
+- **`running=false` 仍回 200**：无演习进行中是「空态」而非「404」，本用例把它放在真 HTTP 上再钉一次（契约 D15-⑥）。
+- **WS 两通道同构性在真 WS 上复核**：态势帧解析为 `SituationEnvelope`（`full=true` 全量快照）、链路帧解析为
+  **完整 `LinkStatus` 列表**（不是单条局部对象）——与 HTTP Poll 同构的硬约束在此得到真帧验证。
+- **令牌续期是真 HTTP 上的单飞**：`expireAccessToken` 触发 401 `AUTH_TOKEN_EXPIRED`，`RefreshingApiTransport`
+  刷新一次并**重试一次**成功；刷新响应刻意**不含 `user`**，用来验证装饰器「变的是令牌、不是身份」的保留口径。
+- **零新依赖**：harness 只用 `dart:io` + `dart:convert` 与既有 `flutter_test`，`pubspec.yaml` **未动**；
+  测试置于既有 `test/`（`flutter test` 默认递归），**未新增** `integration_test/` 目录或 `integration_test` 依赖。
+
+### 67.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**497 例** = 段 66 的 487 例 + **本段 10**）；
+  `flutter analyze` → `No issues found! (ran in 2.6s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+- **本原子任务 2 文件**（2 新 + 0 改），**未破**「每原子任务 ≤3 文件」上限；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`；
+  **未新增依赖**（`pubspec.yaml` 未动）。
+- **harness 覆盖的契约面**（`docs/api/paths/*`）：auth（`login`/`refresh`/`me`/`logout`）、exercise（`GET /exercise/current` 两态）、
+  command（`kill` / `move`）、situation（`GET /situation` + `ws://…/ws/v1/situation`）、device（`GET /devices/links` + `ws://…/ws/v1/devices/links`）。
+  这是**代表性一条链**，不是全域覆盖。
+
+**未验项**：本段 harness 是**进程内假后端**，应答为**手工构造的契约样本**，因此**未验证**：真实后端实例上的
+**业务判据**（如 403 是否真由 `BattleMode.BATTLE` 触发、`running` 是否真跟库内场次一致、刷新是否真为滚动刷新）、
+真实库 / 网关（UWB TCP 12001）在链路、真实 `scds-next.jar` 进程与 `scds-local-mysql` 的交互；`login` 的 401
+`AUTH_BAD_CREDENTIALS`、限流 429、`start/stop` 全链等**未纳入**本段。**集成层的「真依赖」仍未走通**——
+本段打通的是「客户端各层之间的真 HTTP / WS 接缝」，**不是**「客户端对真实后端实例」。本段为**集成层前置的
+客户端内验收**，不是生产发布批准。
