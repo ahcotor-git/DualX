@@ -323,7 +323,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
 
   /// 段 47：打开单兵指挥指令页（从「全体态势」页所选单元行进入，目标编号不手输）。
   ///
-  /// 六个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// 七个端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
   /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
   /// 令牌到期时自动续期并重试一次。
   void _openCommand({
@@ -352,6 +352,11 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             token: _account!.accessToken,
           ),
           setConfig: (VestConfigRequest request) => command.setVestConfig(
+            vestNum: vestNum,
+            request: request,
+            token: _account!.accessToken,
+          ),
+          move: (MoveVestRequest request) => command.moveVest(
             vestNum: vestNum,
             request: request,
             token: _account!.accessToken,

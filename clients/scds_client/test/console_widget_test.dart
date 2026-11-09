@@ -294,6 +294,7 @@ void main() {
   Future<CommandAck> unexpectedCommand() async => fail('未预期的指令下发');
 
   /// 段 47：单兵指令页直接挂树——六个端口都是闭包桩，**不发真实请求**。
+  /// 段 66 追加可选的手动置位端口（`move`）；不注入时该区块不渲染。
   ///
   /// 页面较长（`ListView` 懒构建），把测试视口放大到一屏容纳全部控件，
   /// 免得底部的回执 / 错误文本因在屏外而未构建。
@@ -306,6 +307,7 @@ void main() {
     Future<CommandAck> Function()? outOfRange,
     Future<CommandAck> Function(ReloadRequest request)? reload,
     Future<CommandAck> Function(VestConfigRequest request)? setConfig,
+    Future<CommandAck> Function(MoveVestRequest request)? move,
   }) async {
     tester.view.physicalSize = const Size(1200, 2400);
     tester.view.devicePixelRatio = 1.0;
@@ -322,6 +324,7 @@ void main() {
           outOfRange: outOfRange ?? unexpectedCommand,
           reload: reload ?? (ReloadRequest _) => unexpectedCommand(),
           setConfig: setConfig ?? (VestConfigRequest _) => unexpectedCommand(),
+          move: move,
         ),
       ),
     );
@@ -2335,6 +2338,121 @@ void main() {
       expect(
         tester.widget<Text>(find.byKey(kCommandAckKey)).data,
         contains('DIE → #14'),
+      );
+    });
+  });
+
+  /// 段 66：单兵指令页的**联调专用**手动置位（`moveVest`，契约 `x-internal`）。
+  ///
+  /// 三条口径：未注入端口**不渲染区块**（回归固定）；楼层号 / 点位号**都必填**
+  /// （任一缺失不发请求）；403 `COMMAND_MOVE_FORBIDDEN` 映射为「仅联调/训练可用」，
+  /// 且回执无下发字节时文案为「已受理（无下发字节）」而非「已下发」。
+  group('指挥指令页·手动置位（段 66）', () {
+    testWidgets('未注入 move：手动置位区块与三个控件键都不渲染', (WidgetTester tester) async {
+      await pumpCommand(tester, kill: unexpectedCommand);
+
+      expect(find.text('手动置位（联调专用）'), findsNothing);
+      expect(find.byKey(kCommandMoveFloorFieldKey), findsNothing);
+      expect(find.byKey(kCommandMovePosFieldKey), findsNothing);
+      expect(find.byKey(kCommandMoveButtonKey), findsNothing);
+    });
+
+    testWidgets('楼层号 / 点位号都必填：缺失不发请求，填齐则请求体恰两键', (WidgetTester tester) async {
+      final List<MoveVestRequest> sent = <MoveVestRequest>[];
+      await pumpCommand(tester, kill: unexpectedCommand, move: (MoveVestRequest request) async {
+        sent.add(request);
+        return ackOf(command: 'MOVE');
+      });
+
+      expect(find.byKey(kCommandMoveButtonKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kCommandMoveButtonKey));
+      await tester.pump();
+
+      expect(sent, isEmpty);
+      expect(
+        tester.widget<Text>(find.byKey(kCommandErrorKey)).data,
+        contains('楼层号 必填'),
+      );
+
+      await tester.enterText(find.byKey(kCommandMoveFloorFieldKey), '2');
+      await tester.tap(find.byKey(kCommandMoveButtonKey));
+      await tester.pump();
+
+      expect(sent, isEmpty);
+      expect(
+        tester.widget<Text>(find.byKey(kCommandErrorKey)).data,
+        contains('点位号 必填'),
+      );
+
+      await tester.enterText(find.byKey(kCommandMovePosFieldKey), '5');
+      await tester.tap(find.byKey(kCommandMoveButtonKey));
+      await tester.pump();
+
+      expect(sent.single.toJson(), <String, Object?>{'floorNum': 2, 'posNum': 5});
+      // 无下发字节：回执文案不得写成「已下发」。
+      expect(
+        tester.widget<Text>(find.byKey(kCommandAckKey)).data,
+        'MOVE → #14｜已受理（无下发字节）',
+      );
+    });
+
+    testWidgets('非整数 / 小于 1 即拒：不发请求并给出范围提示', (WidgetTester tester) async {
+      final List<MoveVestRequest> sent = <MoveVestRequest>[];
+      await pumpCommand(tester, kill: unexpectedCommand, move: (MoveVestRequest request) async {
+        sent.add(request);
+        return ackOf(command: 'MOVE');
+      });
+
+      await tester.enterText(find.byKey(kCommandMoveFloorFieldKey), '0');
+      await tester.enterText(find.byKey(kCommandMovePosFieldKey), '5');
+      await tester.tap(find.byKey(kCommandMoveButtonKey));
+      await tester.pump();
+
+      expect(sent, isEmpty);
+      expect(
+        tester.widget<Text>(find.byKey(kCommandErrorKey)).data,
+        contains('楼层号 需为 ≥1 的整数'),
+      );
+    });
+
+    testWidgets('403 COMMAND_MOVE_FORBIDDEN：提示「仅联调/训练可用」而非引导要权限',
+        (WidgetTester tester) async {
+      await pumpCommand(
+        tester,
+        kill: unexpectedCommand,
+        move: (MoveVestRequest request) async =>
+            throw apiFailure(403, ApiErrorCode.commandMoveForbidden),
+      );
+
+      await tester.enterText(find.byKey(kCommandMoveFloorFieldKey), '1');
+      await tester.enterText(find.byKey(kCommandMovePosFieldKey), '1');
+      await tester.tap(find.byKey(kCommandMoveButtonKey));
+      await tester.pump();
+
+      expect(
+        tester.widget<Text>(find.byKey(kCommandErrorKey)).data,
+        contains('仅联调/训练可用'),
+      );
+      expect(find.byKey(kCommandAckKey), findsNothing);
+    });
+
+    testWidgets('404 MAP_FLOOR_POINT_NOT_FOUND：提示点位表里没有该点', (WidgetTester tester) async {
+      await pumpCommand(
+        tester,
+        kill: unexpectedCommand,
+        move: (MoveVestRequest request) async =>
+            throw apiFailure(404, ApiErrorCode.mapFloorPointNotFound),
+      );
+
+      await tester.enterText(find.byKey(kCommandMoveFloorFieldKey), '3');
+      await tester.enterText(find.byKey(kCommandMovePosFieldKey), '9');
+      await tester.tap(find.byKey(kCommandMoveButtonKey));
+      await tester.pump();
+
+      expect(
+        tester.widget<Text>(find.byKey(kCommandErrorKey)).data,
+        contains('没有该点'),
       );
     });
   });
