@@ -45,7 +45,8 @@ import java.util.Optional;
  * 装配点在 {@code scds-app} 的 {@code CommandConfig}；{@code @Scheduled} 对 {@code @Bean} 产出的对象
  * 同样生效（{@code ScdsNextApplication} 上开着 {@code @EnableScheduling}）。</p>
  */
-public final class CommandAckTask {
+// 不能是 final：tick() 上的 @Transactional 需要 Spring 生成 CGLIB 代理，final 类无法被继承。
+public class CommandAckTask {
 
     private static final Logger log = LoggerFactory.getLogger(CommandAckTask.class);
 

@@ -164,10 +164,10 @@ class CommandHttpIT {
         assertThat(links.sentCommands().get(0).vestNum()).isEqualTo(target);
         assertThat(links.sentCommands().get(0).hex()).isEqualTo(dieHex);
 
-        // 队列行：直接以 SENT 入队，sent_at 为 NULL（先发字节、成功后一次性落库）
+        // 队列行：以 SENT 入队，且 sent_at 已落库（段 68 起 deliver 落 sent_at = queued_at）
         Map<String, Object> row = commandRow(createdExercises.getLast(), target, "DIE");
         assertThat(row.get("state")).isEqualTo("SENT");
-        assertThat(row.get("sentAt")).isNull();
+        assertThat(row.get("sentAt")).isNotNull();
         assertThat(row.get("downlinkHex")).isEqualTo(dieHex);
         // 审计：DIE 有对应协议类型，落一条 t_exercise_log
         assertThat(logCount(createdExercises.getLast(), "DIE")).isEqualTo(1);
@@ -251,7 +251,7 @@ class CommandHttpIT {
         String exerciseId = createdExercises.getLast();
         Map<String, Object> row = commandRow(exerciseId, 0, "RELOAD_ALL");
         assertThat(row.get("state")).isEqualTo("SENT");
-        assertThat(row.get("sentAt")).isNull();
+        assertThat(row.get("sentAt")).isNotNull();
         assertThat(row.get("downlinkHex")).isEqualTo(hex);
         JsonNode payload = mapper.readTree(String.valueOf(row.get("payloadJson")));
         assertThat(payload.path("ammo").asInt()).isEqualTo(30);
@@ -296,7 +296,7 @@ class CommandHttpIT {
 
         Map<String, Object> row = commandRow(exerciseId, target, "CONFIG");
         assertThat(row.get("state")).isEqualTo("SENT");
-        assertThat(row.get("sentAt")).isNull();
+        assertThat(row.get("sentAt")).isNotNull();
         assertThat(row.get("downlinkHex")).isEqualTo(hex);
         // 参数快照记合并后的生效值，而不是「只传了 hp」这个原始请求
         JsonNode payload = mapper.readTree(String.valueOf(row.get("payloadJson")));
