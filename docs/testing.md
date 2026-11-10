@@ -4617,7 +4617,7 @@ Engine daemon 未运行**（`docs/environments.md` §1），`scds-app/target/scd
 - **客户端门禁**：`flutter test` → `All tests passed!`（**502 例** = 段 67 的 497 例 + **本段 5**）、
   `flutter analyze` → `No issues found! (ran in 2.7s)`；
 - **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
-  段 68 的 **1162 项**预期**仍待 Docker 恢复后补验**；
+  段 68 的 **1162 项**预期**已在第 70 节补验通过**（`mvn -B clean verify` → 1162 项 0/0/0）；
 - **本原子任务 5 文件（1 新 4 改），破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**
   （先例段 53 / 段 61 / 段 62 / 段 65 / 段 68）；
 - **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、`device_app`；
@@ -4628,3 +4628,101 @@ Engine daemon 未运行**（`docs/environments.md` §1），`scds-app/target/scd
 Please enable Developer Mode**」⇒ **Windows / Android 插件构建的前置（Developer Mode）未开启**，`flutter build windows` /
 `flutter build apk` **未跑**（属独立决策点）；**未对着真实后端实例**跑过真实选文件 / 落盘 / 真实 multipart 上传 / 真实模板二进制落盘 /
 真实整文件校验 400。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
+
+## 70. 真后端实例端到端（①）＋ 全量 1162 项实测 ＋ 段 68 收口复核（CGLIB 修复）
+
+承段 69「下一段（候选）① **真后端实例端到端**」（原文：「起 `scds-local-mysql` + `scds-next.jar`，把段 67 的同一条链对着真实例
+再跑一遍，并在真库上补验段 68 的 `EXPIRED` / ACK 收敛——**需 Docker daemon 可用，当前不可行**；这就是「集成层的真依赖仍
+未走通」」）。本段补齐该真依赖，并顺带修复段 68 遗留**两处缺陷**——**这正是「全量 1162 项」此前一直悬而未验的原因**。
+落**一笔代码笔（`617aa0b`，2 文件 / 0 新 2 改）**，证据见下。
+
+### 70.1 段 68 遗留缺陷修复（代码笔 `617aa0b`）
+
+| 文件 | 缺陷 | 修复 |
+|---|---|---|
+| `scds-core/src/main/java/com/dualx/core/command/CommandAckTask.java` | 类被声明为 `final`，而 `tick()` 上的 `@Transactional` 需 Spring 生成 **CGLIB 子类**；`final` 类无法被继承 ⇒ **完整 Spring 上下文启动即 `BeanCreationException`**，`scds-app` 侧 20 个 IT 全挂（段 68 改 Java 后**全量从未跑通**） | 去掉 `final`（并留注释说明约束） |
+| `scds-app/src/test/java/com/dualx/CommandHttpIT.java` | 段 68 让 `deliver` 落 `sent_at = queued_at` 后，三处「队列行 `sentAt` 应为 `NULL`」断言过时 | 三处 `isNull()` → `isNotNull()`，并订正注释（`DIE` / `RELOAD_ALL` / `CONFIG` 三个用例） |
+
+**CGLIB 根因**（工具链约束，非业务）：Spring 的 `@Transactional` 通过**运行时代理**实现；对**类**（非接口）用 CGLIB 生成子类，
+故被代理的类**不能是 `final`**，其方法也**不能是 `final` / `private`**。`CommandAckTask` 是 `@Component` 声明的**具体类**
+（非接口实现），`tick()` 标 `@Transactional` ⇒ 触发 CGLIB ⇒ `final` 声明必须去除。**段 68 的 `mvn -B compile` / 定向单测均通过，
+故该缺陷只在「完整上下文启动」这一层暴露**——这正是**全量门禁不可被定向单测替代**的直接例证。
+
+### 70.2 Maven 全量门禁：1162 项（首次跑通）
+
+命令：仓库根 `mvn -B clean verify`（本地 `scds-local-mysql` healthy、Java 21）。IT 仍只跑隔离库 `scds_next_test`。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 622 | 0/0/0 | **611 → 622（+11）**：段 68 的 `CommandAckTaskTest` 9 + `ExerciseCommandRepositoryIT` +2 |
+| api | 139 | 0/0/0 | 未改动 |
+| app | 333 | 0/0/0 | 未改动（曾因 CGLIB 缺陷**20 个 IT 全挂**，去 `final` 后恢复） |
+| solver/domain | 0 | 无测试 | `scds-solver` 冻结算法未改动 |
+| 总计 | **1162** | **0/0/0** | 全 reactor SUCCESS |
+
+与段 68 / 段 69 的**预期完全一致**（段 68「core 611 → 622」「预期 1162 项」；段 69「段 68 的 1162 项预期仍待 Docker 恢复后补验」）——
+本段**补验通过**。
+
+### 70.3 真后端实例端到端 · Phase A（生产装配 `gateway.mode=real`）
+
+载体：仓库**外**联调脚本（**全 ASCII**——PowerShell 5.1 按 GBK 读含中文的 `.ps1` 会解析失败；`docker exec ... mysql` 的口令
+走 `MYSQL_PWD` env 以规避 `Using a password` 警告在 `ErrorActionPreference='Stop'` 下触发终止）。起 `scds-local-mysql`（容器）
++ `scds-next.jar`（`--spring.profiles.active=local`，**默认 `gateway.mode=real`**），以 `SCDS_ADMIN_USERNAME` / `SCDS_ADMIN_PASSWORD`
+env 注入触发 `AdminAccountBootstrap` 首次建号（本机 `.env` **无** admin 项 ⇒ 真库 `t_account` 原为 **0 行**）。
+
+| 步骤 | 实测 | 结论 |
+|---|---|---|
+| Flyway（真库 `scds_next`） | `flyway_version_in_scds_next = 9` | 真库 schema 为 **V9**（8 份迁移） |
+| `GET /actuator/health` | 200 `{"status":"UP"}` | 真装配健康 |
+| `GET /api/v1/auth/me`（无令牌） | 401 `AUTH_TOKEN_INVALID`（含 `instance` / `traceId`） | 安全失败形状**在真实例上成立** |
+| `POST /api/v1/auth/login` | 200（access token 长 626） | `AdminAccountBootstrap` **真库建号成功**、登录打通 |
+| `GET /api/v1/auth/me`（带令牌） | 200 `{"username":"admin","displayName":"Dev Admin","roles":["ADMIN"],"permissions":["*"]}` | 身份链路完整 |
+| `GET /api/v1/exercise/current` | 200 `{"exerciseId":null,"running":false}` | 无进行中演习的契约形状成立 |
+| `GET /api/v1/devices/links` | 200 三链路 `CLOSED`（`SERIAL_VEST` / `UWB_TCP_SERVER` / `UWB_SERIAL`） | `real` 模式下真实网关链路**已装配、未开** |
+| `POST /api/v1/auth/login`（错口令） | 401 `AUTH_BAD_CREDENTIALS` | 错误凭证分支成立 |
+
+### 70.4 真后端实例端到端 · Phase B（仿真装配，指令链 + 段 68 真库收敛）
+
+以 `--scds.gateway.mode=simulator` 重启同一 jar，把段 67 **同一条代表性链**（登记马甲 → 建想定 → 编成 → 开链路 → 开演 → 判死）
+对着**真实例**再跑一遍，并**在真库上**补验段 68 的收敛：
+
+| 步骤 | 实测 | 结论 |
+|---|---|---|
+| 登记马甲 / 建想定 / 编成 | 201 / 201 / 200 | 链路前置就绪 |
+| 开串口 | 200 `{"state":"OPEN","target":"COM7","baudRate":115200}` | 仿真链路开启 |
+| 开演 | 201 `{"exerciseId":"01a1c406-…","battleMode":"TRAIN","running":true,"rosterCount":1}` | 场次启动 |
+| 判死 `DIE` 马甲 62600 | 200 `{"accepted":true,"queuedAt":"2026-11-10T05:55:08.693Z","downlinkHex":"0009fff48884affa"}` | 指令受理 + 组帧 |
+| 真库行（+2s） | `state=SENT, sent_at=2026-11-10 05:55:08.693, downlink_hex=0009fff48884affa`；在途队列 1 | **段 68 缺陷修复确认：`sent_at` 确实落库**（真库，非 IT 造数） |
+| 真库行（+42s） | **空**；在途队列 **0** | `EXPIRED` 超时收敛 **在真库上确认**（TTL 30s 到期 → 终态 → `deleteFinished` 清理） |
+| 真库 `SYSTEM` 日志 | `超时指令已作废：id=357 DIE 马甲62600 原状态SENT 原因SENT_TIMEOUT 下发于2026-11-10T05:55:08.693Z` | 作废留痕成立，`REASON_SENT_TIMEOUT` 如实 |
+| 停演 / 残留 | `stop_exercise=200`；`leftover_exercises=0`、`leftover_vests=0` | 精确回收 |
+
+**判死字节逐字节核对**：`62600 = 0xF488` ⇒ `0009 ff f488 84 88affa`——`0009` 帧长、`ff` 判死帧型、
+校验 `0x84`，与冻结组帧输出**逐字节一致**（协议冻结字节未动）。
+
+**`@Scheduled` 真装配观测**：段 68 自记「`@Scheduled` **未在真装配下观测**（单测为手工调 `tick()`）」——本段真装配下
+`CommandAckTask`（`fixedDelay=1000ms`）/ `ExerciseCommandExpiryTask`（`fixedDelay=5000ms`）**确实按节拍运行**
+（否则 +42s 后真库行不会自动收敛到空）。至此段 68「未验项」中的 `EXPIRED` 真库收敛与 `@Scheduled` 真装配观测**均已补验**。
+
+### 70.5 门禁与边界
+
+- **Maven 全量**：`mvn -B clean verify` → **1162 项 / 0 / 0 / 0**（§70.2）。
+- **真后端实例**：Phase A（`real`）+ Phase B（`simulator`）**均跑通**（§70.3 / §70.4）。
+- **未改动**：协议冻结字节（`docs/PROTOCOL.md` 未动）、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、Flyway 迁移
+  （`t_exercise_command` DDL 未改）、`scds-solver`、客户端（`clients/scds_client` **未动**）；**未新增依赖**。
+  代码笔 `617aa0b` **2 文件**，**未破「每原子任务 ≤3 文件」上限**。
+- **副作用（须显式记录）**：
+  - 清理计划任务 `scds-docker-boot` 会**连带结束 Docker Desktop 的进程树** ⇒ **Docker 引擎随之停止**（`docker ps` 报
+    `failed to connect … npipe:////./pipe/dockerDesktopLinuxEngine`）。引擎**须以计划任务方式重启**（终端 `RunCommand` 的 job
+    会杀子进程树）；`mysql_data` 卷内数据保留。
+  - 真库首启建号产生 **1 个 `admin` 账号 + 3 条 refresh token**（初始 0 账号）——**属应用自带机制，默认保留、可回退**；
+    Phase B 回收后 `exercises` / `commands` / `logs` / `vests` / `plans` **全 0**。
+
+**未验项**：**`SENT → ACKED` 不可验**——协议 A **无回执帧**，链路级确认需目标马甲在 `sent_at` 之后**回一个 `ff03` 心跳**，
+**本机无真实硬件 ⇒ 能力边界，非缺陷**（段 68 已定义 `ACKED` 为链路级确认，不等于「设备已执行」）；真实硬件串口（`COM7` 实机）、
+UWB TCP 12001 真实基站、物理断外网均**未测**；真·系统「另存为」对话框（段 69）仍**仅运行态（真机 / 桌面）可验**；
+Windows / Android 插件构建前置（**Developer Mode**）**未开启**，`flutter build windows` / `flutter build apk` **未跑**。
+本段为**真后端实例上的实测验收**，仍未覆盖**硬件层与真机构建**。
+

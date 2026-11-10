@@ -2554,4 +2554,53 @@ Windows / Android 真实构建**（补齐段 69 的构建前置）；⑤ 安装 
 （段 69 收口，**不再作为待办**；余「Developer Mode 未开启 ⇒ 真机构建未跑」为**新观察项**）；段 59~66 集成层——**客户端内接缝**已由段 67
 覆盖一条代表性链，**对真实后端实例的真依赖**仍**均未走通**（含段 68 的 `EXPIRED` / ACK 真库收敛）。
 
+**段 70 落地（2026-11-10，真后端实例端到端 ① ＋ 全量 1162 项 ＋ 段 68 收口复核）**：
+承段 69「下一段（候选）① **真后端实例端到端**」（原文：「起 `scds-local-mysql` + `scds-next.jar`，把段 67 的同一条链对着真实例
+再跑一遍，并在真库上补验段 68 的 `EXPIRED` / ACK 收敛——**需 Docker daemon 可用，当前不可行**；这就是「集成层的真依赖仍
+未走通」」）。本段补齐该真依赖，并顺带修复段 68 遗留**两处缺陷**——**这正是「全量 1162 项」此前一直悬而未验的原因**。
+落**一笔代码笔（`617aa0b`，2 文件 / 0 新 2 改，未破「≤3 文件」上限）**：
+
+- **CGLIB 代理约束（工具链，非业务）**：`CommandAckTask` 被声明为 `final`，而 `tick()` 上的 `@Transactional` 需 Spring 生成
+  **CGLIB 子类**；`final` 类无法被继承 ⇒ **完整上下文启动即 `BeanCreationException`**，`scds-app` 侧 20 个 IT 全挂。
+  **修法：去掉 `final`**。段 68 的 `mvn -B compile` / 定向单测均通过，该缺陷**只在「完整上下文启动」这一层暴露**。
+- **过时断言订正**：段 68 让 `deliver` 落 `sent_at = queued_at` 后，`CommandHttpIT` 三处「队列行 `sentAt` 应为 `NULL`」断言过时，
+  改为 `isNotNull()`（`DIE` / `RELOAD_ALL` / `CONFIG`）。
+- **全量门禁首次跑通**：`mvn -B clean verify` → **1162 项 / 0 / 0 / 0**（protocol 19 + gateway 49 + core **622**〔611 → 622，+11 = 段 68
+  的 9 单测 + 2 IT〕+ api 139 + app 333；solver/domain 无测试）。与段 68 / 69 的**预期完全一致**。
+- **真后端实例 Phase A（`gateway.mode=real`）**：真库 `scds_next` Flyway **V9**；`/actuator/health` 200 UP；
+  无令牌 `/api/v1/auth/me` 401 `AUTH_TOKEN_INVALID`；`AdminAccountBootstrap` **真库建号成功**（原 0 账号）+ 登录 200；
+  带令牌 `me` 200（`admin` / `ADMIN` / `permissions:["*"]`）；`exercise/current` 200（`running:false`）；
+  `devices/links` 200 三链路 `CLOSED`（真实网关**已装配、未开**）；错口令 401 `AUTH_BAD_CREDENTIALS`。
+- **真后端实例 Phase B（`simulator`，段 67 同一条链 + 段 68 真库收敛）**：开串口 200 → 开演 201 → 判死 200
+  （`downlinkHex = 0009fff48884affa`，`62600 = 0xF488`，校验 `0x84`，**与冻结组帧逐字节一致**）；
+  **真库 +2s**：`state=SENT, sent_at=2026-11-10 05:55:08.693`（**`sent_at` 确实落库**，段 68 缺陷修复确认）；
+  **真库 +42s**：行**空**、在途队列 **0**（`EXPIRED` 超时收敛**在真库上确认**）；真库 `SYSTEM` 日志
+  `超时指令已作废：… 原因SENT_TIMEOUT`；停演 200、残留 **0**。
+- **`@Scheduled` 真装配观测**：段 68 自记「未在真装配下观测（单测手工调 `tick()`）」——本段真装配下 `CommandAckTask`（1000ms）/
+  `ExerciseCommandExpiryTask`（5000ms）**确实按节拍运行**（否则 +42s 不会自动收敛）。段 68 的 `EXPIRED` 真库收敛与 `@Scheduled`
+  真装配观测**均已补验**。
+- **副作用（须显式记录）**：清理计划任务 `scds-docker-boot` 会**连带结束 Docker Desktop 进程树 ⇒ Docker 引擎随之停止**
+  （`docker ps` 报 `failed to connect … npipe:////./pipe/dockerDesktopLinuxEngine`）；引擎**须以计划任务方式重启**
+  （终端 `RunCommand` 的 job 会杀子进程树），`mysql_data` 卷内数据保留。真库首启建号产生 **1 个 `admin` 账号 + 3 条 refresh token**
+  （初始 0 账号）——**属应用自带机制，默认保留、可回退**；Phase B 回收后 `exercises`/`commands`/`logs`/`vests`/`plans` **全 0**。
+
+门禁：`mvn -B clean verify` → **1162 项 / 0 / 0 / 0**；真后端实例 Phase A（`real`）+ Phase B（`simulator`）**均跑通**。
+证据见 [testing](testing.md) **第 70 节**。
+
+**未验项**：**`SENT → ACKED` 不可验**——协议 A **无回执帧**，链路级确认需目标马甲在 `sent_at` 之后**回一个 `ff03` 心跳**，
+**本机无真实硬件 ⇒ 能力边界，非缺陷**；真实硬件串口（`COM7` 实机）、UWB TCP 12001 真实基站、物理断外网均**未测**；
+真·系统「另存为」对话框（段 69）仍**仅运行态（真机 / 桌面）可验**；Windows / Android 插件构建前置（**Developer Mode**）**未开启**，
+`flutter build windows` / `flutter build apk` **未跑**。
+
+**下一段（候选）**：观察项「段 59~66 对真实后端实例的真依赖」在本段**收口**（客户端内接缝段 67 已覆盖，真后端实例段 70 已覆盖；
+余 `SENT → ACKED` 为**硬件能力边界**，**不再作为待办**）。下一步候选（按推荐序）：
+① T-PROD 部署（**需真实目标环境，本机不可行**）；② **平台安全存储（Android Keystore / Windows DPAPI）＋ 连接配置落盘**
+（**需另授权引依赖**；**用户已选为本段下一项**）；③ **开启 Developer Mode 并跑一次 Windows / Android 真实构建**（补齐段 69 的构建前置）；
+④ 安装 Visual Studio C++ 工作负载（**需另授权**）以补齐 **Windows 原生构建验收**。
+
+**观察项**：硬件 ACK 解析——**协议 A 允许范围内已收口**（**不再作为待办**；`SENT → ACKED` 为硬件能力边界）；段 53/58/59 注入端口
+生产端文件能力——**已接真实实现**（段 69，**不再作为待办**）；段 59~66 集成层——**客户端内接缝**已由段 67 覆盖一条代表性链，
+**对真实后端实例的真依赖**已由段 70 覆盖（**收口，不再作为待办**）；余「**Developer Mode 未开启 ⇒ 真机构建未跑**」与
+「**平台安全存储 / 连接配置落盘未做**」（用户已选为下一段）为**新观察项**。
+
 
