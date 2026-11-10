@@ -35,6 +35,11 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # 段 69：真实文件选择器 / 落盘（选文件 + 系统「另存为」对话框）。
+  # 供指挥端三处文件能力使用：导入想定（选文件）、上传底图（选图）、
+  # 模板下载 / 导出下载（落盘）。集中封装在 shared/io/platform_file_io.dart。
+  file_picker: ^13.3.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

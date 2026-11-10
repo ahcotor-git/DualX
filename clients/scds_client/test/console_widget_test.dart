@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,6 +38,7 @@ import 'package:scds_client/shared/api/situation_models.dart';
 import 'package:scds_client/shared/auth/session_store.dart';
 import 'package:scds_client/shared/config/connection_config.dart';
 import 'package:scds_client/shared/config/connection_config_store.dart';
+import 'package:scds_client/shared/io/platform_file_io.dart';
 import 'package:scds_client/shared/state/links_socket.dart';
 import 'package:scds_client/shared/state/situation_socket.dart';
 
@@ -62,12 +64,14 @@ void main() {
   Future<void> pumpConsole(
     WidgetTester tester, {
     ApiTransport Function(ConnectionConfig config)? clientFactory,
+    FileIo fileIo = const PlatformFileIo(),
   }) async {
     await tester.pumpWidget(
       ScdsConsoleApp(
         configStore: store,
         sessionStore: sessionStore,
         clientFactory: clientFactory ?? httpApiClient,
+        fileIo: fileIo,
       ),
     );
     await tester.pumpAndSettle();
@@ -5689,8 +5693,8 @@ void main() {
           'POST $kApiPrefix/replays/r-1/exports',
         ]),
       );
-      // 生产端未注入落盘端口，故不给「下载」按钮（产物走 downloadUrl）。
-      expect(find.byKey(kReplayExportDownloadButtonKey), findsNothing);
+      // 段 69：生产端接真实落盘能力（系统「另存为」），故「下载」按钮在位。
+      expect(find.byKey(kReplayExportDownloadButtonKey), findsOneWidget);
 
       await unmount(tester);
     });
@@ -5883,11 +5887,13 @@ void main() {
     });
   });
 
-  /// 段 59：想定导入接线——从队伍汇总页进入想定管理页，文件能力未接入时的生产行为。
+  /// 段 59 / 段 69：想定导入接线——从队伍汇总页进入想定管理页，文件能力已接入真实端口。
   group('指挥端想定导入接线（段 59）', () {
-    testWidgets('想定管理页：接入选文件占位后「导入想定」在位，点击即「未选择文件」且不发请求',
+    testWidgets('想定管理页：接真实文件能力后「导入想定」「下载模板」皆在位，取消选文件即「未选择文件」且不发请求',
         (WidgetTester tester) async {
       final ScriptedTransport transport = ScriptedTransport();
+      // 假件默认 `pickFile` 回 `null`（用户取消），本用例即验取消分支。
+      final FakeFileIo fileIo = FakeFileIo();
       transport.responder = (ScriptedCall call) async {
         switch (call.key) {
           case 'POST $kApiPrefix/auth/login':
@@ -5918,7 +5924,11 @@ void main() {
         fail('未预期的请求：${call.key}');
       };
 
-      await pumpConsole(tester, clientFactory: (ConnectionConfig config) => transport);
+      await pumpConsole(
+        tester,
+        clientFactory: (ConnectionConfig config) => transport,
+        fileIo: fileIo,
+      );
       await enter(tester, '127.0.0.1', '11001');
       await tapSave(tester);
       await enterCredentials(tester, 'admin', 'secret');
@@ -5927,13 +5937,17 @@ void main() {
       await tester.tap(find.byKey(kTeamSummaryPlansEntryKey));
       await tester.pumpAndSettle();
 
-      // 生产端接了个「未选择」占位：入口在位；未注入落盘端口：不给「下载模板」。
+      // 段 69：生产端两端口皆接真实文件能力，故「导入想定」与「下载模板」皆在位。
       expect(find.byKey(kPlanManagerImportButtonKey), findsOneWidget);
-      expect(find.byKey(kPlanManagerTemplateButtonKey), findsNothing);
+      expect(find.byKey(kPlanManagerTemplateButtonKey), findsOneWidget);
 
       await tester.tap(find.byKey(kPlanManagerImportButtonKey));
       await tester.pumpAndSettle();
 
+      // 真实选文件端口按段 69 约定限 xlsx / csv；假件回 `null` 即用户取消。
+      expect(fileIo.pickCalls, <List<String>?>[
+        <String>['xlsx', 'csv'],
+      ]);
       expect(find.text('未选择文件'), findsOneWidget);
       // 未选择即止步：链路只到 login / summary / plans（汇总页另有周期轮询，故用有序包含），
       // 且**未发生任何导入 POST**。
@@ -5952,6 +5966,313 @@ void main() {
       );
 
       await unmount(tester);
+    });
+  });
+
+  /// 段 69：真实文件能力接线——`console_app` 三处装配（导入想定选文件 / 上传底图选图 /
+  /// 模板与导出下载落盘）改接 [FileIo]（生产为 `file_picker` + 系统对话框）。
+  ///
+  /// 单测**只覆盖注入假件路径**：真·系统对话框仅在运行态（真机 / 桌面）可验，
+  /// 且 Windows / Android 插件构建还须开启 Developer Mode（见 docs/environments.md）。
+  group('指挥端文件能力接线（段 69）', () {
+    testWidgets('导入想定：经真实端口选文件（限 xlsx / csv）→ 走 POST /plans/import',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/plans':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'planId': 'p-1',
+                  'name': '红方突袭',
+                  'createdAt': '2026-10-29T00:00:00Z',
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'POST $kApiPrefix/plans/import':
+            return jsonResponse(
+              <String, dynamic>{
+                'planId': 'p-9',
+                'name': '夜间行军',
+                'createdAt': '2026-10-29T00:00:00Z',
+              },
+              statusCode: 201,
+            );
+        }
+        fail('未预期的请求：${call.key}');
+      };
+      final FakeFileIo fileIo = FakeFileIo(
+        pickFileResult: PickedFileData(
+          filename: 'roster.xlsx',
+          bytes: Uint8List.fromList(<int>[9, 8]),
+        ),
+      );
+
+      await pumpConsole(
+        tester,
+        clientFactory: (ConnectionConfig config) => transport,
+        fileIo: fileIo,
+      );
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryPlansEntryKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kPlanManagerImportButtonKey));
+      await tester.pumpAndSettle();
+
+      // 真实端口按段 69 约定限 xlsx / csv；文件名 / 字节原样交导入端口。
+      expect(fileIo.pickCalls, <List<String>?>[
+        <String>['xlsx', 'csv'],
+      ]);
+      expect(
+        transport.calls
+            .lastWhere((ScriptedCall call) => call.key == 'POST $kApiPrefix/plans/import')
+            .authorization,
+        'Bearer access-1',
+      );
+      expect(find.text('已导入想定「夜间行军」'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('上传底图：经真实端口选图（限 png / jpg / jpeg / webp）→ 走 POST /maps/{id}/image',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/maps':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{'mapId': 'm-1', 'name': '演训场', 'type': 'INDOOR'},
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'POST $kApiPrefix/maps/m-1/image':
+            return jsonResponse(<String, dynamic>{
+              'mapId': 'm-1',
+              'name': '演训场',
+              'type': 'INDOOR',
+            });
+        }
+        fail('未预期的请求：${call.key}');
+      };
+      final FakeFileIo fileIo = FakeFileIo(
+        pickFileResult: PickedFileData(
+          filename: 'base.PNG',
+          bytes: Uint8List.fromList(<int>[80, 78, 71]),
+        ),
+      );
+
+      await pumpConsole(
+        tester,
+        clientFactory: (ConnectionConfig config) => transport,
+        fileIo: fileIo,
+      );
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryMapsEntryKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(mapManagerUploadKey('m-1')));
+      await tester.pumpAndSettle();
+
+      // 真实端口按段 69 约定限 png / jpg / jpeg / webp。
+      expect(fileIo.pickCalls, <List<String>?>[
+        <String>['png', 'jpg', 'jpeg', 'webp'],
+      ]);
+      expect(
+        transport.calls
+            .where((ScriptedCall call) => call.key == 'POST $kApiPrefix/maps/m-1/image'),
+        hasLength(1),
+      );
+      expect(find.text('已上传底图「演训场」的图片'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('下载模板：经真实落盘端口写出（文件名与 contentType 原样交端口）',
+        (WidgetTester tester) async {
+      const String xlsxMime =
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/plans':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 0},
+            });
+          case 'GET $kApiPrefix/plans/template':
+            return ApiResponse(
+              statusCode: 200,
+              contentType: xlsxMime,
+              body: <int>[80, 75, 3, 4],
+            );
+        }
+        fail('未预期的请求：${call.key}');
+      };
+      final FakeFileIo fileIo = FakeFileIo();
+
+      await pumpConsole(
+        tester,
+        clientFactory: (ConnectionConfig config) => transport,
+        fileIo: fileIo,
+      );
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryPlansEntryKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kPlanManagerTemplateButtonKey));
+      await tester.pumpAndSettle();
+
+      // 默认 XLSX：产物经真实落盘端口写出，本页不解码、不直接落盘。
+      expect(fileIo.pickCalls, isEmpty);
+      expect(fileIo.saveCalls.single.filename, 'plan-template.xlsx');
+      expect(fileIo.saveCalls.single.bytes, <int>[80, 75, 3, 4]);
+      expect(fileIo.saveCalls.single.contentType, xlsxMime);
+      expect(find.text('已保存模板 plan-template.xlsx'), findsOneWidget);
+
+      await unmount(tester);
+    });
+
+    testWidgets('复盘导出下载：经真实落盘端口写出（文件名取服务端 fileName）',
+        (WidgetTester tester) async {
+      final ScriptedTransport transport = ScriptedTransport();
+      transport.responder = (ScriptedCall call) async {
+        switch (call.key) {
+          case 'POST $kApiPrefix/auth/login':
+            return jsonResponse(<String, dynamic>{
+              'accessToken': 'access-1',
+              'expiresIn': 900,
+              'refreshToken': 'refresh-1',
+              'user': <String, dynamic>{
+                'userId': 'u-1',
+                'username': 'admin',
+                'roles': <String>['OPERATOR'],
+              },
+            });
+          case 'GET $kApiPrefix/situation/teams/summary':
+            return jsonResponse(<Object>[]);
+          case 'GET $kApiPrefix/replays':
+            return jsonResponse(<String, dynamic>{
+              'items': <Object>[
+                <String, dynamic>{
+                  'replayId': 'r-1',
+                  'planName': '红方突袭',
+                  'startedAt': '2026-10-01T08:00:00Z',
+                },
+              ],
+              'meta': <String, dynamic>{'page': 1, 'size': 20, 'total': 1},
+            });
+          case 'POST $kApiPrefix/replays/r-1/exports':
+            return jsonResponse(
+              <String, dynamic>{
+                'taskId': 't-1',
+                'state': 'SUCCEEDED',
+                'progressPct': 100,
+                'fileName': 'r-1.xlsx',
+              },
+              statusCode: 202,
+            );
+          case 'GET $kApiPrefix/replays/r-1/exports/t-1/download':
+            return ApiResponse(
+              statusCode: 200,
+              contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              body: <int>[65, 66, 67],
+            );
+        }
+        fail('未预期的请求：${call.key}');
+      };
+      final FakeFileIo fileIo = FakeFileIo();
+
+      await pumpConsole(
+        tester,
+        clientFactory: (ConnectionConfig config) => transport,
+        fileIo: fileIo,
+      );
+      await enter(tester, '127.0.0.1', '11001');
+      await tapSave(tester);
+      await enterCredentials(tester, 'admin', 'secret');
+      await tapLogin(tester);
+
+      await tester.tap(find.byKey(kTeamSummaryReplaysEntryKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(replayListExportKey('r-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kReplayExportStartButtonKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kReplayExportDownloadButtonKey));
+      await tester.pumpAndSettle();
+
+      // 文件名取服务端 fileName；字节原样交真实落盘端口。
+      expect(fileIo.pickCalls, isEmpty);
+      expect(fileIo.saveCalls.single.filename, 'r-1.xlsx');
+      expect(fileIo.saveCalls.single.bytes, <int>[65, 66, 67]);
+      expect(find.text('已保存 r-1.xlsx'), findsOneWidget);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 69：图片 MIME 的**本地如实声明**（服务端仍按真实图片头判型，本地声明不作数）。
+  group('图片 MIME 声明（段 69）', () {
+    test('按扩展名如实声明 MIME；未知 / 无扩展名回通用流', () {
+      expect(contentTypeForFilename('a.png'), 'image/png');
+      expect(contentTypeForFilename('B.JPG'), 'image/jpeg');
+      expect(contentTypeForFilename('c.jpeg'), 'image/jpeg');
+      expect(contentTypeForFilename('d.webp'), 'image/webp');
+      expect(contentTypeForFilename('e.gif'), 'application/octet-stream');
+      expect(contentTypeForFilename('noext'), 'application/octet-stream');
+      expect(contentTypeForFilename('archive.tar.png'), 'image/png');
     });
   });
 
@@ -7142,6 +7463,51 @@ void main() {
       await unmount(tester);
     });
   });
+}
+
+/// 段 69：平台文件能力假件——记录调用与入参，回值可脚本化。
+///
+/// 缺省：`pickFile` 回 `null`（用户取消），`saveFile` 回 `true`（已写出）。
+/// **不触碰真实平台通道**——真·系统对话框仅在运行态（真机 / 桌面）可验。
+class FakeFileIo implements FileIo {
+  FakeFileIo({this.pickFileResult, this.saveFileResult = true});
+
+  /// `pickFile` 的脚本化回值；`null` 表示用户取消。
+  PickedFileData? pickFileResult;
+
+  /// `saveFile` 的脚本化回值。
+  bool saveFileResult;
+
+  /// 每次 `pickFile` 收到的 `allowedExtensions`（按调用顺序）。
+  final List<List<String>?> pickCalls = <List<String>?>[];
+
+  /// 每次 `saveFile` 收到的入参（按调用顺序）。
+  final List<FakeSaveCall> saveCalls = <FakeSaveCall>[];
+
+  @override
+  Future<PickedFileData?> pickFile({List<String>? allowedExtensions}) async {
+    pickCalls.add(allowedExtensions);
+    return pickFileResult;
+  }
+
+  @override
+  Future<bool> saveFile({
+    required String filename,
+    required List<int> bytes,
+    String? contentType,
+  }) async {
+    saveCalls.add(FakeSaveCall(filename: filename, bytes: bytes, contentType: contentType));
+    return saveFileResult;
+  }
+}
+
+/// [FakeFileIo.saveFile] 收到的一次落盘入参。
+class FakeSaveCall {
+  const FakeSaveCall({required this.filename, required this.bytes, required this.contentType});
+
+  final String filename;
+  final List<int> bytes;
+  final String? contentType;
 }
 
 /// RES-D：脚本化传输桩——按请求回预置响应，并把**真实收到的请求**记下来。

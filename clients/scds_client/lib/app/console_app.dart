@@ -37,6 +37,7 @@ import '../shared/auth/refreshing_api_transport.dart';
 import '../shared/auth/session_store.dart';
 import '../shared/config/connection_config.dart';
 import '../shared/config/connection_config_store.dart';
+import '../shared/io/platform_file_io.dart';
 import '../shared/state/links_socket.dart';
 import '../shared/state/situation_socket.dart';
 import 'client_factory.dart';
@@ -57,6 +58,7 @@ class ScdsConsoleApp extends StatefulWidget {
     required this.configStore,
     required this.sessionStore,
     this.clientFactory = httpApiClient,
+    this.fileIo = const PlatformFileIo(),
   });
 
   /// 连接配置存储端口。当前为内存实现（不落盘）。
@@ -64,6 +66,12 @@ class ScdsConsoleApp extends StatefulWidget {
 
   /// 会话存储端口（账号 / 设备两类）。当前为内存实现（不落盘）。
   final SessionStore sessionStore;
+
+  /// 平台文件能力端口（段 69）：选文件（段 53 / 59）+ 落盘（段 58 / 59）。
+  ///
+  /// 生产默认走 [PlatformFileIo]（`file_picker` + 系统对话框）；测试注入假件，
+  /// **不触碰真实平台通道**。
+  final FileIo fileIo;
 
   /// HTTP 客户端工厂；换实例即换客户端。
   ///
@@ -366,6 +374,37 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
     );
   }
 
+  /// 段 69：选想定模板文件（XLSX / CSV）→ 交段 59 的导入端口；用户取消回 `null`。
+  Future<PickedPlanFile?> _pickPlanFile() async {
+    final PickedFileData? file = await widget.fileIo.pickFile(
+      allowedExtensions: const <String>['xlsx', 'csv'],
+    );
+    return file == null
+        ? null
+        : PickedPlanFile(filename: file.filename, bytes: file.bytes);
+  }
+
+  /// 段 69：选底图图片（PNG / JPEG / WebP）→ 交段 53 的上传端口；用户取消回 `null`。
+  ///
+  /// `contentType` 按扩展名**如实声明**，服务端仍按真实图片头判型（仅认 PNG / JPEG / WebP）。
+  Future<PickedImage?> _pickMapImage() async {
+    final PickedFileData? file = await widget.fileIo.pickFile(
+      allowedExtensions: const <String>['png', 'jpg', 'jpeg', 'webp'],
+    );
+    if (file == null) {
+      return null;
+    }
+    return PickedImage(
+      filename: file.filename,
+      bytes: file.bytes,
+      contentType: contentTypeForFilename(file.filename),
+    );
+  }
+
+  /// 段 69：落盘端口（段 58 导出下载 / 段 59 模板下载共用）——走系统「另存为」。
+  Future<void> _saveBytes(String filename, List<int> bytes, String? contentType) =>
+      widget.fileIo.saveFile(filename: filename, bytes: bytes, contentType: contentType);
+
   /// 段 49：打开想定管理页（列表 / 新建 / 编辑 / 删除；段 59 增模板下载 / 导入）。
   ///
   /// 各端口都是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
@@ -375,12 +414,10 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
   /// 注：修改想定是**整体替换**（`PlanUpsertRequest` 显式输出全部键），
   /// 页面以服务端回传快照预填表单，故这里只管透传请求体。
   ///
-  /// 段 59 文件能力（与段 53 `pickImage` / 段 58 `saveBytes` 同口径，**刻意不引第三方依赖**）：
-  /// - `pickFile` 是**选文件端口**——生产端先接一个「未选择」占位（恒回 `null`，等同系统
-  ///   文件对话框里按取消），真实选文件待后续接入；数据链路（[PlanImporter]）已按契约接齐，
-  ///   测试用注入假件驱动全流程；
-  /// - `saveBytes`（落盘）**不注入**——模板下载须能落盘才有意义，故「下载模板」按钮不渲染，
-  ///   待落盘能力接入后再补。
+  /// 段 59 / 段 69 文件能力：两端口都接**真实平台能力**（[FileIo]，`file_picker` + 系统对话框），
+  /// 故生产端「导入想定」与「下载模板」皆在位：
+  /// - `pickFile` 走 [_pickPlanFile]（限 xlsx / csv），用户取消即回 `null`——页面按「未选择文件」止步；
+  /// - `saveBytes` 走 [_saveBytes]（系统「另存为」）。
   void _openPlans({
     required NavigatorState navigator,
     required ExerciseApi exercises,
@@ -421,7 +458,8 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             bytes: bytes,
             name: name,
           ),
-          pickFile: () async => null,
+          pickFile: _pickPlanFile,
+          saveBytes: _saveBytes,
           onOpenRoster: (Plan plan) => _openRoster(
             navigator: navigator,
             exercises: exercises,
@@ -511,10 +549,9 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
   /// （续期换令牌后自动生效）；全部走同一条 [RefreshingApiTransport]，
   /// 令牌到期时自动续期并重试一次。
   ///
-  /// 注：`pickImage` 是**选文件端口**——Flutter 桌面 / Android 没有内置选文件 API，
-  /// 本段**刻意不引第三方依赖**（`file_picker` 等需单独授权），故生产端先接一个
-  /// 「未选择」占位（恒回 `null`，等同系统文件对话框里按取消），真实选文件待后续接入；
-  /// 数据链路（[MapImageUploader]）已按契约接齐，测试用注入假件驱动全流程。
+  /// 注：`pickImage` 走 [_pickMapImage]——段 69 接入真实平台选文件能力（[FileIo]，
+  /// `file_picker` + 系统对话框，限 png / jpg / jpeg / webp），用户取消即回 `null`；
+  /// 数据链路（[MapImageUploader]）按契约接齐。
   void _openMaps({
     required NavigatorState navigator,
     required MapApi maps,
@@ -553,7 +590,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             token: _account!.accessToken,
             mapId: mapId,
           ),
-          pickImage: () async => null,
+          pickImage: _pickMapImage,
           onOpenCalibration: (MapDetail map) => _openUwbCalibration(
             navigator: navigator,
             maps: maps,
@@ -771,11 +808,9 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
   /// 三端口都走同一条 [RefreshingApiTransport]，**全闭包读 `_account!.accessToken`**
   /// （续期换到的新令牌才生效）；令牌到期由装饰器自动续期并重试一次。
   ///
-  /// 注：`saveBytes` 是**落盘端口**——Flutter 桌面 / Android 没有内置写文件对话框，
-  /// 本段**刻意不引第三方依赖**（与段 53 的选文件端口同口径），故生产端暂不注入
-  /// （「下载」按钮不渲染）；产物仍可经任务回带的 `downloadUrl`（短时效签名 URL）
-  /// 交浏览器 / 下载器直取，真实落盘待后续接入。数据链路（发起 202 / 轮询 / 下载）
-  /// 已按契约接齐，测试用注入假件驱动全流程。
+  /// 注：`saveBytes` 走 [_saveBytes]——段 69 接入真实平台落盘能力（[FileIo]，系统「另存为」），
+  /// 故「下载」按钮在位；产物亦可经任务回带的 `downloadUrl`（短时效签名 URL）直取。
+  /// 数据链路（发起 202 / 轮询 / 下载）已按契约接齐。
   void _openReplayExport({
     required NavigatorState navigator,
     required ReplayApi replays,
@@ -806,6 +841,7 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             replayId: replay.replayId,
             taskId: taskId,
           ),
+          saveBytes: _saveBytes,
         ),
       ),
     );
