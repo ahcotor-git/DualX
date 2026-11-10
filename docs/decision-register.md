@@ -2510,4 +2510,48 @@ Dart 产物**不进 Maven reactor**，全量仍 **1151 项**（未改 Java / 契
 **不再作为待办**）；段 53/58/59 注入端口生产端仍未接真实文件选择器 / 落盘；段 59~66 集成层——**客户端内接缝**已由段 67 覆盖
 一条代表性链，**对真实后端实例的真依赖**仍**均未走通**（含本段的 `EXPIRED` / ACK 真库收敛）。
 
+**段 69 落地（2026-11-09，M6 CLIENT-WINDOWS 续段「文件能力接线」：段 53/58/59 三处注入端口接入真实文件选择器 / 落盘）**：
+承段 68「下一段（候选）④ 接真实**文件选择器 / 落盘**」与用户三答——技术路线「**`file_picker ^13.3.2`**」（**授权引入第三方依赖**）、
+批次「**一段内一次补齐三处**」、落盘交互「**系统「另存为」对话框**」。段 59「观察项」里「段 53/58/59 注入端口生产端仍未接真实
+文件选择器 / 落盘」在本段落定。落**一笔**（**5 文件 / 1 新 4 改**，**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**，
+先例段 53 / 段 61 / 段 62 / 段 65 / 段 68）：
+
+- **口径保留、只把生产端接真**：「注入端口」**口径本身不变**——页面仍**成对注入、缺一即不渲染**（段 53 `pickImage` / 段 58/59
+  `saveBytes` / `pickFile`）。本段只把**生产端三处端口**由占位 / 不注入**改接真实实现**，故生产端「下载」「下载模板」「导入想定」
+  「上传图片」**皆在位**（此前「下载」「下载模板」不渲染、「导入想定」「上传图片」为「未选择」占位）。
+- **窄端口集中在 `shared/io/`**：新增 `lib/shared/io/platform_file_io.dart`——`abstract interface class FileIo`
+  （`pickFile({allowedExtensions})` 回 `PickedFileData?`；`saveFile({filename, bytes, contentType})` 回 `bool`）+ 载体 `PickedFileData`
+  + `PlatformFileIo`（`file_picker` **静态 API** `FilePicker.pickFile` / `FilePicker.saveFile`）+ 助手 `contentTypeForFilename`。
+  指挥端三处文件能力只依赖 `FileIo`，**页面不各自引平台代码**；测试注入 `FakeFileIo`，**不触碰真实平台通道**。
+- **落盘由插件自写字节**：`FilePicker.saveFile(fileName:, bytes:, mimeType:)` 在插件**平台实现内**落盘（Windows `IFileSaveDialog`
+  + `File(path).writeAsBytes`；Android SAF），**调用方无需 `dart:io`** ⇒ `PlatformFileIo` **不碰 `dart:io`**。
+- **`allowedExtensions` 仅在 `FileType.custom` 下生效**：导入限 `xlsx`/`csv`、选图限 `png`/`jpg`/`jpeg`/`webp`；`null` 时用 `FileType.any`。
+- **`contentType` 只本地如实声明**：服务端仍按**真实图片头**判型（仅认 PNG / JPEG / WebP），本地声明**不作数**；
+  名字与内容不符由服务端回绝。**取消即 `null`**（选文件取消 → 页面「未选择文件」止步、不发请求）。
+- **首次新增第三方依赖**：`pubspec.yaml` 加 `file_picker: ^13.3.2`（自段 59「注入端口、不引依赖」口径起首度破例），
+  `flutter pub get` 连带 `pubspec.lock`（**+18 依赖**）。本段经用户显式授权。
+- **文件**：`lib/shared/io/platform_file_io.dart`（新）＋ `lib/app/console_app.dart`（改：`fileIo` 构造参数 + `_pickPlanFile`/
+  `_pickMapImage`/`_saveBytes` 三装配助手 + 三处端口接真）＋ `pubspec.yaml`（改）＋ `pubspec.lock`（改，连带）＋
+  `test/console_widget_test.dart`（改，**+5 例**；新增假件 `FakeFileIo`/`FakeSaveCall`；更新段 58 / 段 59 两条接线断言）。
+
+门禁：本段改 Dart，`flutter analyze` → `No issues found! (ran in 2.7s)`；`flutter test` → **502 例全绿**（段 67 的 497 + 本段 **5**）。
+**Maven 侧 0/0/0**——本段产物全在 `clients/scds_client`，**不进 reactor**，未改任何 Java / 契约文件，故**未重跑**；基准仍 **1151 项**
+（段 68 的 **1162 项**预期**仍待 Docker 恢复后补验**）。证据见 [testing](testing.md) **第 69 节**。
+
+**未验项**：**真·系统对话框仅在运行态（真机 / 桌面）可验**——单测**只覆盖注入假件路径**，真实 `IFileSaveDialog` / Android SAF /
+选取文件读字节**均未跑**；`flutter pub get` 报「**Building with plugins requires symlink support. Please enable Developer Mode**」
+⇒ **Windows / Android 插件构建的前置（Developer Mode）未开启**，`flutter build windows` / `flutter build apk` **未跑**（属独立决策点）；
+**未对着真实后端实例**跑过真实选文件 / 落盘 / 真实 multipart 上传 / 真实模板二进制落盘 / 真实整文件校验 400。
+
+**下一段（候选）**：观察项「段 53/58/59 注入端口生产端仍未接真实文件选择器 / 落盘」在本段落定（**不再作为待办**）。
+下一步候选（按推荐序）：
+① **真后端实例端到端**（起 `scds-local-mysql` + `scds-next.jar`，把段 67 的同一条链对着真实例再跑一遍，并在真库上补验段 68 的
+`EXPIRED` / ACK 收敛——**需 Docker daemon 可用**，当前不可行；这就是「集成层的真依赖仍未走通」）；② T-PROD 部署；
+③ 平台安全存储（Android Keystore / Windows DPAPI）＋连接配置落盘（需另授权引依赖）；④ **开启 Developer Mode 并跑一次
+Windows / Android 真实构建**（补齐段 69 的构建前置）；⑤ 安装 Visual Studio C++ 工作负载（需另授权）以补齐 **Windows 原生构建验收**。
+
+**观察项**：硬件 ACK 解析——**协议 A 允许范围内已收口**（**不再作为待办**）；段 53/58/59 注入端口生产端文件能力——**已接真实实现**
+（段 69 收口，**不再作为待办**；余「Developer Mode 未开启 ⇒ 真机构建未跑」为**新观察项**）；段 59~66 集成层——**客户端内接缝**已由段 67
+覆盖一条代表性链，**对真实后端实例的真依赖**仍**均未走通**（含段 68 的 `EXPIRED` / ACK 真库收敛）。
+
 

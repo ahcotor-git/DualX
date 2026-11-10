@@ -4568,3 +4568,63 @@ Engine daemon 未运行**（`docs/environments.md` §1），`scds-app/target/scd
 （依赖 Docker 恢复）；`CommandAckTask` 的 `@Scheduled` **仅在 `scds-app` 运行态生效**，本次**未起真实例**、
 自动节拍**未在真装配下观测**（单测为手工调 `tick()`，与 `ExerciseCommandExpiryTaskIT` 口径一致）。
 本段为**协议 A 范围内的最强推断**，不是「设备已执行」的证明。
+
+## 69. M6 CLIENT-WINDOWS 续段（文件能力接线）：段 53 / 58 / 59 三处注入端口接入真实文件选择器 / 落盘（`file_picker`）
+
+承段 68「下一段（候选）④ 接真实**文件选择器 / 落盘**（`file_picker` 等，需另授权引依赖，可一次补齐段 53/58/59 三处注入端口）」
+与用户三答：技术路线「**`file_picker ^13.3.2`**」（**授权引入第三方依赖**）、批次「**一段内一次补齐三处**」、
+落盘交互「**系统「另存为」对话框**」。段 59「观察项」里「段 53/58/59 注入端口生产端仍未接真实文件选择器 / 落盘」在本段落定——
+**「注入端口」口径本身保留**（页面仍**成对注入、缺一即不渲染**），仅**生产端三处端口**由占位 / 不注入改为接**真实平台能力**。
+
+### 69.1 交付物（1 笔 = 5 文件，1 新 + 4 改）
+
+| 文件 | 内容 |
+|---|---|
+| `clients/scds_client/lib/shared/io/platform_file_io.dart`(新) | 平台文件能力**窄端口**：`abstract interface class FileIo`（`pickFile({allowedExtensions})` 回 `PickedFileData?`、`saveFile({filename, bytes, contentType})` 回 `bool`）+ 载体 `PickedFileData`（`filename`/`bytes`）+ `PlatformFileIo`（`file_picker` **静态 API**：`FilePicker.pickFile` / `FilePicker.saveFile`）+ 全局助手 `contentTypeForFilename`（按扩展名如实声明图片 MIME） |
+| `clients/scds_client/lib/app/console_app.dart`(改) | 新增构造参数 `fileIo = const PlatformFileIo()`（默认真实实现）+ 三**装配助手** `_pickPlanFile`（限 `xlsx`/`csv` → `PickedPlanFile`）/ `_pickMapImage`（限 `png`/`jpg`/`jpeg`/`webp` → `PickedImage`，`contentType` 由 `contentTypeForFilename` 声明）/ `_saveBytes`（共用落盘），并把三处端口由**占位 / 不注入**改为**接真**：`_openPlans` 的 `pickFile`（原占位 `() async => null`）+ `saveBytes`（原不注入）、`_openMaps` 的 `pickImage`（原占位）、`_openReplayExport` 的 `saveBytes`（原不注入） |
+| `clients/scds_client/pubspec.yaml`(改) | `dependencies` 新增 `file_picker: ^13.3.2`（自段 59「注入端口、不引依赖」口径起，`pubspec.yaml` **首度新增第三方依赖**，经用户授权） |
+| `clients/scds_client/pubspec.lock`(改，连带) | `flutter pub get` 连带更新（**+18 依赖**：`file_picker` 及其 7 平台实现、`cross_file`、`win32 6.4.0`、`ffi 2.2.0`、`xml`、`dbus` 等） |
+| `clients/scds_client/test/console_widget_test.dart`(改) | **+5 例**：`指挥端文件能力接线（段 69）` **4** + `图片 MIME 声明（段 69）` **1**；新增假件 `FakeFileIo`（记录 `pickCalls`/`saveCalls`）+ `FakeSaveCall`；`pumpConsole` 增 `fileIo` 参数；**更新段 58 / 段 59 两条接线断言**（「下载」/「下载模板」由不在位改在位） |
+
+### 69.2 用例与判据（新增 5 例）
+
+| 分组 | 用例 | 判据 |
+|---|---|---|
+| 文件能力接线(4) | 导入想定 | 从队伍汇总页进想定管理页，「导入想定」点击后 `fileIo.pickCalls == [['xlsx','csv']]`；`POST /plans/import` **带 `Bearer access-1`**；SnackBar「已导入想定「夜间行军」」 |
+| | 上传底图 | 「上传图片」点击后 `fileIo.pickCalls == [['png','jpg','jpeg','webp']]`；`POST /maps/m-1/image` **恰一次**；SnackBar「已上传底图「演训场」的图片」 |
+| | 下载模板 | `fileIo.pickCalls` 空；`saveCalls.single` = `plan-template.xlsx` / 字节 `[80,75,3,4]` / `contentType` 为 XLSX MIME（**原样透传**）；SnackBar「已保存模板 plan-template.xlsx」 |
+| | 复盘导出下载 | `fileIo.saveCalls.single` = `r-1.xlsx`（**取服务端 `fileName`**）/ 字节 `[65,66,67]`；SnackBar「已保存 r-1.xlsx」 |
+| MIME 声明(1) | 按扩展名如实声明 | `a.png`→`image/png`、`B.JPG`→`image/jpeg`（**大小写不敏感**）、`c.jpeg`→`image/jpeg`、`d.webp`→`image/webp`、`e.gif`/`noext`→`application/octet-stream`、`archive.tar.png`→`image/png`（取**末段**扩展名） |
+
+### 69.3 口径要点
+
+- **「注入端口」口径保留、只把生产端接真**：页面**成对注入、缺一即不渲染**的规则**不变**（段 53 `pickImage` / 段 58/59 `saveBytes` / `pickFile`）；
+  本段只把生产端三处端口由占位 / 不注入**改接真实实现**——故生产端「下载」「下载模板」「导入想定」「上传图片」**皆在位**。
+- **窄端口集中在 `shared/io/`**：指挥端三处文件能力都只依赖 `FileIo`，**页面不各自引平台代码**；生产实现 `PlatformFileIo` 集中封装
+  `file_picker`，测试注入 `FakeFileIo`（**不触碰真实平台通道**）。
+- **落盘由插件自写字节**：`FilePicker.saveFile(fileName:, bytes:, mimeType:)` 在插件**平台实现内**完成落盘（Windows 走 `IFileSaveDialog`
+  + `File(path).writeAsBytes`；Android 走 SAF），**调用方无需 `dart:io`**——故 `PlatformFileIo` **不碰 `dart:io`**。
+- **`allowedExtensions` 仅在 `FileType.custom` 下生效**：`PlatformFileIo.pickFile` 在 `allowedExtensions == null` 时用 `FileType.any`，
+  否则 `FileType.custom` + `allowedExtensions`；导入限 `xlsx`/`csv`、选图限 `png`/`jpg`/`jpeg`/`webp`。
+- **`contentType` 只本地如实声明**：服务端仍按**真实图片头**判型（仅认 PNG / JPEG / WebP），本地声明**不作数**；
+  名字与内容不符由服务端回绝。
+- **取消即 `null`**：`pickFile` 回 `null`（用户取消）→ 页面按「未选择文件」**止步、不发请求**；`saveFile` 回 `false`（用户取消）——
+  页面 `PlanTemplateSaver` / `ReplayExportSaver` typedef 回 `void`，**当前不区分「已保存 / 已取消」**（回执文案照出，**已知边界**）。
+- **`PlanTemplateFormat` / `ExportFormat` 未动**：格式下拉与产物命名沿用段 59 / 段 58 口径。
+
+### 69.4 门禁与边界
+
+- **客户端门禁**：`flutter test` → `All tests passed!`（**502 例** = 段 67 的 497 例 + **本段 5**）、
+  `flutter analyze` → `No issues found! (ran in 2.7s)`；
+- **Maven 侧无增减**：本段产物全在 `clients/scds_client`（Dart），**不进 reactor**，全量仍 **1151 项**（未改任何 Java / 契约文件，故**未重跑**）；
+  段 68 的 **1162 项**预期**仍待 Docker 恢复后补验**；
+- **本原子任务 5 文件（1 新 4 改），破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**
+  （先例段 53 / 段 61 / 段 62 / 段 65 / 段 68）；
+- **未改动**：后端任何模块、协议冻结字节、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`、`device_app`；
+  **首次新增第三方依赖**（`pubspec.yaml` + `file_picker: ^13.3.2`，经用户授权）。
+
+**未验项**：**真·系统对话框仅在运行态（真机 / 桌面）可验**——单测**只覆盖注入假件路径**（`FakeFileIo`），真实
+`IFileSaveDialog` / Android SAF / 选取文件读字节均**未跑**；`flutter pub get` 报「**Building with plugins requires symlink support.
+Please enable Developer Mode**」⇒ **Windows / Android 插件构建的前置（Developer Mode）未开启**，`flutter build windows` /
+`flutter build apk` **未跑**（属独立决策点）；**未对着真实后端实例**跑过真实选文件 / 落盘 / 真实 multipart 上传 / 真实模板二进制落盘 /
+真实整文件校验 400。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
