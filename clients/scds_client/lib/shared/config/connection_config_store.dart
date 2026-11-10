@@ -15,7 +15,7 @@ abstract interface class ConnectionConfigStore {
 
 /// 进程内实现：重启即丢、**不落盘**。
 ///
-/// 平台持久化落地前，本实现只供业务接线与测试使用——重启后回到 [ConnectionConfig.defaults]。
+/// 段 71 起生产落盘由 `DiskConnectionConfigStore` 承担；本实现只供**测试**使用。
 class InMemoryConnectionConfigStore implements ConnectionConfigStore {
   ConnectionConfig? _config;
 

@@ -1,7 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:scds_client/shared/api/api_contract.dart';
 import 'package:scds_client/shared/config/connection_config.dart';
 import 'package:scds_client/shared/config/connection_config_store.dart';
+import 'package:scds_client/shared/config/disk_connection_config_store.dart';
 
 /// 段 3a：连接配置模型与内存配置存储。
 ///
@@ -78,6 +82,87 @@ void main() {
       await store.write(ConnectionConfig(host: '10.0.0.8', port: 11001));
 
       await store.clear();
+
+      expect(await store.read(), isNull);
+    });
+  });
+
+  group('DiskConnectionConfigStore（段 71：落盘，注入临时目录）', () {
+    late Directory dir;
+    late DiskConnectionConfigStore store;
+
+    setUp(() {
+      dir = Directory.systemTemp.createTempSync('scds_conn_cfg_');
+      store = DiskConnectionConfigStore(directoryProvider: () async => dir);
+    });
+
+    tearDown(() {
+      if (dir.existsSync()) {
+        dir.deleteSync(recursive: true);
+      }
+    });
+
+    File configFile() =>
+        File('${dir.path}${Platform.pathSeparator}connection_config.json');
+
+    test('未保存时 read 为 null（文件不存在）', () async {
+      expect(await store.read(), isNull);
+      expect(configFile().existsSync(), isFalse);
+    });
+
+    test('写入后落盘并原样读回', () async {
+      await store.write(ConnectionConfig(host: '10.0.0.8', port: 11001));
+
+      expect(configFile().existsSync(), isTrue);
+      final ConnectionConfig? read = await store.read();
+      expect(read!.host, '10.0.0.8');
+      expect(read.port, 11001);
+    });
+
+    test('再次写入覆盖旧值（文件只保留最近一次）', () async {
+      await store.write(ConnectionConfig(host: '10.0.0.8', port: 11001));
+      await store.write(ConnectionConfig(host: '10.0.0.9', port: 12001));
+
+      expect((await store.read())!.display, '10.0.0.9:12001');
+    });
+
+    test('clear 删除文件且 read 回到 null', () async {
+      await store.write(ConnectionConfig(host: '10.0.0.8', port: 11001));
+
+      await store.clear();
+
+      expect(configFile().existsSync(), isFalse);
+      expect(await store.read(), isNull);
+    });
+
+    test('文件不存在时 clear 静默通过', () async {
+      await store.clear();
+
+      expect(await store.read(), isNull);
+    });
+
+    test('坏 JSON 降级为 null（不砖住启动）', () async {
+      await configFile().writeAsString('{ not json');
+
+      expect(await store.read(), isNull);
+    });
+
+    test('非对象 JSON（数组）降级为 null', () async {
+      await configFile().writeAsString(jsonEncode(<Object?>[1, 2, 3]));
+
+      expect(await store.read(), isNull);
+    });
+
+    test('缺 host 字段降级为 null', () async {
+      await configFile().writeAsString(jsonEncode(<String, Object?>{'port': 11001}));
+
+      expect(await store.read(), isNull);
+    });
+
+    test('存量端口越界降级为 null（构造校验拦截）', () async {
+      await configFile().writeAsString(
+        jsonEncode(<String, Object?>{'host': '10.0.0.8', 'port': 0}),
+      );
 
       expect(await store.read(), isNull);
     });

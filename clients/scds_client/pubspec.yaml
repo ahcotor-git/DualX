@@ -40,6 +40,13 @@ dependencies:
   # 模板下载 / 导出下载（落盘）。集中封装在 shared/io/platform_file_io.dart。
   file_picker: ^13.3.2
 
+  # 段 71：平台安全存储 + 连接配置落盘。
+  # flutter_secure_storage：账号 / 设备令牌落 Android Keystore / Windows 凭据管理器，
+  #   集中封装在 shared/io/secure_kv_store.dart，由 shared/auth/secure_session_store.dart 使用。
+  # path_provider：定位应用支持目录，供 shared/config/disk_connection_config_store.dart 写连接配置 JSON。
+  flutter_secure_storage: ^11.2.0
+  path_provider: ^2.1.6
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

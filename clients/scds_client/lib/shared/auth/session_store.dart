@@ -48,8 +48,9 @@ class DeviceSession {
 
 /// 会话存储端口：账号与设备两类会话**分开存**，切换实例/账号时一次清空。
 ///
-/// 端口与实现分离，是为了让后续「平台安全存储」（Android Keystore / Windows DPAPI）
-/// 只换实现、不动调用方；本抽象**不暴露令牌的明文读取以外语义**。
+/// 端口与实现分离：段 71 起生产实现是 `SecureSessionStore`（落平台安全存储
+/// ——Android Keystore / Windows 凭据管理器），调用方不动；本抽象**不暴露
+/// 令牌的明文读取以外语义**。
 abstract interface class SessionStore {
   Future<AccountSession?> readAccount();
 
@@ -65,7 +66,7 @@ abstract interface class SessionStore {
 
 /// 进程内实现：重启即丢、**不落盘**。
 ///
-/// 平台安全存储落地前，本实现只供业务接线与测试使用——**不用于现场长期登录**
+/// 段 71 起生产实现是 `SecureSessionStore`；本实现只供**测试**使用
 /// （进程重启后需重新登录），也**不得**把令牌写进日志。
 class InMemorySessionStore implements SessionStore {
   AccountSession? _account;
