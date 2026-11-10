@@ -2603,4 +2603,47 @@ Windows / Android 真实构建**（补齐段 69 的构建前置）；⑤ 安装 
 **对真实后端实例的真依赖**已由段 70 覆盖（**收口，不再作为待办**）；余「**Developer Mode 未开启 ⇒ 真机构建未跑**」与
 「**平台安全存储 / 连接配置落盘未做**」（用户已选为下一段）为**新观察项**。
 
+**段 71 落地（2026-11-10，M6 CLIENT-WINDOWS 续段「平台安全存储 + 连接配置落盘」）**：
+承段 70「下一步候选 ② **平台安全存储（Android Keystore / Windows DPAPI）＋ 连接配置落盘**（**需另授权引依赖**；**用户已选为本段下一项**）」。
+本段把客户端两个窄端口的**生产实现**由内存改为落盘：`SessionStore` → `SecureSessionStore`（令牌落**平台安全存储**）、
+`ConnectionConfigStore` → `DiskConnectionConfigStore`（连接配置落**应用支持目录** JSON 文件）。用户两项裁定（经 AskUserQuestion）：
+依赖路线「**`flutter_secure_storage` + `path_provider`**」（**授权引入第三方依赖**）、令牌落盘语义「**账号 + 设备令牌都落盘**」
+（重启免登；登出 / 清除连接配置时一并清除）。落**一笔代码笔（`a0ed547`，12 文件 / 3 新 9 改，破「≤3 文件」上限，已按无人值守授权显式声明例外）**：
+
+- **平台安全存储窄端口**：`lib/shared/io/secure_kv_store.dart`（**新**）——`SecureKvStore`（`read`/`write`/`delete` 一段字符串）+
+  `PlatformSecureKvStore`（`FlutterSecureStorage` 实现）；插件收在 `shared/io/`，**业务层不直接引插件**。
+- **会话落盘**：`lib/shared/auth/secure_session_store.dart`（**新**）——`SecureSessionStore implements SessionStore`：账号 / 设备各以**一段 JSON**
+  存入安全存储（键 `scds.session.account` / `scds.session.device`），语义与内存实现一致（两类分开、`clearAll` 清空）；读侧对
+  **坏缓存 / 形状不符**降级 `null`（视为未登录）。**令牌只落安全存储、不写日志**。
+- **连接配置落盘**：`lib/shared/config/disk_connection_config_store.dart`（**新**）——`DiskConnectionConfigStore implements ConnectionConfigStore`：
+  落**应用支持目录**下的 `connection_config.json`；**注入 `directoryProvider`**（生产用 `path_provider` 的 `getApplicationSupportDirectory`、
+  测试注入临时目录），故**不直接依赖插件**、单测在真实文件系统上跑；读侧对**不可解析 / 字段非法**的存量文件降级 `null`（回落 `ConnectionConfig.defaults`）。
+- **装配**：`lib/main.dart`（**改**）——`sessionStore = SecureSessionStore(const PlatformSecureKvStore())`、
+  `configStore = DiskConnectionConfigStore(directoryProvider: getApplicationSupportDirectory)`（原为两个 `InMemory*`）。
+- **注释订正**：`session_store.dart` / `connection_config_store.dart`（**改**）——两个 `InMemory*` 实现标注「仅测试用」，端口 javadoc 指向新生产实现。
+- **依赖**：`pubspec.yaml` / `pubspec.lock`（**改**）——`flutter_secure_storage ^11.2.0` / `path_provider ^2.1.6`；
+  `windows/flutter/generated_plugin_registrant.cc` / `generated_plugins.cmake`（**改**）随 `pub get` 生成。
+- **测试**（+17）：`test/shared/auth/session_store_test.dart`（**改**，+8：`SecureSessionStore` 7 + `PlatformSecureKvStore` 1）、
+  `test/shared/config/connection_config_test.dart`（**改**，+9：`DiskConnectionConfigStore` 9）。
+
+**口径要点**：**只换实现、不动调用方**（两个窄端口注释早已预留「平台安全存储 / 落盘只换实现」，页面 / 状态层**零改动**）/
+**机密与非机密分流**（令牌走安全存储、连接配置走普通文件）/ **读侧坏数据一律降级 `null`**（令牌 / 配置可重新取得，**不让坏缓存砖住启动**）/
+**目录 / 存储皆注入**（便于单测在真文件系统 / 内存假件上跑）/ **`prefer_initializing_formals` 局部抑制有据**
+（`DiskConnectionConfigStore` 的两参数为**具名**、字段私有，lint 建议的 `this._directoryProvider` **不是合法 Dart**——具名参数不得以下划线开头）/
+**`flutter pub get` 报 Developer Mode 且 exit 1 不判失败**（依赖已写入，是既有约束，同段 69）。
+
+门禁：`flutter analyze` → `No issues found!`；`flutter test` → `All tests passed!`（**519 例**，较段 69 的 **502** 例 **+17**）；
+Dart 产物**不进 reactor**，全量仍 **1162 项**（未改 Java / 契约，故未重跑）。证据见 [testing](testing.md) **第 71 节**。
+
+**未验项**：**真·平台安全存储（Android Keystore / Windows 凭据管理器）与真磁盘应用支持目录仅运行态（真机 / 桌面）可验**——单测只覆盖
+**注入假件 / 临时目录**路径；**Developer Mode 未开启** ⇒ `flutter build windows` / `flutter build apk` **未跑**（插件构建前置未满足）；
+**未对着真实后端实例**验证「重启后免登」（令牌真经 Keystore 落盘并回读）。
+
+**下一段（候选）**：**平台安全存储 + 连接配置落盘已落**（用户裁定项，**不再作为待办**）。余候选（按推荐序）：
+① T-PROD 部署（**需真实目标环境，本机不可行**）；③ **开启 Developer Mode 并跑一次 Windows / Android 真实构建**（补齐段 69 / 71 的构建前置）；
+④ 安装 Visual Studio C++ 工作负载（**需另授权**）以补齐 **Windows 原生构建验收**。
+
+**观察项**：平台安全存储 / 连接配置落盘——**已落**（段 71，**不再作为待办**）；余「**Developer Mode 未开启 ⇒ 真机构建未跑**」
+（段 69 起即存续，**仍为新观察项**）。
+
 
