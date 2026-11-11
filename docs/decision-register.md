@@ -2709,4 +2709,31 @@ VCTools 工作负载**默认不含 ATL**（`--includeRecommended` 仍未带入�
 
 **观察项**：「Windows 原生构建（需 VS C++ 工作负载）」——**已解除**（段 73 装齐 VCTools + ATL 并跑通 Windows release，**不再作为待办**）。
 
+**段 74 落地（2026-11-11，Android release 正式签名：keystore + `key.properties` 凭据不入库）**：
+承段 73「未验项」（release 签名仍为模板 debug key）与段 72「下一段（候选）⑤」。用户裁定（经 AskUserQuestion）：
+下一段方向「**配置 Android release 正式签名（推荐）**」；两决策点答：「**我生成强随机口令并告知你（推荐）**」、「**回退 debug 签名并告警（推荐）**」。
+
+- **代码笔（1 文件 / 1 改）**：`clients/scds_client/android/app/build.gradle.kts`——新增 `import java.io.FileInputStream` / `import java.util.Properties`；
+  读取 `rootProject.file("key.properties")` 得 `hasReleaseKeystore`；`android {}` 内新增 `signingConfigs { create("release") { … } }`（仅 `key.properties` 存在时）；
+  `buildTypes.release.signingConfig` 由模板 `getByName("debug")` 改为「有 `key.properties` ⇒ `release`；无 ⇒ 回退 `debug` 并 `logger.warn`」。
+- **keystore（不入库）**：`clients/scds_client/android/app/upload-keystore.jks`（JKS，RSA 2048，有效期 10000 天，alias `upload`）。
+- **凭据（不入库）**：`clients/scds_client/android/key.properties`（`storePassword` / `keyPassword` / `keyAlias` / `storeFile`）；
+  `android/.gitignore` 已排除 `key.properties` / `**/*.keystore` / `**/*.jks`（`git check-ignore -v` 实测命中第 12 / 14 行）。
+- **docs 笔（4 文件）**：`docs/testing.md` **§74** / `docs/decision-register.md`（本段）/ `docs/environments.md` **§1**（新增 Android 签名行）/ `snapshot.md` 回写。
+
+**口径要点**：**口令绝不写入仓库 / 提交信息**（仅落本机不入库的 `key.properties`；`git status -sb` 仅 `build.gradle.kts` 为待提交改动）/
+**缺失 `key.properties` 回退 debug 并告警**（避免 CI 硬中断，但正式发布必须在有凭据环境构建）/ **JKS 警告无害**（与 Flutter 参考文档一致，Gradle `storeType` 默认 JKS）。
+
+门禁：`flutter build apk --release` → `√ Built build\app\outputs\flutter-apk\app-release.apk`（exit 0；47.4MB；`assembleRelease` 51.9s）；
+`apksigner verify --print-certs` → `Signer #1 certificate DN: CN=DualX SCDS, OU=SCDS, O=DualX, L=Beijing, ST=Beijing, C=CN`，SHA-256 `1854fae5…a7`——**非 debug key**；
+本段仅改 Android Gradle 配置 ⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（未重跑）。证据见 [testing](testing.md) **第 74 节**。
+
+**未验项**：正式签名 APK 的**真机安装 / 运行**与「重启后免登」**仅运行态可验**（需真机）；**keystore 安全保管由用户负责**（口令与
+`upload-keystore.jks` 一旦丢失将无法对已发布版本覆盖升级）；Windows 桌面产物**仅构建态验证**（未实际运行 `scds_client.exe`）。
+
+**下一段（候选）**：**Android release 正式签名已落**（**不再作为待办**）。余候选（按推荐序）：
+① T-PROD 部署（**需真实目标环境，本机不可行**）；② 真机安装 / 运行正式签名 `app-release.apk` 验证「重启后免登」（**需真机**）。
+
+**观察项**：「Android release 签名（模板 debug key）」——**已解除**（段 74 换为正式 keystore，**不再作为待办**）。
+
 

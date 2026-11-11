@@ -4881,3 +4881,54 @@ release 签名仍为模板 **debug key**（未配正式签名）。本段为**�
 
 **未验项**：Windows 桌面产物**仅构建态验证**——**未实际运行** `scds_client.exe`（GUI 运行态验收需交互，且未对着真实后端实例跑）；真机安装 / 运行 Android `app-release.apk` 与「重启后免登」**仅运行态可验**；release 签名仍为模板 **debug key**（未配正式签名）。本段为**构建前置打通**，不是发布批准。
 
+## 74. Android release 正式签名：keystore + `key.properties`（凭据不入库）+ `build.gradle.kts` 签名配置
+
+承段 73「未验项」中「release 签名仍为模板 **debug key**（未配正式签名）」与段 72「下一段（候选）⑤」。
+用户裁定（经 AskUserQuestion）：下一段方向「**配置 Android release 正式签名（推荐）**」；两决策点答：「**我生成强随机口令并告知你（推荐）**」、
+「**回退 debug 签名并告警（推荐）**」。本段把 Android release 签名由模板 debug key 换为**正式 keystore**。
+
+### 74.1 交付物
+
+| 项 | 内容 |
+|---|---|
+| 代码笔（1 文件 / 1 改） | `clients/scds_client/android/app/build.gradle.kts`（改） |
+| keystore（不入库） | `clients/scds_client/android/app/upload-keystore.jks`（JKS，RSA 2048，有效期 10000 天，alias `upload`） |
+| 凭据（不入库） | `clients/scds_client/android/key.properties`（`storePassword` / `keyPassword` / `keyAlias` / `storeFile`） |
+| 本 docs 笔 | `docs/testing.md` §74 / `docs/decision-register.md` 段 74 / `docs/environments.md` §1 / `snapshot.md` 回写 |
+
+### 74.2 代码改动（`android/app/build.gradle.kts`）
+
+- 顶部新增 `import java.io.FileInputStream` / `import java.util.Properties`。
+- 读取 `rootProject.file("key.properties")`（即 `android/key.properties`）得到 `hasReleaseKeystore` 判定；存在则载入 `Properties`，
+  缺失则 `logger.warn("[scds] android/key.properties not found -> release build falls back to DEBUG signing.")`。
+- `android {}` 内新增 `signingConfigs { create("release") { keyAlias / keyPassword / storeFile / storePassword } }`（**仅当** `key.properties` 存在时创建）。
+- `buildTypes.release.signingConfig` 由模板的 `signingConfigs.getByName("debug")` 改为：有 `key.properties` ⇒ `getByName("release")`；
+  无 ⇒ 回退 `getByName("debug")`（保留无凭据环境可构建能力）。
+
+### 74.3 口径要点
+
+- **凭据不入库有基础设施**：`android/.gitignore` 已排除 `key.properties`、`**/*.keystore`、`**/*.jks`——keystore 与口令文件天然不入库
+  （`git check-ignore -v` 实测命中该 `.gitignore` 第 12 / 14 行）。
+- **口令绝不写入仓库 / 提交信息**：口令仅落本机不入库的 `android/key.properties`；`git status -sb` 中**仅** `build.gradle.kts` 为待提交改动，
+  `key.properties` 与 `upload-keystore.jks` **均不出现**。
+- **缺失回退 debug 并告警**：CI / 无凭据环境缺 `key.properties` 时 release 仍可构建（回退 debug 签名），并在构建日志打印 `[scds]` 告警——
+  避免硬中断，但**正式发布必须在有 `key.properties` 的环境构建**。
+- **JKS 警告无害**：`keytool` 对 JKS 打印「建议迁移 PKCS12」的 Warning，属提示非错误；本段为与 Flutter 参考文档保持一致采用 JKS
+  （Gradle `storeType` 默认 JKS）。
+
+### 74.4 门禁与边界
+
+- **构建证据**：`flutter build apk --release` → `√ Built build\app\outputs\flutter-apk\app-release.apk`（exit 0；47.4MB；`assembleRelease` 51.9s）。
+- **签名者校验（apksigner）**：`apksigner verify --print-certs app-release.apk` →
+  `Signer #1 certificate DN: CN=DualX SCDS, OU=SCDS, O=DualX, L=Beijing, ST=Beijing, C=CN`，
+  SHA-256 `1854fae56c41d131315ca51ddd28b8b5c14816f14c279a5416c51cba71a638a7`——**非 debug key**
+  （debug key DN 为 `CN=Android Debug, O=Android, C=US`）。
+- **Dart / Java 门禁无增减**：本段仅改 Android Gradle 配置、**不动 Dart / Java / 契约** ⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（**未重跑**）。
+- **本段 1 代码文件**，**未破「≤3 文件」上限**；docs 笔为 **4 文件**（含 `docs/environments.md`），**破限已显式声明例外**
+  （先例段 53 / 61 / 62 / 65 / 68 / 69 / 71 / 73）。
+- **未改动**：协议冻结字节、端口、`docs/api/**` 契约、`scds-solver`；**未新增第三方依赖**。
+
+**未验项**：正式签名 APK 的**真机安装 / 运行**与「重启后免登」**仅运行态可验**（需真机）；**keystore 安全保管由用户负责**——
+口令与 `upload-keystore.jks` **一旦丢失将无法对已发布版本做覆盖升级**；Windows 桌面产物**仅构建态验证**（未实际运行 `scds_client.exe`）；
+本段为**签名配置打通**，不是发布批准。
+
