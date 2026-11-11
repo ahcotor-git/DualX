@@ -4801,3 +4801,46 @@ Windows / Android 插件构建前置（**Developer Mode**）**未开启**，`flu
 **Windows / Android 插件构建的前置（Developer Mode）未开启**，`flutter build windows` / `flutter build apk` **未跑**；**未对着真实后端实例**
 验证「重启后免登」（令牌真经 Keystore 落盘并回读）。本段为**实测前置的客户端骨架验收**，不是生产发布批准。
 
+## 72. Developer Mode + 真实构建（Android release 打通）：跨盘符 Kotlin 增量编译缓存阻断修复
+
+承段 71「未验项」中「Developer Mode 未开启 ⇒ `flutter build windows` / `flutter build apk` 未跑」与段 71「下一项候选 ③」。
+用户裁定（经 AskUserQuestion）：构建路径「**先试 Android release（推荐）**」、Developer Mode 处理「**先试构建，遇阻再请你开启（推荐）**」。
+本轮把 **Android release 构建真正跑通**，过程中命中并解决**两个独立阻断**。落**一笔代码笔（`aa10d24`，1 文件 / 0 新 1 改）**。
+
+### 72.1 交付物（1 笔代码笔 `aa10d24` = 1 文件）
+
+| 文件 | 内容 |
+|---|---|
+| `clients/scds_client/android/build.gradle.kts`(改) | 追加 `subprojects { if (!projectDir.canonicalPath.startsWith(rootDir.canonicalPath)) { extra["kotlin.incremental"] = "false" } }`——对**工程目录之外**的插件子工程（来自 pub 缓存）关闭 Kotlin 增量编译，`:app` 保持增量 |
+
+（Developer Mode 为**机器设置**、非仓库产物：注册表 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock\AllowDevelopmentWithoutDevLicense=1`。）
+
+### 72.2 两个阻断与修法
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| ① symlink | `Building with plugins requires symlink support. Please enable Developer Mode` | 带插件的 Flutter 构建需在 Windows 创建 symlink；非 Developer Mode 下 symlink 创建失败 | 开启 **Developer Mode**（需管理员；本机当前账户属**管理员组**但进程未提权，经 UAC 提权写入注册表） |
+| ② 跨盘符 IC | `Execution failed for task ':android_file_picker:compileReleaseKotlin'` → `Could not close incremental caches ... different roots: D:\DevTools\pub-cache\...\FileInfo.kt and E:\DualX\...\android` | `PUB_CACHE`（D 盘）与工程（E 盘）**跨盘符**；KGP 2.4.0 起编译器经 **Build Tools API**，回退路径**不再降级为非增量**，`RelocatableFileToPathConverter` 计算相对路径时 `File.relativeTo` 抛 `IllegalArgumentException` | **Fix 2**：对**工程目录之外**的插件子工程关增量编译（见 72.1）；权威参考 flutter/flutter#173456 |
+
+### 72.3 口径要点
+
+- **「Android 构建与 Developer Mode 无关」是假象**：首次两次构建能进到 Gradle 编译（`.flutter-plugins-dependencies` 已存在，**跳过 symlink 创建**），
+  `flutter clean` 后重建插件链路才暴露 symlink 前置 ⇒ **不能据「首次构建走到了 Gradle」判断 Developer Mode 非必需**。
+- **选 Fix 2 而非 Fix 1 / Fix 3**：Fix 1（把 `PUB_CACHE` 迁到工程同盘）与 Fix 3（`android/gradle.properties` 全局 `kotlin.incremental=false`）均可行；
+  Fix 2 **只关工程目录外的插件子工程**、`:app` 仍增量，且**不改动机器 pub 缓存布局**，为**最小侵入、可长期保留**的仓库级修法。
+- **权威依据**：该现象为 Flutter 3.47 / AGP 9.1 / KGP 2.4 的**已知问题**（flutter/flutter#173456、#144566）；
+  Fix 2 的 `extra["kotlin.incremental"]="false"` 是 KGP **唯一「按模块生效」**的开关
+  （`tasks.withType<KotlinCompile>().incremental=false` 会被 KGP 后续配置动作覆盖）。
+- **Developer Mode 是机器前置、不入仓库**：本段仓库改动**仅 1 个 Gradle 配置文件**。
+
+### 72.4 门禁与边界
+
+- **构建证据**：`flutter build apk --release` → `√ Built build\app\outputs\flutter-apk\app-release.apk (47.4MB)`（exit 0；`Running Gradle task 'assembleRelease'` 188.1s）。
+- **Dart / Java 门禁无增减**：本段仅改 Android Gradle 配置，**不动 Dart / Java / 契约** ⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（**未重跑**）。
+- **本原子任务 1 文件**（0 新 1 改），**未破「≤3 文件」上限**。
+- **未改动**：后端任何模块、协议冻结字节（`docs/PROTOCOL.md` 未动）、端口（HTTP 11001 / UWB TCP 12001）、`docs/api/**` 契约、迁移、`scds-solver`；**未新增第三方依赖**。
+
+**未验项**：`flutter build windows` **未打通**——**Visual Studio（含「使用 C++ 的桌面开发」工作负载）未安装**（`flutter doctor` 标记 `[X] Visual Studio`），
+Windows 原生构建**需另授权安装**；真机安装 / 运行 `app-release.apk`（`flutter install` / `adb install`）与「重启后免登」**仅运行态可验**；
+release 签名仍为模板 **debug key**（未配正式签名）。本段为**构建前置打通**，不是发布批准。
+

@@ -2644,6 +2644,40 @@ Dart 产物**不进 reactor**，全量仍 **1162 项**（未改 Java / 契约，
 ④ 安装 Visual Studio C++ 工作负载（**需另授权**）以补齐 **Windows 原生构建验收**。
 
 **观察项**：平台安全存储 / 连接配置落盘——**已落**（段 71，**不再作为待办**）；余「**Developer Mode 未开启 ⇒ 真机构建未跑**」
-（段 69 起即存续，**仍为新观察项**）。
+（段 69 起即存续）。
+
+**段 72 落地（2026-11-11，「Developer Mode + 真实构建」Android release 打通）**：
+承段 71「未验项」（Developer Mode 未开启 ⇒ 真机构建未跑）与段 71「下一段候选 ③」。用户裁定（经 AskUserQuestion）：
+构建路径「**先试 Android release（推荐）**」、Developer Mode 处理「**先试构建，遇阻再请你开启（推荐）**」。落**一笔代码笔
+（`aa10d24`，1 文件 / 0 新 1 改，未破「≤3 文件」上限）**：
+
+- **跨盘符 Kotlin 增量缓存修复**：`clients/scds_client/android/build.gradle.kts`（**改**）——追加
+  `subprojects { if (!projectDir.canonicalPath.startsWith(rootDir.canonicalPath)) { extra["kotlin.incremental"] = "false" } }`；
+  对**工程目录之外**的插件子工程（来自 pub 缓存）关闭 Kotlin 增量编译，`:app` 保持增量。
+- **Developer Mode（机器前置，不入仓库）**：经 **UAC 提权**写入注册表
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock\AllowDevelopmentWithoutDevLicense=1`（当前账户属**管理员组**、进程未提权）。
+
+**两个独立阻断**：① **symlink**——`Building with plugins requires symlink support. Please enable Developer Mode`（带插件构建需 Windows symlink 支持）；
+② **跨盘符 IC**——`PUB_CACHE`（D 盘）与工程（E 盘）**跨盘符**，KGP 2.4.0 起编译器经 **Build Tools API**、回退路径**不再降级为非增量**，
+`RelocatableFileToPathConverter` 计算相对路径时 `File.relativeTo` 抛 `IllegalArgumentException`（`Could not close incremental caches`）；
+权威依据 flutter/flutter#173456、#144566。
+
+**口径要点**：**Fix 2 而非 Fix 1 / Fix 3**（Fix 1 迁 `PUB_CACHE` 同盘、Fix 3 全局关 IC 均可行；Fix 2 **只关工程目录外插件子工程**、
+`:app` 仍增量且**不动机器 pub 缓存布局**，最小侵入可长期保留）/**「Android 构建与 Developer Mode 无关」是假象**
+（首次构建因 `.flutter-plugins-dependencies` 已存在而跳过 symlink 创建，`flutter clean` 后才暴露）/
+**`extra["kotlin.incremental"]="false"` 是 KGP 唯一按模块生效的开关**。
+
+门禁：`flutter build apk --release` → `√ Built ...app-release.apk (47.4MB)`（exit 0）；本段仅改 Android Gradle 配置、**不动 Dart / Java / 契约** ⇒
+Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（未重跑）。证据见 [testing](testing.md) **第 72 节**。
+
+**未验项**：`flutter build windows` **未打通**——**Visual Studio C++ 工作负载未安装**（**需另授权安装**）；真机安装 / 运行
+`app-release.apk` 与「重启后免登」**仅运行态可验**；release 签名仍为模板 **debug key**（未配正式签名）。
+
+**下一段（候选）**：**Developer Mode + Android 真实构建已落**（**不再作为待办**）。余候选（按推荐序）：
+① T-PROD 部署（**需真实目标环境，本机不可行**）；④ 安装 Visual Studio C++ 工作负载（**需另授权**）以补齐 **Windows 原生构建验收**；
+② 真机安装 / 运行 `app-release.apk` 验证「重启后免登」（**需真机**）。
+
+**观察项**：Developer Mode 未开启 ⇒ 真机构建未跑——**已解除**（段 72 开启 Developer Mode 并跑通 Android release，**不再作为待办**）；
+余「**Windows 原生构建（需 VS C++ 工作负载）**」为**新观察项**。
 
 
