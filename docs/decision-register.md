@@ -2680,4 +2680,33 @@ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（未重跑）。证据见 [
 **观察项**：Developer Mode 未开启 ⇒ 真机构建未跑——**已解除**（段 72 开启 Developer Mode 并跑通 Android release，**不再作为待办**）；
 余「**Windows 原生构建（需 VS C++ 工作负载）**」为**新观察项**。
 
+**段 73 落地（2026-11-11，「Windows 原生构建」安装 VS 2022 Build Tools 并打通 `flutter build windows --release`）**：
+承段 72「未验项」（`flutter build windows` 未打通——Visual Studio 未安装）与段 72「下一段（候选）④」。用户裁定（经 AskUserQuestion）：
+下一段方向「**安装 VS C++ 工作负载（推荐）**」。**本段不含仓库代码改动（属环境级前置）**，落**本 docs 笔（4 文件）**：
+
+- **工具链（机器级，不入仓库）**：winget 安装 **Microsoft.VisualStudio.2022.BuildTools 17.14.45**
+  （`--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`）→ `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`；
+  后经 bootstrapper 补装 **`Microsoft.VisualStudio.Component.VC.ATL`**。Windows SDK `10.0.26100.0`、MSVC `14.44.35207`。
+- **docs 笔（4 文件）**：`docs/testing.md` **§73** / `docs/decision-register.md`（本段）/ `docs/environments.md` **§1**（Flutter 行订正 + 新增 Visual Studio 行）/ `snapshot.md` 回写。
+
+**组件缺口与修法**：`flutter_secure_storage_windows_plugin.cpp(6,10): error C1083: 无法打开包括文件: "atlstr.h"`——
+VCTools 工作负载**默认不含 ATL**（`--includeRecommended` 仍未带入），而 `flutter_secure_storage_windows` 插件引 ATL 头；
+**必须显式补 `Microsoft.VisualStudio.Component.VC.ATL`**。
+
+**口径要点**：**「Desktop development with C++」可用 Build Tools 等价满足**（Flutter 校验 `Component.VC.Tools.x86.x64` + Windows SDK，无需完整 VS IDE）/
+**VS 安装需管理员提权**（`setup.exe modify` 未提权下**静默无操作**、提权后 **`ExitCode=87`**）⇒ 改用 **bootstrapper `vs_BuildTools.exe --add`**（提权后 **`ExitCode=0`**）成功 /
+**PowerShell `Start-Process -ArgumentList` 传数组仍会拆词**，带空格路径须自行加引号并入单一字符串。
+
+门禁：`flutter build windows --release` → `√ Built build\windows\x64\runner\Release\scds_client.exe`（exit 0；12.6s；Release 目录共 28.6 MB）；
+本段**不含仓库代码改动** ⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（未重跑）；`git status -sb` → `## main...origin/main`，工作树干净。证据见 [testing](testing.md) **第 73 节**。
+
+**未验项**：Windows 桌面产物**仅构建态验证**——**未实际运行** `scds_client.exe`（GUI 运行态验收需交互，且未对着真实后端实例跑）；
+真机安装 / 运行 `app-release.apk` 与「重启后免登」**仅运行态可验**；release 签名仍为模板 **debug key**。
+
+**下一段（候选）**：**Windows 原生构建已落**（**不再作为待办**）。余候选（按推荐序）：
+① T-PROD 部署（**需真实目标环境，本机不可行**）；② 真机安装 / 运行 `app-release.apk` 验证「重启后免登」（**需真机**）；
+⑤ 配置 Android **release 正式签名**（生成 keystore、凭据不入库；**需授权并约定密钥保管**）。
+
+**观察项**：「Windows 原生构建（需 VS C++ 工作负载）」——**已解除**（段 73 装齐 VCTools + ATL 并跑通 Windows release，**不再作为待办**）。
+
 

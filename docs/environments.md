@@ -13,7 +13,8 @@
 | JDK | Zulu 21.0.12.1；`D:\DevTools\zulu21.52.203-ca-jdk21.0.12.1-win_x64` |
 | Maven | 3.9.9；`E:\Code\.tools\apache-maven-3.9.9` |
 | Git/OpenSSL | OpenSSL 可用；GitHub 前序推送断连，见快照，不代表代码验证失败 |
-| Flutter | 可执行文件在 `D:\DevTools\flutter\bin`；未执行doctor，SDK/Android/Windows工具链就绪程度未验证 |
+| Flutter | Flutter 3.47.7 stable / Dart 3.13.5，`D:\DevTools\flutter\bin`；`flutter doctor` 已跑：Android（SDK 36.0.0）与 **Visual Studio（Windows 构建）** 均 **[√]**；`PUB_CACHE=D:\DevTools\pub-cache`（与工程**跨盘符**，见 testing §72） |
+| Visual Studio | **VS 2022 Build Tools 17.14.45**（`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`），含 `Workload.VCTools` + `Component.VC.ATL`、Windows SDK 10.0.26100.0、MSVC 14.44.35207；`flutter build windows --release` 已跑通（见 testing §73） |
 | MySQL | Docker `scds-local-mysql`，mysql:8.4 标签当前内容为 8.4.11，healthy |
 | 数据库 | scds_next，应用账号scds_app；监听127.0.0.1:13306 |
 | 应用产物 | `scds-app/target/scds-next.jar`，仅构建产物，不入库 |

@@ -4844,3 +4844,40 @@ Windows / Android 插件构建前置（**Developer Mode**）**未开启**，`flu
 Windows 原生构建**需另授权安装**；真机安装 / 运行 `app-release.apk`（`flutter install` / `adb install`）与「重启后免登」**仅运行态可验**；
 release 签名仍为模板 **debug key**（未配正式签名）。本段为**构建前置打通**，不是发布批准。
 
+## 73. 「Windows 原生构建」：安装 VS 2022 Build Tools（VCTools + ATL）并打通 `flutter build windows --release`
+
+承段 72「未验项」中「`flutter build windows` 未打通——Visual Studio（含「使用 C++ 的桌面开发」工作负载）未安装」与段 72「下一项候选 ④」。
+用户裁定（经 AskUserQuestion）：下一段方向「**安装 VS C++ 工作负载（推荐）**」。本轮**安装工具链并把 Windows 原生构建真正跑通**，过程中命中并解决**一个组件缺口**。
+**本段不含仓库代码改动（属环境级前置）**，仅落本 docs 笔。
+
+### 73.1 交付物（0 代码文件；环境级前置 + 本 docs 笔）
+
+| 项 | 内容 |
+|---|---|
+| 工具链（机器级，不入仓库） | winget 安装 **Microsoft.VisualStudio.2022.BuildTools 17.14.45**（`--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`）；后经 bootstrapper 补装 **`Microsoft.VisualStudio.Component.VC.ATL`** |
+| 安装位置 | `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`（vswhere 已注册；`flutter doctor` 识别为「Visual Studio 生成工具 2022 17.14.45」） |
+| Windows SDK / MSVC | Windows SDK `10.0.26100.0`、MSVC 工具集 `14.44.35207` |
+| 本 docs 笔 | `docs/testing.md` §73 / `docs/decision-register.md` 段 73 / `docs/environments.md` §1 / `snapshot.md` 回写 |
+
+### 73.2 组件缺口与修法
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| ① ATL 缺失 | `flutter_secure_storage_windows_plugin.cpp(6,10): error C1083: 无法打开包括文件: "atlstr.h": No such file or directory` | VCTools 工作负载**默认不含 ATL**（`--includeRecommended` 仍未带入）；`flutter_secure_storage_windows` 插件引 `atlstr.h`（ATL 头） | 经 bootstrapper 补装 **`Microsoft.VisualStudio.Component.VC.ATL`** |
+
+### 73.3 口径要点
+
+- **「Desktop development with C++」可用 Build Tools 等价满足**：Flutter 校验的是 `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` + Windows SDK，**Build Tools（VCTools 工作负载）即可**，无需完整 VS IDE。
+- **VCTools 默认不含 ATL**：`--includeRecommended` 仍缺 `atlstr.h` ⇒ **仅装工作负载时首次构建必失败**；凡引 ATL 的插件（本工程为 `flutter_secure_storage_windows`）**必须显式补 `Microsoft.VisualStudio.Component.VC.ATL`**。
+- **VS 安装需管理员提权（机器前置、不入仓库）**：`setup.exe modify` 在**未提权**下**静默无操作**（退出码 0 但无变化）；提权后返回 **`ExitCode=87`**（参数/握手问题）⇒ 改用 **bootstrapper `vs_BuildTools.exe --add`**（提权后 **`ExitCode=0`**）成功。
+- **PowerShell `Start-Process -ArgumentList` 传数组仍会被拆词**：带空格的路径（如 `--installPath "C:\Program Files (x86)\..."`）**必须自行加引号并入单一字符串**传给 `-ArgumentList`，否则同得 87。
+
+### 73.4 门禁与边界
+
+- **构建证据**：`flutter build windows --release` → `√ Built build\windows\x64\runner\Release\scds_client.exe`（exit 0；`Building Windows application...` 12.6s）；产物目录 `build\windows\x64\runner\Release\` 共 **28.6 MB**（`scds_client.exe` 0.09 MB + `flutter_windows.dll` 20.29 MB + `flutter_secure_storage_windows_plugin.dll` 0.15 MB + `dartjni.dll` 0.06 MB）。
+- **Dart / Java 门禁无增减**：本段**不含仓库代码改动** ⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（**未重跑**）。
+- **本段 0 代码文件**，**未破「≤3 文件」上限**；docs 笔为 **4 文件**（含 `docs/environments.md`），**破限已显式声明例外**（先例段 53 / 61 / 62 / 65 / 68 / 69 / 71）。
+- **未改动**：仓库任何代码 / 契约 / 迁移（`git status -sb` → `## main...origin/main`，工作树干净）；协议冻结字节、端口、`docs/api/**` 契约、`scds-solver`；**未新增第三方依赖**。
+
+**未验项**：Windows 桌面产物**仅构建态验证**——**未实际运行** `scds_client.exe`（GUI 运行态验收需交互，且未对着真实后端实例跑）；真机安装 / 运行 Android `app-release.apk` 与「重启后免登」**仅运行态可验**；release 签名仍为模板 **debug key**（未配正式签名）。本段为**构建前置打通**，不是发布批准。
+
