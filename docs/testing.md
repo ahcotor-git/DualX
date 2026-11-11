@@ -4932,3 +4932,16 @@ release 签名仍为模板 **debug key**（未配正式签名）。本段为**�
 口令与 `upload-keystore.jks` **一旦丢失将无法对已发布版本做覆盖升级**；Windows 桌面产物**仅构建态验证**（未实际运行 `scds_client.exe`）；
 本段为**签名配置打通**，不是发布批准。
 
+### 74.5 本机全量门禁复核（段 74 收尾，2026-11-11）
+
+段 74 落盘并推送后，本地 `main` 与 `origin/main` 齐平于推送标记笔 `36e44a6`。为消除此前段 71~74 累积的「（未重跑）」遗留，
+在本机恢复 `scds-local-mysql` 后对**两条门禁**做了完整复核：
+
+- **Docker / MySQL**：`docker version` 引擎 **29.8.2**；`docker compose up -d mysql` → `scds-local-mysql Up (healthy)`（此前容器 `Exited (255)`）。
+- **Dart 侧**：`flutter analyze` → `No issues found! (ran in 4.3s)`；`flutter test` → **519 例全绿**（`All tests passed!`）。
+- **Maven 侧**：仓库根 `mvn -B clean verify` → **1162 项 / 0 failures / 0 errors / 0 skipped**（`BUILD SUCCESS`，Total time 01:47 min）——
+  protocol 19 + gateway 49 + core 622 + api 139 + app 333，**与基线完全一致**。
+
+**结论**：段 74 及此前段 71~73 的「（未重跑）」遗留**已清零**；工作树 `36e44a6` 两侧门禁全绿。
+**未验项不变**：正式签名 APK 真机安装 / 运行、Windows 桌面产物运行态仍**仅运行态可验**（需真机 / 交互）。
+
