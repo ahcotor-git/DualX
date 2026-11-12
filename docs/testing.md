@@ -5005,4 +5005,39 @@ release 签名仍为模板 **debug key**（未配正式签名）。本段为**�
 **未覆盖项（诚实登记）**：WS close `4000` `SITUATION_REVISION_TOO_OLD`（需越过 1024 的 revision 保留窗口，短会话无法构造）；
 PC4「未完成导出即下载 → 409 `REPLAY_EXPORT_FAILED`」（需人工造未完成 / 失败态）；上行帧驱动的态势变化（心跳 / 坐标 / 命中）——仿真 `inject*` **仅进程内可用，黑盒不注入**；
 **真实串口时序 / UWB 12001 连续坐标 / 容量与长稳：仿真档不可替代现场硬件验收**。段 75 是**本机类生产形态**的软件链路全链验收，**不是现场硬件 / 生产环境验收**。
+> 注：前两项已于**段 76** 补测闭合（见下），本段仅保留「上行帧驱动 / 现场硬件」两项。
+
+## 76. 段 75 遗留负例补测：WS `close 4000` / 导出未完成 `409`（本机黑盒脚本扩展，§10）
+
+承段 75 §75.5「未覆盖项」中**纯本机可闭环**的两项：WS `close 4000` `SITUATION_REVISION_TOO_OLD`、PC4「未完成导出即下载 → 409 `REPLAY_EXPORT_FAILED`」。
+本段只**扩展黑盒脚本**（`E:\ScdsConfig\verify-e2e.mjs`，**不入仓库**）并重跑，**无任何仓库代码改动**。
+
+### 76.1 超窗构造依据（读码确认，非猜测）
+
+- `SituationRevisionLog.tooOld(sinceRevision)` 的实现是 **`sinceRevision < lastEvictedRevision`**，而 `lastEvictedRevision` **初始为 `0`**（从未淘汰过即 0）
+  ⇒ **`sinceRevision = -1` 恒判超窗**（`-1 < 0`），**无需**在短会话内制造 1024 条变更把窗口撑满。
+- 契约 `docs/api/paths/situation.yaml` 的 `sinceRevision` 是**裸 `type: integer`、无下界** ⇒ `-1` 是**合法参数**（不会先被 400 拦下）。
+- 超窗两条表达（契约明文）：**HTTP** → **409 `SITUATION_REVISION_TOO_OLD`**；**WS 握手** → **升级 101 后由服务端 `close 4000` + reason `SITUATION_REVISION_TOO_OLD`**（握手成功后无法再返回 HTTP 码）；
+  **`RESYNC` 超窗** → **不关连接**，服务端直接回推一帧 `full=true`。恢复路径：**不带 `sinceRevision` 重连** → 101 且首帧 `full=true`。
+
+### 76.2 导出 `409` 构造依据（读码确认）
+
+- `ExportTaskService.request(replayId, format)` **一律返回 202**（同复盘同格式**并发合并**为同一 `taskId`，否则新建 `PENDING`）⇒ **POST 永不返 409**（契约虽有该码，但**无重置端点** ⇒ 由 `download` 独占产生）。
+- 执行器 `@Scheduled(fixedDelay = PERIOD_MS)`，**`PERIOD_MS = 2000`** ⇒ 受理后存在约 **2s 的 `PENDING` 窗口** ⇒「**刚受理即下载**」可稳定落「未完成」态，不靠碰运气。
+- `download` 三条路同码 **409 `REPLAY_EXPORT_FAILED`**：**任务未完成**（`state != SUCCEEDED`）、**文件已过期**（`expireAt < now`）、**文件在存储里丢失**。查询任务（`get`）不受影响，仍 200。
+
+### 76.3 补测内容（脚本 §10，新增 19 条断言）
+
+- **导出未完成（含前提 + 对照）**：`POST .../exports`（换 `XLSX`）→ 202 且新 `taskId` **≠** 既有 CSV 任务；**下载前**单独断言任务仍处 `PENDING/RUNNING`（前提独立取证）；`download` → 409 problem+json `REPLAY_EXPORT_FAILED`；
+  **对照组**：轮询至 `SUCCEEDED` 后**同一 URL** → 200 且非空（证明上面的 409 只源于「尚未完成」）。
+- **revision 超窗（HTTP + WS 三条表达）**：`GET /api/v1/situation?sinceRevision=-1` → 409 `SITUATION_REVISION_TOO_OLD`；
+  WS `…?sinceRevision=-1` → **连接已升级**（非握手拒绝）后 `close code=4000` + `reason=SITUATION_REVISION_TOO_OLD`；**不带参数重连** → 101 且首帧 `full=true`；
+  `RESYNC sinceRevision=-1` → 服务端**回推 `full=true`（连接不关）**。
+
+### 76.4 实测结果（2026-11-12，本机类生产形态：原生 jar + 外置配置 + 独立 PEM）
+
+- `node E:\ScdsConfig\verify-e2e.mjs` → **`PASS=278  FAIL=0  合计=278`**（exit 0，**可反复独立运行**）。
+- 脚本由 **11 段扩为 12 段（0–11）**：新增 **§10 负例补测**，原「收尾清理」重编号为 **§11**；末尾「未覆盖项」登记块同步改写（两项已覆盖者移出，仅留上行帧驱动 / 现场硬件两项）。
+- **门禁无增减**：本段**无仓库代码改动**（脚本产在 `E:\ScdsConfig`，**不入库**）⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（**未重跑**）。
+- **仍未覆盖项**：上行帧驱动的态势变化（心跳 / 坐标 / 命中，仿真 `inject*` 仅进程内）；**真实串口时序 / UWB 12001 连续坐标 / 容量与长稳**（仿真档不可替代现场硬件验收）。
 

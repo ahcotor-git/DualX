@@ -2762,6 +2762,25 @@ VCTools 工作负载**默认不含 ATL**（`--includeRecommended` 仍未带入�
 **下一段（候选）**：本机类生产形态**软件链路全链验收已闭环**（**不再作为待办**）。余候选（按推荐序）：
 ① T-PROD 部署（**需真实目标环境**）；② 真机安装 / 运行正式签名 `app-release.apk` 验证「重启后免登」（**需真机**）。
 
+**段 76 落地（2026-11-12，段 75 遗留负例补测：WS `close 4000` / 导出未完成 `409`，本机黑盒脚本扩展）**：
+承段 75 §75.5「未覆盖项」中**纯本机可闭环**的两项。本段只**扩展黑盒脚本**（`E:\ScdsConfig\verify-e2e.mjs`，**不入库**）并重跑，**无任何仓库代码改动**。
+
+- **超窗构造依据（读码确认）**：`SituationRevisionLog.tooOld(sinceRevision) = sinceRevision < lastEvictedRevision`，`lastEvictedRevision` **初始为 `0`** ⇒ **`sinceRevision = -1` 恒判超窗**，
+  **无需**制造 1024 条变更撑满窗口；契约 `situation.yaml` 的 `sinceRevision` 为**裸 `integer`、无下界** ⇒ `-1` **合法**（不会先被 400 拦）。
+- **导出 `409` 构造依据**：`ExportTaskService.request` **一律 202**（同复盘同格式并发合并，否则新建 `PENDING`）⇒ **POST 永不 409**；执行器 **`fixedDelay=2000ms`** ⇒ 受理后有约 **2s `PENDING` 窗口** ⇒
+  「**受理后立刻下载**」稳定落「未完成」态；`download` 三条路同码 **`REPLAY_EXPORT_FAILED`**（未完成 / 已过期 / 文件丢失），`get` 不受影响仍 200。
+- **补测内容（脚本新增 §10，19 条断言）**：① 导出未完成——POST XLSX → 202 且新 `taskId` ≠ 既有 CSV；**下载前**断言仍 `PENDING/RUNNING`；`download` → 409 `REPLAY_EXPORT_FAILED`；**对照**：跑至 `SUCCEEDED` 后同一 URL → 200 非空。
+  ② revision 超窗——HTTP `?sinceRevision=-1` → 409 `SITUATION_REVISION_TOO_OLD`；WS `…?sinceRevision=-1` → **升级 101 后** `close code=4000` + `reason=SITUATION_REVISION_TOO_OLD`；
+  **不带参数重连** → 101 首帧 `full=true`；`RESYNC sinceRevision=-1` → **回推 `full=true`（连接不关）**。
+- **结果**：`verify-e2e.mjs` → **`PASS=278  FAIL=0  合计=278`**（exit 0）；脚本由 **11 段扩为 12 段（0–11）**（原 §10 收尾清理重编号 §11），末尾「未覆盖项」登记块同步改写。
+- **门禁**：本段**无仓库代码改动**（脚本产在本机，**不入库**）⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（未重跑）。证据见 [testing](testing.md) **第 76 节**。
+
+**未验项（本段后收窄）**：段 75 的 `WS close 4000` / 导出未完成 `409` 两项**已闭合**。仍未覆盖：上行帧驱动态势变化（仿真 `inject*` 黑盒不可用）；
+**真实串口时序 / UWB 12001 连续坐标 / 容量与长稳**——仿真档**不可替代现场硬件**；真机 APK 运行态、Windows 桌面产物运行态、**现场 PEM 轮换与公网 FRP/TLS** 仍**仅运行态 / 现场可验**。
+
+**下一段（候选）**：本机软件链路验收（含段 76 负例补测）**已闭环**，**纯本机可做项已尽**。余候选：① 真机安装 / 运行正式签名 `app-release.apk` 验证「重启后免登」（**需真机**）；
+② 现场硬件地面链路验收（`COM7` + UWB 12001，**需现场**）；③ T-PROD 部署（**需真实目标环境**）。
+
 **观察项**：「T-PROD 部署（需真实目标环境，本机不可行）」——本机**类生产形态**已尽可能逼近（真 jar + 外置配置 + 独立 PEM + 黑盒全链），**真正的生产环境部署仍待现场**（**不解除**）。
 
 

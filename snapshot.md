@@ -1,15 +1,18 @@
 # scds-next 交接快照
 
-> 更新：2026-11-11，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**类生产形态本机端到端验收：原生 `java -jar` ＋ 外置 `application.properties` ＋ 本机新生成独立 PEM（不激活 `local` profile）＋ 独立黑盒全链脚本（HTTP + WS）（testing 第 75 节）**——
-> 承段 74「未验项」与段 72/73 记录的对真实后端实例的真依赖（段 70 曾以真库 + 真 jar 跑通 Phase A/B）。
+> 更新：2026-11-12，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
+> 当前任务：**段 75 遗留负例补测：WS `close 4000` `SITUATION_REVISION_TOO_OLD` / 导出未完成 `409` `REPLAY_EXPORT_FAILED`（本机黑盒脚本扩展，testing 第 76 节）**——
+> 承段 75 §75.5「未覆盖项」中**纯本机可闭环**的两项；**只扩展黑盒脚本并重跑，无任何仓库代码改动**。
+> **构造依据（读码确认，非猜测）**：`SituationRevisionLog.tooOld = sinceRevision < lastEvictedRevision`（初始 0）⇒ **`sinceRevision=-1` 恒超窗**（无需制造 1024 条变更撑满窗口）；
+> 导出执行器 `@Scheduled(fixedDelay=2s)` ⇒ 受理后有约 **2s `PENDING` 窗口** ⇒「受理后立刻下载」稳定落「未完成」态（并加「跑完后同 URL → 200」对照）。
+> 上一原子任务：**类生产形态本机端到端验收：原生 `java -jar` ＋ 外置 `application.properties` ＋ 本机新生成独立 PEM（不激活 `local` profile）＋ 独立黑盒全链脚本（HTTP + WS）（testing 第 75 节）**——
 > 用户裁定（经 AskUserQuestion）：段 75 三项「**原生 jar + 外置配置 + 独立 PEM（推荐）**」、「**独立黑盒验收脚本（推荐）**」、「**全链覆盖（推荐）**」。
-> **本段不含仓库代码改动**（本机产物均不入仓库）：`E:\ScdsConfig\application.properties`（外置配置）、
+> **段 75 不含仓库代码改动**（本机产物均不入仓库）：`E:\ScdsConfig\application.properties`（外置配置）、
 > `E:\ScdsConfig\keys\jwt-{public,private}.pem`（本机新生成独立 PEM）、`.admin-password`、
-> **`E:\ScdsConfig\verify-e2e.mjs`**（独立黑盒验收脚本，零依赖、Node ≥ 20，约 620 行）。
-> **黑盒脚本覆盖 11 段（0–10）**：存活鉴权 / WS 双通道（devices/links + situation）/ 设备台账绑定 / 硬件链路 /
-> 底图标定 / 想定编成 / 演习生命周期 / 指挥指令 / 实时态势 / 停演复盘 / 收尾清理。
-> **门禁**：`node E:\ScdsConfig\verify-e2e.mjs` → **`PASS=259  FAIL=0  合计=259`**（exit 0，**可反复独立运行**）；
+> **`E:\ScdsConfig\verify-e2e.mjs`**（独立黑盒验收脚本，零依赖、Node ≥ 20，约 1000 行）。
+> **黑盒脚本覆盖 12 段（0–11）**：存活鉴权 / WS 双通道（devices/links + situation）/ 设备台账绑定 / 硬件链路 /
+> 底图标定 / 想定编成 / 演习生命周期 / 指挥指令 / 实时态势 / 停演复盘 / **负例补测（§10）** / 收尾清理。
+> **门禁**：`node E:\ScdsConfig\verify-e2e.mjs` → **`PASS=278  FAIL=0  合计=278`**（exit 0，**可反复独立运行**）；
 > 真库基线（本机 `scds-local-mysql`，`scds_next` 端口 13306）：`t_account=2` / flyway **10** 条（`1,2,3,4,5,6,7,9,10,11`，**无 8**）/ 表 **19** / schema **v11**。
 > **口径要点（本窗口实测）**：**WS 握手只认 `Authorization: Bearer <账号令牌>` 头**（无头 → 401 `AUTH_TOKEN_INVALID`；
 > 查询参数 `?access_token=` **无效**；**设备令牌连 WS → 403 `AUTH_FORBIDDEN`**；响应**无 `sec-websocket-protocol`** ⇒ 子协议未协商）；
@@ -17,12 +20,12 @@
 > **注销后无「再启用」API 且停用马甲一律折叠为 `AUTH_DEVICE_NOT_BOUND`** ⇒ 脚本**马甲号由时钟派生（10000..59999）+ 409 自动换号**，保证可反复独立运行。
 > **建号偏移（如实登记）**：本机真库 `t_account` 由 1 → **2**（`verify_admin` `enabled=1`，与历史 dev `admin`「Dev Admin」并存）——
 > E2E 运行本身**不改变账号数**，仅增复盘数据。
-> **未验项**：WS close `4000 SITUATION_REVISION_TOO_OLD` 与「未完成导出即下载 409 `REPLAY_EXPORT_FAILED`」**未覆盖**；
+> **未验项（本段后收窄）**：段 75 的 `WS close 4000` 与「未完成导出即下载 409」两项**已闭合**（段 76）；仍未覆盖：
 > **上行帧驱动态势变化**（仿真 `inject*` 黑盒不可用）；**真实串口 `COM7` / UWB TCP 12001 连续坐标 / 容量长稳**（仿真不可替代现场硬件）；
 > 正式签名 APK **真机运行态**、keystore 保管、Windows 产物运行态、现场 PEM 轮换、公网 FRP/TLS。
-> 下一项**（候选，按推荐序）**：① T-PROD 部署（**需真实目标环境，本机不可行**）；
-> ② 真机安装 / 运行正式签名 `app-release.apk` 验证「重启后免登」（**需真机**）；③ 现场硬件地面链路验收（`COM7` 串口 + UWB 12001）；
-> ④ 补测 WS close 4000 / 导出 409 负例。
+> 下一项**（候选，按推荐序）**：① 真机安装 / 运行正式签名 `app-release.apk` 验证「重启后免登」（**需真机**）；
+> ② 现场硬件地面链路验收（`COM7` 串口 + UWB 12001，**需现场**）；③ T-PROD 部署（**需真实目标环境，本机不可行**）。
+> （**纯本机可做项已尽**：本机类生产形态软件链路验收 ＋ 段 76 负例补测均已闭环。）
 > 上一原子任务：**Android release 正式签名：keystore + `key.properties`（凭据不入库）+ `build.gradle.kts` 签名配置（testing 第 74 节）**——
 > 承段 73「未验项」（release 签名仍为模板 debug key）与段 72「下一段（候选）⑤」。用户裁定（经 AskUserQuestion）：下一段方向「**配置 Android release 正式签名（推荐）**」；
 > 两决策点答：「**我生成强随机口令并告知你（推荐）**」、「**回退 debug 签名并告警（推荐）**」。
@@ -996,6 +999,7 @@ WS 窄端口 `SituationSocket`（子协议 `scds.situation.v1`、close `4000`）
 **Windows 原生构建已由段 73 打通**（VS 2022 Build Tools + ATL；`flutter build windows --release` 产物 **28.6 MB**），
 **Android release 正式签名已由段 74 配置**（JKS keystore，`key.properties` 不入库，APK 非 debug key），
 **「类生产形态」本机端到端验收已由段 75 跑绿**（原生 `java -jar` + 外置配置 + 独立 PEM ＋ 独立黑盒全链脚本，**`PASS=259 FAIL=0`**），
+**段 75 遗留负例（WS `close 4000` / 导出未完成 `409`）已由段 76 补测闭合**（脚本由 11 段扩为 **12 段（0–11）**，**`PASS=278 FAIL=0`**），
 可转下列候选（按推荐序）：
 ① **T-PROD 部署**（见 `docs/implementation-plan.md` 与 `docs/deployment.md`；**需真实目标环境，本机不可行**）；
 ② 平台安全存储（Android Keystore / Windows DPAPI）+ 连接配置落盘 —— **已完成（段 71）**；
@@ -1003,8 +1007,9 @@ WS 窄端口 `SituationSocket`（子协议 `scds.situation.v1`、close `4000`）
 ④ **安装 Visual Studio C++ 工作负载以补齐 Windows 原生构建验收** —— **已完成（段 73）**；
 ⑤ **Android release 正式签名** —— **已完成（段 74）**；
 ⑥ **类生产形态本机端到端验收（独立黑盒全链脚本）** —— **已完成（段 75）**；
-⑦ 真机安装 / 运行正式签名 `app-release.apk` 验证「重启后免登」（**需真机**）；
-⑧ 现场硬件地面链路验收（`COM7` 串口 + UWB TCP 12001）＋ 补测 WS close 4000 / 导出 409 负例。
+⑦ **补测 WS close 4000 / 导出 409 负例** —— **已完成（段 76）**；**纯本机可做项已尽**。
+⑧ 真机安装 / 运行正式签名 `app-release.apk` 验证「重启后免登」（**需真机**）；
+⑨ 现场硬件地面链路验收（`COM7` 串口 + UWB TCP 12001，**需现场**）。
 启动前须重新核查仓库与环境，
 不照搬本快照的瞬时结论。提交/推送仍须当次授权；**段 0 至段 6 各笔与 CLIENT-RESILIENCE 段 A/B/C、D 前半各笔
 及 RES-D 后半三笔（`8bdd6d7`/`3adf094`/`06b48ab`）、段 45 两笔（`88e2b34`/`f35e79f`）、段 46 两笔
@@ -1035,7 +1040,10 @@ WS 窄端口 `SituationSocket`（子协议 `scds.situation.v1`、close `4000`）
 **段 72 推送标记笔 `50e3a9d` 亦已推送**（`af326b2..50e3a9d`），本地与远端曾齐平于 `50e3a9d`。
 **段 73（环境级前置，无代码笔）两笔（docs 笔 `7cdbf13` + 推送标记笔 `7fa68f3`）已一并推送成功**（`50e3a9d..7fa68f3`），本地与远端曾齐平于 `7fa68f3`。
 **段 74 三笔（代码 `6965cc2` + docs 笔 `14ab1e4` + 推送标记笔 `36e44a6`）＋ 段 74 收尾两笔（`7f44dc7` 全量门禁复核 + `7f909f6` snapshot 推送状态回写）均已推送成功**（`7fa68f3..7f909f6`），本地与远端曾齐平于 `7f909f6`。
-**段 75 一笔（docs 笔 `6df562c`，3 文件 120 insertions / 2 deletions）已推送成功**（`7f909f6..6df562c`），本地与远端齐平于 `6df562c`；其后为**段 75 推送标记笔（本笔）**，推送后本地与远端将齐平于其自身哈希——**以 `git status -sb` 实测为准**。
+**段 75 一笔（docs 笔 `6df562c`，3 文件 120 insertions / 2 deletions）已推送成功**（`7f909f6..6df562c`）；
+**段 75 推送标记笔 `f2a27ed`（1 文件 `snapshot.md` §2 回写）亦已推送**（`6df562c..f2a27ed`），本地与远端齐平于 `f2a27ed`。
+**段 76（本段）**：仅**扩展本机黑盒脚本并重跑**（`E:\ScdsConfig\verify-e2e.mjs` 新增 §10 负例补测，**无仓库代码改动**），
+docs 笔（`docs/testing.md` §76 / `docs/decision-register.md` 段 76 / `snapshot.md` 回写）**待推送**——**以 `git status -sb` 实测为准**。
 
 ## 2. Git与工作树
 
