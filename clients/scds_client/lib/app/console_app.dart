@@ -538,6 +538,11 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
             request: request,
           ),
           stop: () => exercises.stopExercise(token: _account!.accessToken),
+          logs: ({int? sinceSeq, int? limit}) => exercises.listCurrentExerciseLogs(
+            token: _account!.accessToken,
+            sinceSeq: sinceSeq,
+            limit: limit,
+          ),
         ),
       ),
     );

@@ -492,6 +492,8 @@ void main() {
     PlanLister? listPlans,
     ExerciseStarter? start,
     ExerciseStopper? stop,
+    ExerciseLogsLoader? logs,
+    Duration? logInterval,
   }) async {
     tester.view.physicalSize = const Size(1200, 2000);
     tester.view.devicePixelRatio = 1.0;
@@ -506,6 +508,8 @@ void main() {
               listPlans ?? ({String? keyword}) async => planPageOf(<Plan>[]),
           start: start ?? (StartExerciseRequest request) async => fail('未预期的开演'),
           stop: stop ?? () async => fail('未预期的停演'),
+          logs: logs,
+          logInterval: logInterval ?? const Duration(milliseconds: 50),
         ),
       ),
     );
@@ -3405,6 +3409,161 @@ void main() {
   });
 
   /// 段 51：演习控制接线——从队伍汇总页「演习」入口进入，`ExerciseApi` 挂同一条已认证传输。
+  group('演习控制页·当前演习日志（段 51 续）', () {
+    ExerciseLogEntry logOf(
+      int seq, {
+      ExerciseLogType type = ExerciseLogType.system,
+      int? vestNum,
+      String? operator,
+      String? detail,
+    }) =>
+        ExerciseLogEntry(
+          seq: seq,
+          at: DateTime.utc(2026, 11, 12, 3, 0, seq),
+          type: type,
+          vestNum: vestNum,
+          operator: operator,
+          detail: detail,
+        );
+
+    /// 有周期计时器在跑时不能 `pumpAndSettle`（永不 settle），改用固定拍数推进假时钟。
+    Future<void> advance(WidgetTester tester) async {
+      for (int i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+    }
+
+    testWidgets('未注入日志端口：不渲染日志面板（既有行为不变）', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(running: true, exerciseId: 'ex-1'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kExerciseControlLogsTitleKey), findsNothing);
+
+      await unmount(tester);
+    });
+
+    testWidgets('非进行中：面板提示「无进行中的演习」，不启日志轮询', (WidgetTester tester) async {
+      int calls = 0;
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(),
+        logs: ({int? sinceSeq, int? limit}) async {
+          calls++;
+          return ExerciseLogPage(items: const <ExerciseLogEntry>[]);
+        },
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kExerciseControlLogsEmptyKey), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlLogsEmptyKey)).data,
+        '无进行中的演习',
+      );
+      expect(calls, 0, reason: '未进行中不应拉日志');
+
+      await unmount(tester);
+    });
+
+    testWidgets('进行中：首拍全量、按 latestSeq 游标增量续拉并逐条渲染', (WidgetTester tester) async {
+      final List<int?> cursors = <int?>[];
+      await pumpExercise(
+        tester,
+        load: () async =>
+            exerciseOf(running: true, exerciseId: 'ex-1', planName: '红方突袭'),
+        logs: ({int? sinceSeq, int? limit}) async {
+          cursors.add(sinceSeq);
+          // 忠实于契约：只回 seq 大于 sinceSeq 的条目，游标推进后不再重复。
+          if (sinceSeq == null) {
+            return ExerciseLogPage(
+              items: <ExerciseLogEntry>[
+                logOf(1, type: ExerciseLogType.startBattle, detail: '开演'),
+                logOf(2, type: ExerciseLogType.die, vestNum: 3, operator: 'admin'),
+              ],
+              latestSeq: 2,
+            );
+          }
+          if (sinceSeq < 3) {
+            return ExerciseLogPage(
+              items: <ExerciseLogEntry>[
+                logOf(3, type: ExerciseLogType.reload, vestNum: 5, detail: '补弹'),
+              ],
+              latestSeq: 3,
+            );
+          }
+          return const ExerciseLogPage(items: <ExerciseLogEntry>[]);
+        },
+      );
+      await advance(tester);
+
+      expect(find.byKey(kExerciseControlLogsTitleKey), findsOneWidget);
+      expect(find.byKey(exerciseControlLogRowKey(1)), findsOneWidget);
+      expect(find.byKey(exerciseControlLogRowKey(2)), findsOneWidget);
+      expect(find.byKey(exerciseControlLogRowKey(3)), findsOneWidget);
+      expect(cursors.first, isNull, reason: '首拍不带游标（从 0 起拉）');
+      expect(cursors.contains(2), isTrue, reason: '续拉带上上次 latestSeq');
+      expect(
+        tester.widget<Text>(find.byKey(exerciseControlLogRowKey(2))).data,
+        '2｜DIE｜#3｜admin',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('日志文案三态：马甲 / 操作员 / 系统', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(running: true, exerciseId: 'ex-1'),
+        logs: ({int? sinceSeq, int? limit}) async => sinceSeq == null
+            ? ExerciseLogPage(
+                items: <ExerciseLogEntry>[
+                  logOf(1, vestNum: 7, detail: '判死'),
+                  logOf(2, operator: 'admin', detail: '手动下发'),
+                  logOf(3, detail: '系统级'),
+                ],
+                latestSeq: 3,
+              )
+            : const ExerciseLogPage(items: <ExerciseLogEntry>[]),
+      );
+      await advance(tester);
+
+      expect(
+        tester.widget<Text>(find.byKey(exerciseControlLogRowKey(1))).data,
+        '1｜SYSTEM｜#7｜判死',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(exerciseControlLogRowKey(2))).data,
+        '2｜SYSTEM｜admin｜手动下发',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(exerciseControlLogRowKey(3))).data,
+        '3｜SYSTEM｜系统｜系统级',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('日志拉取失败：显示错误行，不红屏', (WidgetTester tester) async {
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(running: true, exerciseId: 'ex-1'),
+        logs: ({int? sinceSeq, int? limit}) async =>
+            throw const ApiException(statusCode: 503),
+      );
+      await advance(tester);
+
+      expect(find.byKey(kExerciseControlLogsErrorKey), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlLogsErrorKey)).data,
+        '日志拉取失败：HTTP_503',
+      );
+
+      await unmount(tester);
+    });
+  });
+
   group('指挥端演习控制接线（段 51）', () {
     testWidgets('汇总页「演习」入口：进入演习控制页并按登录令牌拉当前演习与想定',
         (WidgetTester tester) async {
