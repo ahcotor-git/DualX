@@ -4945,3 +4945,64 @@ release 签名仍为模板 **debug key**（未配正式签名）。本段为**�
 **结论**：段 74 及此前段 71~73 的「（未重跑）」遗留**已清零**；工作树 `36e44a6` 两侧门禁全绿。
 **未验项不变**：正式签名 APK 真机安装 / 运行、Windows 桌面产物运行态仍**仅运行态可验**（需真机 / 交互）。
 
+## 75. 类生产形态本机端到端验收：原生 jar + 外置配置 + 独立 PEM ＋ 独立黑盒全链脚本（HTTP + WS）
+
+承段 74「下一段（候选）① T-PROD 部署（**需真实目标环境，本机不可行**）」。用户裁定（经 AskUserQuestion）：
+以**本机代替生产环境**，用**类生产形态**拉起真进程做**全链覆盖**端到端验收——三项裁决：
+「**原生 jar + 外置配置 + 独立 PEM（推荐）**」、「**独立黑盒验收脚本（推荐）**」、「**全链覆盖（推荐）**」。
+
+### 75.1 类生产形态（本机，均不入仓库）
+
+| 项 | 内容 |
+|---|---|
+| 运行形态 | `java -jar scds-app/target/scds-next.jar --spring.config.additional-location=file:E:/ScdsConfig/application.properties`（**不激活 `local` profile**，启动日志 `No active profile set`） |
+| 外置配置 | `E:\ScdsConfig\application.properties`（`server.address=127.0.0.1` / `server.port=11001` / `scds.gateway.mode=simulator` / 独立 PEM 绝对路径 / `jwks-uri=` 空 / `scds.files.sign-secret` / `scds.admin.username=verify_admin`） |
+| 独立 PEM（本机新生成，不入库） | `E:\ScdsConfig\keys\jwt-public.pem`（X.509）/ `jwt-private.pem`（PKCS#8）；启动日志公钥指纹 `LKcIQYS2LdvaAvwAXfCnAVsaTEkPdcik71yTfcuSg-A` |
+| 口令（不入库） | `E:\ScdsConfig\.admin-password` |
+| 黑盒脚本（不入库） | `E:\ScdsConfig\verify-e2e.mjs`（**零依赖**，Node ≥ 20）＋ 前置探针 `probe.mjs` / `probe2.mjs` |
+| 真库 | 本机 `scds-local-mysql` 的 `scds_next`（schema **v11**；Flyway **10** 条迁移，**无 8**；**19** 表） |
+
+### 75.2 同步解决的技术障碍：WS 握手无法携带 `Authorization` 头
+
+- **实测口径（`probe.mjs` / `probe2.mjs`）**：WS 握手**只认 `Authorization: Bearer <账号令牌>` 头**——
+  无头 → **401 + `application/problem+json` + `code=AUTH_TOKEN_INVALID`**；带 Bearer → **101 升级成功**（`/ws/v1/devices/links` 与 `/ws/v1/situation` 均通）。
+  **响应无 `sec-websocket-protocol`** ⇒ 子协议（`scds.situation.v1` / `scds.links.v1`）**未协商**（契约注明「待阶段 4 接入真实推送时再协商」）。
+  查询参数 `?access_token=` **无效**（1006）。**设备令牌连 WS → 403 `AUTH_FORBIDDEN`**（`SecurityConfig` 的 `/ws/**` 要求 `AUD_EDGE`；设备令牌 `aud=scds-device`）。
+- **Node 全局 `WebSocket` 构造只接受 `(url, protocols)`，无法附加 `Authorization` 头** ⇒ 黑盒脚本**手写 `http.request` + `Upgrade: websocket`（RFC6455）**，
+  自实现最小帧编解码（`readFrame` 支持 126/127 长度与掩码、`sendFrame`、ping↔pong `0x9`/`0xA`、close `0x8` 解 code/reason）。
+
+### 75.3 黑盒脚本覆盖（`verify-e2e.mjs`，11 段）
+
+- **0 存活与鉴权**：`/actuator/health` UP；`/auth/me` 无令牌 401 `AUTH_TOKEN_INVALID`；错口令 401 `AUTH_BAD_CREDENTIALS`；登录形状（`accessToken`/`refreshToken`/`expiresIn`/`user`）；`roles` 含 `ADMIN`；`refresh` 滚动刷新。
+- **1 WebSocket 双通道**：无令牌 401；态势通道首帧 `SituationEnvelope`（`epoch`/`full`/`running`/`serverTime`）+ `PING→PONG`；链路通道 `PING→PONG`。
+- **2 设备台账与绑定闭环**：列表/建/改/查；重复编号 409 `DEVICE_VEST_NUM_CONFLICT`；首次绑定 201、重复 409 `DEVICE_VEST_ALREADY_BOUND`、密钥过短 400 `VALIDATION_FAILED`；设备登录 200、错密钥 401 `AUTH_DEVICE_NOT_BOUND`；**设备令牌连 WS 403**；换绑使旧设备令牌失效（401）；解绑 200 幂等、未绑即换绑 409 `DEVICE_VEST_NOT_BOUND`。
+- **3 硬件链路（simulator）**：`snapshot` 恒三条且种类排序 `SERIAL_VEST`/`UWB_SERIAL`/`UWB_TCP_SERVER`、初始全 CLOSED；`POST /links/serial` 开（重复 409 `DEVICE_LINK_ALREADY_OPEN`）；`openUwbTcpServer` 强制端口 **12001**（否则 400 `VALIDATION_FAILED`）、两种 UWB 接入方式互斥 409；`DELETE /links/uwb` 幂等；anchors 读写。
+- **4 底图 / 楼层点位 / UWB 标定**：底图 CRUD；非图片上传 415 `UNSUPPORTED_MEDIA_TYPE`；PNG 1000×800 上传回填宽高；**签名 URL 免 Bearer 可读、篡改签名 403 `FILE_URL_INVALID`**；楼层点位读写；未标定取 `uwb-meta` 404 `MAP_NOT_CALIBRATED`；缺 bs4 400 `VALIDATION_FAILED`；退化共线 / 越界 / 非正整数厘米 400 `MAP_UWB_META_INCOMPLETE`；合法标定 200 且 `calibrated=true`。
+- **5 想定与编成**：模板（XLSX / CSV）；想定 CRUD；空编成 200；未登记马甲 400 `VALIDATION_FAILED`；合法编成 200；**底图被想定引用 → 删图 409 `MAP_IN_USE`**。
+- **6 演习生命周期**：未开演 `running=false`；不存在想定 404 `EXERCISE_PLAN_NOT_FOUND`；开演 201（`running=true`/`rosterCount=1`）；重复开演 409 `EXERCISE_ALREADY_RUNNING`；演习中删图 409 `MAP_IN_USE`、删想定 409 `PLAN_IN_USE`。
+- **7 指挥指令（逐字节核对）**：判死 `0009ff` 前缀 + 含马甲号 2BE + `affa` 后缀；判活 `0008ff`；判伤 `00a1ff`；超范围 `000dff`；单兵充弹 11B `0114ff`；全体充弹 `vestNum=0`；弹药越界 400 `VALIDATION_FAILED`；武器非法值 400（枚举反序列化折叠，**非** `COMMAND_INVALID_WEAPON_SLOT`）；**轮询配置 `PUT .../config` 14B `0200`**；`moveVest` 训练态放行且 `downlinkHex=null`、点位不存在 404 `MAP_FLOOR_POINT_NOT_FOUND`；指令日志流水 `items`。
+- **8 实时态势**：`GET /situation` `full=true`/`running=true`/含本场马甲；单马甲 / 队伍汇总 / 命中。
+- **9 停演与复盘**：停演 200（`replayId===exerciseId`、`endReason=NORMAL`）；无演习 409 `EXERCISE_NOT_RUNNING`；复盘列表 / 详情（不存在 404 `REPLAY_NOT_FOUND`）/ 轨迹分片 / 统计 / 导出 202；**同槽并发导出合并同一 taskId**；轮询至 `SUCCEEDED`；`download` 200。
+- **10 收尾清理**：关串口 200 幂等；删想定 204 / 删底图 204 / 注销马甲 204（**逻辑注销**：注销后 `GET` 仍 200 且 `enabled=false`）；登出 204。
+
+### 75.4 实测结果与门禁（2026-11-11，本机）
+
+- **脚本结果**：`node E:\ScdsConfig\verify-e2e.mjs` → **`PASS=259  FAIL=0  合计=259`**（exit 0，**可反复独立运行**）。
+- **真库基线**（`scds_next`，`scds-local-mysql`）：`t_account` **2**（历史 `admin`「Dev Admin」`enabled=1` ＋ 本段 `verify_admin` `enabled=1`）；
+  `flyway_schema_history` **10** 条（`1,2,3,4,5,6,7,9,10,11`，**无 8**）；表 **19**；`UTC_TIMESTAMP` `2026-11-11 09:43:13`（**schema v11**）。
+- **建号偏移（如实登记）**：本机真库已有历史 dev `admin`（口令已丢失），**未采用改库覆盖**，改由外置配置 `scds.admin.username=verify_admin` 首启建号
+  （`AdminAccountBootstrap`：`existsByUsername` 为真即跳过、**绝不覆盖**）。**生产 `admin` 与此处 `verify_admin` 的用户名偏移须在现场部署时注意**。
+- **门禁无增减**：本段**无仓库代码改动**（产物全在 `E:\ScdsConfig`，**不入库**）⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（**未重跑**）。
+
+### 75.5 脚本修正（t4 实测暴露，均为**脚本断言**问题，非实现 / 契约缺陷）
+
+- **`config` 端点方法**：契约 `command.yaml → vestConfig` 为 **`PUT`**（`02 00 …` 14B 覆盖配置语义，非即时单次指令）；脚本初稿误用 `POST` ⇒ 405。已改为 `PUT`。
+- **`deleteVest` 是逻辑注销**（`VestLedgerService.retire`：`enabled=0` + 清会话、**保留绑定密钥、行不删**）⇒ 注销后 `GET` **仍 200 且 `enabled=false`**
+  （物理删除会让 `t_exercise_unit` / `t_hit_event` 的 `vest_num` 指向虚空）。脚本已按此断言。
+- **脚本可重跑**：注销**无可再启用 API**（`edited()` 沿用 `enabled`；`DeviceAuthService` 把「已停用」折叠为 `AUTH_DEVICE_NOT_BOUND`），
+  固定马甲号会让第二次运行卡在设备登录 ⇒ 脚本改为**每次运行由时钟派生马甲号**（10000..59999，落在契约 `1..65532`）并在 409 冲突时自动换号。
+
+**未覆盖项（诚实登记）**：WS close `4000` `SITUATION_REVISION_TOO_OLD`（需越过 1024 的 revision 保留窗口，短会话无法构造）；
+PC4「未完成导出即下载 → 409 `REPLAY_EXPORT_FAILED`」（需人工造未完成 / 失败态）；上行帧驱动的态势变化（心跳 / 坐标 / 命中）——仿真 `inject*` **仅进程内可用，黑盒不注入**；
+**真实串口时序 / UWB 12001 连续坐标 / 容量与长稳：仿真档不可替代现场硬件验收**。段 75 是**本机类生产形态**的软件链路全链验收，**不是现场硬件 / 生产环境验收**。
+

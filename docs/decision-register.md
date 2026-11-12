@@ -2736,4 +2736,32 @@ VCTools 工作负载**默认不含 ATL**（`--includeRecommended` 仍未带入�
 
 **观察项**：「Android release 签名（模板 debug key）」——**已解除**（段 74 换为正式 keystore，**不再作为待办**）。
 
+**段 75 落地（2026-11-11，类生产形态本机端到端验收：原生 jar + 外置配置 + 独立 PEM ＋ 独立黑盒全链脚本）**：
+承段 74「下一段（候选）① T-PROD 部署（**需真实目标环境，本机不可行**）」。用户裁定（经 AskUserQuestion）：
+以**本机代替生产环境**，用**类生产形态**拉起真进程做**全链覆盖**端到端验收——三项裁决：「**原生 jar + 外置配置 + 独立 PEM（推荐）**」、
+「**独立黑盒验收脚本（推荐）**」、「**全链覆盖（推荐）**」。
+
+- **类生产形态（均不入仓库）**：`java -jar scds-app/target/scds-next.jar --spring.config.additional-location=file:E:/ScdsConfig/application.properties`
+  （**不激活 `local` profile**，启动日志 `No active profile set`）；外置配置 `E:\ScdsConfig\application.properties`（`server.port=11001` / `gateway.mode=simulator` /
+  独立 PEM 绝对路径 / `jwks-uri=` 空 / `scds.files.sign-secret` / `scds.admin.username=verify_admin`）；本机新生成**独立 PEM**
+  `E:\ScdsConfig\keys\jwt-{public,private}.pem`（X.509 / PKCS#8，公钥指纹 `LKcIQYS2…Sg-A`）。
+- **黑盒脚本（不入库）**：`E:\ScdsConfig\verify-e2e.mjs`（**零依赖**，Node ≥ 20；**手写 `http.request` + `Upgrade` + RFC6455 最小帧编解码**，
+  因 **WS 握手只认 `Authorization: Bearer` 头**、且 Node 全局 `WebSocket` 构造**无法附加该头**）。前置探针 `probe.mjs` / `probe2.mjs`。
+- **实测口径**：WS 无头 → 401 `AUTH_TOKEN_INVALID`、带 Bearer → 101（**子协议未协商**）；`?access_token=` 无效；**设备令牌连 WS → 403 `AUTH_FORBIDDEN`**（`/ws/**` 要求 `AUD_EDGE`）；
+  simulator 开串口只需非空 `portName`、`openUwbTcpServer` 强制 **12001**；开演前需 `SERIAL_VEST=OPEN`。
+- **结果**：`verify-e2e.mjs` → **`PASS=259  FAIL=0`**（exit 0，**可反复独立运行**）；真库基线 `scds_next`：`t_account` 2 / flyway 10 条（`1..7,9,10,11`，无 8）/ 19 表 / schema v11 / UTC `2026-11-11 09:43:13`。
+- **建号偏移**：本机真库已有历史 dev `admin`（口令丢失），**未改库覆盖**，改由 `scds.admin.username=verify_admin` 首启建号（`existsByUsername` 为真即跳过、绝不覆盖）——**生产 `admin` 与此处 `verify_admin` 偏移须现场注意**。
+- **脚本修正（t4 实测暴露，均为脚本断言问题）**：`config` 契约为 **`PUT`**（脚本初稿误 `POST` → 405）；`deleteVest` 是**逻辑注销**（注销后 `GET` 仍 200 且 `enabled=false`）；
+  马甲号**每次运行派生 + 409 换号**（因注销**无可再启用 API**，固定号会让第二次运行卡设备登录 `AUTH_DEVICE_NOT_BOUND`）。
+
+**门禁**：本段**无仓库代码改动**（产物全在本机 `E:\ScdsConfig`，**不入库**）⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（未重跑）。证据见 [testing](testing.md) **第 75 节**。
+
+**未验项**：WS close `4000` `SITUATION_REVISION_TOO_OLD` / 导出未完成即下载 `409 REPLAY_EXPORT_FAILED` / 上行帧驱动态势变化（仿真 `inject*` 黑盒不可用）**未覆盖**；
+**真实串口时序 / UWB 12001 连续坐标 / 容量与长稳**——仿真档**不可替代现场硬件**；真机 APK 运行态、Windows 桌面产物运行态、**现场 PEM 轮换与公网 FRP/TLS** 仍**仅运行态 / 现场可验**。
+
+**下一段（候选）**：本机类生产形态**软件链路全链验收已闭环**（**不再作为待办**）。余候选（按推荐序）：
+① T-PROD 部署（**需真实目标环境**）；② 真机安装 / 运行正式签名 `app-release.apk` 验证「重启后免登」（**需真机**）。
+
+**观察项**：「T-PROD 部署（需真实目标环境，本机不可行）」——本机**类生产形态**已尽可能逼近（真 jar + 外置配置 + 独立 PEM + 黑盒全链），**真正的生产环境部署仍待现场**（**不解除**）。
+
 
