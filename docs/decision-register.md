@@ -3024,3 +3024,29 @@ Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `m
 `situation` / `console_login` / `replay_player` 等），直至全量覆盖；之后转部署运维细节。
 
 
+**段 83 落地（2026-11-13，审查报告余项：错误行组件抽取——批 4）**：
+承批 3，续抽 **3 页 7 处**至共享组件 `ConsoleErrorLine`。**只改渲染结构，不改文案 / 键 / 交互语义**。
+落**一笔**（**4 文件 / 3 改 + 本册**，**破「≤3 文件」上限已按无人值守授权显式声明例外**，
+先例段 53/61/62/65/68/69/71/81/82/83-批 1/批 2/批 3）。
+
+- **批 4 覆盖**：`replay_export_page.dart`（2 处，`kReplayExportErrorKey` ＋ `kReplayExportMessageKey`）、
+  `roster_editor_page.dart`（2 处，`kRosterEditorErrorKey` / `kRosterEntryErrorKey`）、
+  `vest_ledger_page.dart`（3 处，`kVestLedgerErrorKey` / `kVestFormErrorKey` / `kVestBindingErrorKey`）。
+  其中 `kReplayExportMessageKey` 原为页面正文内的 `SizedBox(height: 4)`（紧随任务状态行），
+  改后显式传 `spacing: 4`；其余 6 处走默认 8。改造后三页已无内联 `colorScheme.error` 残留（grep 实测 0）。
+- **键仍落内层 `Text`**：沿用批 1 口径（`textKey` 施加在内层 [Text]），既有断言零改动。
+- **文件**：`lib/features/console/replay_export_page.dart` ＋ `lib/features/console/roster_editor_page.dart`
+  ＋ `lib/features/console/vest_ledger_page.dart`（**改**）＋ 本册。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**
+（复用既有「错误行」断言作行为不变证据——本段**未新增测试**）。Dart 产物**不进 Maven reactor**，
+未改 Java / 契约，故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：未在真机上核对各页错误行**视觉一致性**（间距 4 与 8 的差异、颜色）；批 5+ 未落地，
+代码库仍处**混合状态**（余约 9 页 / ~12 处仍内联）。
+
+**下一段（候选）**：错误组件抽取**批 5**（候选 `uwb_calibration`（3）/ `floor_points`（2）/ `connection` /
+`account` / `command` / `device_login` / `situation` / `console_login` / `replay_player`），
+直至全量覆盖；之后转部署运维细节。
+
+

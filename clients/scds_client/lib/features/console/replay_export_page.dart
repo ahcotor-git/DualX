@@ -7,6 +7,7 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/replay_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 import 'replay_list_page.dart' show describeReplaySummary;
 
 /// 供测试与后续集成定位的控件键。
@@ -264,27 +265,19 @@ class _ReplayExportPageState extends State<ReplayExportPage> {
                 child: const Text('发起导出'),
               ),
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kReplayExportErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kReplayExportErrorKey),
             const Divider(height: 32),
             if (task == null)
               const Text('尚未发起导出', key: kReplayExportStateKey)
             else ...<Widget>[
               Text(_describeTask(task), key: kReplayExportStateKey),
-              if (task.errorMessage != null) ...<Widget>[
-                const SizedBox(height: 4),
-                Text(
-                  task.errorMessage!,
-                  key: kReplayExportMessageKey,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+              if (task.errorMessage != null)
+                ConsoleErrorLine(
+                  text: task.errorMessage!,
+                  textKey: kReplayExportMessageKey,
+                  spacing: 4,
                 ),
-              ],
               if (task.downloadUrl != null) ...<Widget>[
                 const SizedBox(height: 4),
                 Text(task.downloadUrl!, key: kReplayExportDownloadUrlKey),

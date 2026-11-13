@@ -5,6 +5,7 @@ import '../../shared/api/api_problem.dart';
 import '../../shared/api/device_models.dart';
 import '../../shared/api/situation_models.dart' show Team;
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kVestLedgerAccountKey = Key('vestLedger.account');
@@ -485,14 +486,8 @@ class _VestLedgerPageState extends State<VestLedgerPage> {
                 ),
               ],
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kVestLedgerErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kVestLedgerErrorKey),
             const Divider(height: 32),
             if (vests == null)
               const Text('加载中…', key: kVestLedgerLoadingKey)
@@ -631,14 +626,8 @@ class _VestFormDialogState extends State<_VestFormDialog> {
               controller: _remark,
               decoration: const InputDecoration(labelText: '备注'),
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kVestFormErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kVestFormErrorKey),
           ],
         ),
       ),
@@ -715,14 +704,8 @@ class _VestBindingDialogState extends State<_VestBindingDialog> {
                 helperText: '仅上行一次，服务端只存摘要、不回显',
               ),
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kVestBindingErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kVestBindingErrorKey),
           ],
         ),
       ),

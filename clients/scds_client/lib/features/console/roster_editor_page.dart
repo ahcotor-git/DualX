@@ -6,6 +6,7 @@ import '../../shared/api/command_models.dart' show VestMode;
 import '../../shared/api/exercise_models.dart';
 import '../../shared/api/situation_models.dart' show Team;
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kRosterEditorAccountKey = Key('rosterEditor.account');
@@ -284,14 +285,8 @@ class _RosterEditorPageState extends State<RosterEditorPage> {
             ),
             const SizedBox(height: 4),
             Text('想定：${widget.planName}', key: kRosterEditorPlanKey),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kRosterEditorErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kRosterEditorErrorKey),
             const Divider(height: 32),
             if (entries == null)
               const Text('加载中…', key: kRosterEditorLoadingKey)
@@ -476,14 +471,8 @@ class _RosterEntryFormDialogState extends State<_RosterEntryFormDialog> {
                 ),
               ),
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kRosterEntryErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kRosterEntryErrorKey),
           ],
         ),
       ),
