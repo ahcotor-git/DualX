@@ -2847,3 +2847,31 @@ healthy）——**仿真通过不得写成现场通过**。
 长列表虚拟化、错误组件抽取、部署运维细节。
 
 
+**段 80 落地（2026-11-12，审查报告优先级第 5 项：`scds-solver` 由「零测试」到有回归网）**：
+承段 79「下一段（候选）」首项。本段**只加测试，不改任何生产代码**：`UwbSolver` / `UwbFilter` 算法一字不动
+（模块定位即「逐字照抄、作对拍基准」）。
+
+- **只锁契约与状态迁移，不锁数值细节**：算法是现场调优过的 Huber-LM，断言集中在
+  ① 入口失败分支的 `status` 词表（`HELD_META_INVALID` / `HELD_OUT_OF_ORDER` / `HELD_INSUFFICIENT_GEOMETRY`）、
+  ② 归一化坐标的量级与位置误差、③ 测量状态机的迁移，而非某一次迭代的具体值。
+- **`UwbSolverTest`（10 例）**：四锚点精确测距解到已知点 `(0.3, 0.25)`（±0.02，RMS<0.05，`OK_HUBER_ALL`）、
+  同 `frameId` 复用缓存结果（`assertSame`）、旧时间戳判 `HELD_OUT_OF_ORDER`、坏 meta 判 `HELD_META_INVALID`
+  而不抛异常、单锚点/双锚点无先验判 `HELD_INSUFFICIENT_GEOMETRY`、双锚点带先验可入解算、`rejectedFrame` 只填
+  已给测距、`toImagePct` 物理百分比→整图百分比映射与缺图尺寸抛 `IllegalArgumentException`、`geometryDop` 有限。
+- **`UwbFilterTest`（8 例）**：走兼容入口 `push(x, y, rms, ...)` 直接驱动状态机（把「解算数值」与「状态迁移」
+  解耦）：首帧有效 `FIRST_VALID`、重复/回退时间戳判 `DUPLICATE_OR_OUT_OF_ORDER`、RMS 超限只置 `HELD` 不动锚点、
+  超门限位移 `ENTRY_REJECT`→连续一致帧 `REACQUIRED`、超时后 `getState` 转 `LOST`、`resetForFloorChange` 清零、
+  「读快照不推进估计器」、事件 tail 快照有界。
+- **测试技术选择**：`com.dualx.solver.algorithm` 同包 ⇒ 可访问包内可见的 `BsPoint` / `Solve2DResult` 构造器；
+  `scds-solver` 的 `pom.xml` **只声明了 `junit-jupiter`（无 assertj/mockito）**，故一律用 JUnit 5 原生断言，
+  **不为测试新增依赖**。
+- **改动 3 文件（2 测 + 本册）**：新增 `scds-solver/src/test/java/com/dualx/solver/algorithm/UwbSolverTest.java`、
+  `.../UwbFilterTest.java`；本册。**未改生产代码**。
+
+**门禁**：`mvn -pl scds-solver test` → `UwbSolverTest` **10 例** + `UwbFilterTest` **8 例**全绿；
+`mvn test`（全反应堆）→ **BUILD SUCCESS**。
+
+**下一段（候选）**：`docs/review.md` 余项继续按优先级推进——`listHits` 接入指挥端态势页、长列表虚拟化、
+错误组件抽取、部署运维细节。
+
+
