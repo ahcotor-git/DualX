@@ -4,6 +4,7 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/map_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kFloorPointsAccountKey = Key('floorPoints.account');
@@ -321,14 +322,8 @@ class _FloorPointsPageState extends State<FloorPointsPage> {
               key: kFloorPointsAccountKey,
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kFloorPointsErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kFloorPointsErrorKey),
             const Divider(height: 32),
             _floorPicker(context),
             const SizedBox(height: 8),
@@ -384,14 +379,8 @@ class _FloorPointsPageState extends State<FloorPointsPage> {
           child: const Text('新增点位'),
         ),
       ),
-      if (_formError != null) ...<Widget>[
-        const SizedBox(height: 8),
-        Text(
-          _formError!,
-          key: kFloorPointsFormErrorKey,
-          style: TextStyle(color: Theme.of(context).colorScheme.error),
-        ),
-      ],
+      if (_formError != null)
+        ConsoleErrorLine(text: _formError!, textKey: kFloorPointsFormErrorKey),
       const SizedBox(height: 12),
       Align(
         alignment: Alignment.centerLeft,

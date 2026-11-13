@@ -6,6 +6,7 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/map_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kUwbCalibrationAccountKey = Key('uwbCalibration.account');
@@ -438,14 +439,8 @@ class _UwbCalibrationPageState extends State<UwbCalibrationPage> {
               key: kUwbCalibrationAccountKey,
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kUwbCalibrationErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kUwbCalibrationErrorKey),
             const Divider(height: 32),
             _metaSection(context),
             const Divider(height: 32),
@@ -476,14 +471,8 @@ class _UwbCalibrationPageState extends State<UwbCalibrationPage> {
             controller: _realWidth,
             decoration: const InputDecoration(labelText: 'bs1↔bs4 实测宽度（厘米，正整数）'),
           ),
-          if (_formError != null) ...<Widget>[
-            const SizedBox(height: 8),
-            Text(
-              _formError!,
-              key: kUwbMetaFormErrorKey,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ],
+          if (_formError != null)
+            ConsoleErrorLine(text: _formError!, textKey: kUwbMetaFormErrorKey),
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerLeft,
@@ -529,14 +518,12 @@ class _UwbCalibrationPageState extends State<UwbCalibrationPage> {
           Text('中心基准校准', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(_describeCalibration(), key: kUwbCalibrationStateKey),
-          if (_calibration?.message != null) ...<Widget>[
-            const SizedBox(height: 4),
-            Text(
-              _calibration!.message!,
-              key: kUwbCalibrationMessageKey,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+          if (_calibration?.message != null)
+            ConsoleErrorLine(
+              text: _calibration!.message!,
+              textKey: kUwbCalibrationMessageKey,
+              spacing: 4,
             ),
-          ],
           const SizedBox(height: 12),
           TextField(
             key: kUwbCalibrationSampleFramesKey,

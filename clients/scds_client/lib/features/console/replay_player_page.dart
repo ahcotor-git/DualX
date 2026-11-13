@@ -6,6 +6,7 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/replay_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 import 'replay_list_page.dart' show describeReplaySummary;
 
 /// 供测试与后续集成定位的控件键。
@@ -293,14 +294,8 @@ class _ReplayPlayerPageState extends State<ReplayPlayerPage> {
             Text(_describeStatus(), key: kReplayPlayerStatusKey),
             if (_atEnd)
               const Text('已到末尾（无可拉取分片）', key: kReplayPlayerEndKey),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kReplayPlayerErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kReplayPlayerErrorKey),
             const Divider(height: 32),
             if (readings.isEmpty)
               const Text('当前时刻没有位置读数', key: kReplayPlayerEmptyKey)

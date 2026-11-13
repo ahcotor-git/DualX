@@ -3050,3 +3050,29 @@ Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `m
 直至全量覆盖；之后转部署运维细节。
 
 
+**段 83 落地（2026-11-13，审查报告余项：错误行组件抽取——批 5）**：
+承批 4，续抽 **3 页 6 处**至共享组件 `ConsoleErrorLine`。**只改渲染结构，不改文案 / 键 / 交互语义**。
+落**一笔**（**4 文件 / 3 改 + 本册**，**破「≤3 文件」上限已按无人值守授权显式声明例外**，
+先例段 53/61/62/65/68/69/71/81/82/83-批 1/2/3/4）。
+
+- **批 5 覆盖**：`uwb_calibration_page.dart`（3 处，`kUwbCalibrationErrorKey` / `kUwbMetaFormErrorKey` /
+  `kUwbCalibrationMessageKey`）、`floor_points_page.dart`（2 处，`kFloorPointsErrorKey` /
+  `kFloorPointsFormErrorKey`）、`replay_player_page.dart`（1 处，`kReplayPlayerErrorKey`）。
+  其中 `kUwbCalibrationMessageKey` 原为 `SizedBox(height: 4)`（紧随校准状态行），改后显式传 `spacing: 4`；
+  其余 5 处走默认 8。改造后三页已无内联 `colorScheme.error` 残留（grep 实测 0）。
+- **键仍落内层 `Text`**：沿用批 1 口径（`textKey` 施加在内层 [Text]），既有断言零改动。
+- **文件**：`lib/features/console/uwb_calibration_page.dart` ＋ `lib/features/console/floor_points_page.dart`
+  ＋ `lib/features/console/replay_player_page.dart`（**改**）＋ 本册。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**
+（复用既有「错误行」断言作行为不变证据——本段**未新增测试**）。Dart 产物**不进 Maven reactor**，
+未改 Java / 契约，故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：未在真机上核对各页错误行**视觉一致性**（间距 4 与 8 的差异、颜色）；批 6+ 未落地，
+代码库仍处**混合状态**（余约 6 页 / ~6 处仍内联）。
+
+**下一段（候选）**：错误组件抽取**批 6**（候选 `account` / `command` / `device_login` / `console_login` /
+`situation` / `connection`（其中 connection 另有 1 处三元表达式配色，非「顶部错误行」模式，需甄别）），
+直至全量覆盖；之后转部署运维细节。
+
+
