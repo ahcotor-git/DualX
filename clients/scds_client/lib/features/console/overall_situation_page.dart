@@ -7,6 +7,7 @@ import '../../shared/auth/session_store.dart';
 import '../../shared/state/situation_cache.dart';
 import '../../shared/state/situation_feed.dart';
 import '../../shared/state/situation_socket.dart';
+import '../../shared/widgets/console_error_line.dart';
 import 'command_page.dart' show describeCommandAck;
 
 /// 供测试与后续集成定位的控件键。
@@ -191,14 +192,11 @@ class _OverallSituationPageState extends State<OverallSituationPage> {
                 Text(_describeChannel(_feed.wsConnected), key: kOverallSituationChannelKey),
                 const SizedBox(height: 4),
                 Text(_describeCounts(units.length, _feed), key: kOverallSituationCountsKey),
-                if (_feed.lastError != null) ...<Widget>[
-                  const SizedBox(height: 8),
-                  Text(
-                    _feed.lastError!,
-                    key: kOverallSituationErrorKey,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                if (_feed.lastError != null)
+                  ConsoleErrorLine(
+                    text: _feed.lastError!,
+                    textKey: kOverallSituationErrorKey,
                   ),
-                ],
                 const Divider(height: 32),
                 if (!gotFirstFrame && _feed.lastError == null)
                   const Text('等待首帧…', key: kOverallSituationWaitingKey)
@@ -293,14 +291,8 @@ class _ReloadAllDialogState extends State<_ReloadAllDialog> {
               ),
             ),
           ),
-          if (_error != null) ...<Widget>[
-            const SizedBox(height: 8),
-            Text(
-              _error!,
-              key: kReloadAllErrorKey,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ],
+          if (_error != null)
+            ConsoleErrorLine(text: _error!, textKey: kReloadAllErrorKey),
         ],
       ),
       actions: <Widget>[

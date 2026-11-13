@@ -6,6 +6,7 @@ import '../../shared/api/api_problem.dart';
 import '../../shared/api/situation_models.dart';
 import '../../shared/auth/session_store.dart';
 import '../../shared/state/situation_cache.dart' show kMaxCachedHits;
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kHitRecordsAccountKey = Key('hitRecords.account');
@@ -131,14 +132,8 @@ class _HitRecordsPageState extends State<HitRecordsPage> {
       ),
       const SizedBox(height: 4),
       Text('共 ${_hits.length} 条', key: kHitRecordsCountKey),
-      if (_error != null) ...<Widget>[
-        const SizedBox(height: 8),
-        Text(
-          _error!,
-          key: kHitRecordsErrorKey,
-          style: TextStyle(color: Theme.of(context).colorScheme.error),
-        ),
-      ],
+      if (_error != null)
+        ConsoleErrorLine(text: _error!, textKey: kHitRecordsErrorKey),
       const Divider(height: 32),
     ];
     final bool empty = _hits.isEmpty;

@@ -6,6 +6,7 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/exercise_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 import 'plan_manager_page.dart' show PlanLister;
 
 /// 供测试与后续集成定位的控件键。
@@ -445,14 +446,8 @@ class _ExerciseControlPageState extends State<ExerciseControlPage> {
         key: kExerciseControlAccountKey,
         style: Theme.of(context).textTheme.titleMedium,
       ),
-      if (_error != null) ...<Widget>[
-        const SizedBox(height: 8),
-        Text(
-          _error!,
-          key: kExerciseControlErrorKey,
-          style: TextStyle(color: Theme.of(context).colorScheme.error),
-        ),
-      ],
+      if (_error != null)
+        ConsoleErrorLine(text: _error!, textKey: kExerciseControlErrorKey),
       const Divider(height: 32),
       if (current == null)
         const Text('加载中…', key: kExerciseControlLoadingKey)
@@ -520,14 +515,11 @@ class _ExerciseControlPageState extends State<ExerciseControlPage> {
       ),
       const SizedBox(height: 4),
       Text('共 ${_logs.length} 条', key: kExerciseControlLogsCountKey),
-      if (_logError != null) ...<Widget>[
-        const SizedBox(height: 8),
-        Text(
-          _logError!,
-          key: kExerciseControlLogsErrorKey,
-          style: TextStyle(color: Theme.of(context).colorScheme.error),
+      if (_logError != null)
+        ConsoleErrorLine(
+          text: _logError!,
+          textKey: kExerciseControlLogsErrorKey,
         ),
-      ],
       const SizedBox(height: 8),
     ];
   }

@@ -2942,3 +2942,33 @@ healthy）——**仿真通过不得写成现场通过**。
 **下一段（候选）**：`docs/review.md` 余项继续按优先级推进——错误组件抽取、部署运维细节。
 
 
+**段 83 落地（2026-11-13，审查报告余项：错误行组件抽取——批 1）**：
+承段 82「下一段（候选）」首项。把各页重复的「顶部错误行」抽成共享组件 `ConsoleErrorLine`
+（`lib/shared/widgets/console_error_line.dart`，**新**）——`if (err != null) ...<Widget>[ SizedBox(height: 8),
+Text(err!, key: kXxx, style: colorScheme.error) ]` **一行化**。**只改渲染结构，不改文案 / 键 / 交互语义**。
+本案按用户裁定「**分批全量抽取**」推进，本段为**批 1（覆盖段 81/82 所涉 3 页 5 处）**，落**一笔**
+（**5 文件 / 1 新 4 改**，**破「≤3 文件」上限已按无人值守授权显式声明例外**，
+先例段 53/61/62/65/68/69/71/81/82）。
+
+- **键仍落内层 `Text`**：组件暴露 `textKey`，把键施加在**内层 [Text]** 上（而非组件本身），
+  以保持既有测试 `tester.widget<Text>(find.byKey(kXxx)).data` 的取用方式**零改动**。
+- **间距参数化**：`spacing` 对应原 `SizedBox(height: …)`，默认 8，紧凑处（如链路面板 4）可传 4；
+  实现为 `Padding(EdgeInsets.only(top: spacing)) + Text`，与「SizedBox + Text」等价。
+- **批 1 覆盖**：`hit_records_page.dart`（1 处，`kHitRecordsErrorKey`）、`exercise_control_page.dart`
+  （2 处，`kExerciseControlErrorKey` / `kExerciseControlLogsErrorKey`）、`overall_situation_page.dart`
+  （2 处，`kOverallSituationErrorKey` / `kReloadAllErrorKey`）。**余 34 处 / ~17 文件留待后续批**。
+- **文件**：`lib/shared/widgets/console_error_line.dart`（**新**）＋ `lib/features/console/hit_records_page.dart`
+  ＋ `lib/features/console/exercise_control_page.dart` ＋ `lib/features/console/overall_situation_page.dart`
+  （**改**）＋ 本册。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**
+（**复用既有「错误行」断言**作为行为不变证据——本段**未新增测试**，因系纯重构且既有用例已逐处断言错误键与文案）。
+Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：未在真机上核对各页错误行**视觉一致性**（间距 / 颜色）；批 2+ 未落地，代码库暂处
+**混合状态**（部分页用组件、部分页仍内联）。
+
+**下一段（候选）**：错误组件抽取**批 2**（候选 4 页：`team_summary` / `link_panel` / `replay_statistics` /
+`replay_list`），直至全量覆盖；之后转部署运维细节。
+
+
