@@ -3134,3 +3134,35 @@ Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `m
 另可回头处理历史两处**误报更正**（单兵端 `RefreshingApiTransport` / 会话落盘，见前册）。
 
 
+**段 84 落地（2026-11-13，审查报告误报更正：单兵端 `RefreshingApiTransport` / 会话落盘 两处判误报）**：
+承段 83 批 7「下一段（候选）」第二项，并经用户裁定「**更正审查误报（推荐）**」＋落点「**留档 + review.md + 订正陈旧注释（推荐）**」。
+本段**不改任何行为**：订正 3 处**陈旧文档注释**、给 `docs/review.md` R26 加更正批注、并在本册登记结论。
+
+- **误报 1「单兵端未包装 `RefreshingApiTransport`」→ 判误报（属有意排除，非缺陷）**。类注释
+  （`lib/shared/auth/refreshing_api_transport.dart` 第 30 行）**明写**：「**不含**：设备令牌（`DeviceSession`）——
+  契约没有设备刷新端点，单兵端不使用本装饰器」；留档 CLIENT-RESILIENCE 段 C（「设备端不适用」）、
+  段 D（「`device_app` 两端都不接」）与 testing §42/43 已同口径。故**不作「遗漏」处理**。
+- **误报 2「单兵端会话不落盘」→ 判误报（段 71 起已落盘）**。`lib/main.dart` 第 25~27 行注入
+  **`DiskConnectionConfigStore`**（连接配置落盘）＋ **`SecureSessionStore`**（账号 / 设备令牌落平台安全存储：
+  Android Keystore / Windows 凭据管理器），**两端共用**、重启免登。故「会话不落盘」不成立。
+- **误报根因（本段新发现）→ 订正 3 处陈旧注释**：段 71 换实现时漏改字段注释，仍写「当前为内存实现（不落盘）」，
+  很可能是该误报的来源——`lib/app/device_app.dart`（configStore / sessionStore 两处）、
+  `lib/app/console_app.dart`（同两处）、`lib/features/connection/connection_page.dart`（store 一处）。
+  本段改为「生产注入 `DiskConnectionConfigStore` / `SecureSessionStore`（段 71 起落盘）；测试注入内存实现」，
+  与 `session_store.dart` / `connection_config_store.dart` 既有注释同口径。**只改注释、逻辑零改动**。
+- **`docs/review.md` R26 就地加更正批注**：注明该项已被取代（Flutter 单工程双端 ＋ 持续 Poll 均已落地），
+  且含上述两处误报，并给出证据指向。
+
+**文件**：`lib/app/device_app.dart` ＋ `lib/app/console_app.dart` ＋ `lib/features/connection/connection_page.dart`
+（**改注释**）＋ `docs/review.md`（**改**）＋ 本册（**改**）——**5 文件**，
+**破「≤3 文件」上限已按无人值守授权显式声明例外**（先例段 53/61/62/65/68/69/71/81/82/83-批 1~7）。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**
+（仅改注释与文档，**未新增测试**）。Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：无（本段不改行为，纯注释 / 文档订正）。误报 1 的结论**以现行契约为前提**——
+若未来契约新增设备刷新端点，须重新评估单兵端是否接装饰器。
+
+**下一段（候选）**：`docs/review.md` 余项转**部署运维细节**（偏运维，需环境授权，本机难闭环）。
+
+

@@ -26,10 +26,12 @@ class ScdsClientApp extends StatefulWidget {
     this.clientFactory = httpApiClient,
   });
 
-  /// 连接配置存储端口。当前为内存实现（不落盘）。
+  /// 连接配置存储端口。生产注入 `DiskConnectionConfigStore`（段 71 起落盘）；
+  /// 测试注入内存实现。
   final ConnectionConfigStore configStore;
 
-  /// 会话存储端口（账号 / 设备两类）。当前为内存实现（不落盘）。
+  /// 会话存储端口（账号 / 设备两类）。生产注入 `SecureSessionStore`（段 71 起落平台安全存储）；
+  /// 测试注入内存实现。
   final SessionStore sessionStore;
 
   /// HTTP 客户端工厂；换实例即换客户端。

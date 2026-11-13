@@ -78,7 +78,7 @@
 | R23 | P2 测试隔离 | IT与开发共库；AuthServiceIT真实提交且AfterEach清理，异常杀进程可留残数据。建议专用测试库；测试连接默认无rewrite参数，不能作为性能基线 |
 | R24 | P1 发布前 | 无生产配置/应用部署制品定义/服务管理脚本、TLS/备份恢复验证；mysql:8.4是可漂移标签，公开dev密钥没有生产拒用门禁。所有生产项需先明确标准后实现 |
 | R25 | P2 配置事实 | deployment-mode未消费、硬件开关未实现、UWB配置未绑定Spring bean；solver banner仍有modeEn/uwbEn重复与旧串口标识。不能把这些日志当真实链路状态 |
-| R26 | P1 客户端 | 无Flutter工程；单兵队伍视图、持续Poll与安全存储/生命周期未实现，不能开始“正式客户端验收” |
+| R26 | P1 客户端 | 无Flutter工程；单兵队伍视图、持续Poll与安全存储/生命周期未实现，不能开始“正式客户端验收”。**〔更正 2026-11-13（段 84）：该项已被取代，且含两处误报——①「安全存储未实现」不成立：段 71 起两端会话均落平台安全存储（`lib/main.dart` 注入 `SecureSessionStore`）；②「单兵端未包装 `RefreshingApiTransport`」不成立：该装饰器对设备端属“有意排除”（`DeviceSession` 无 `refreshToken`、契约无设备刷新端点）。Flutter 单工程双端、持续 Poll 亦均已落地。证据见 decision-register 段 71 / CLIENT-RESILIENCE 段 C·D / 段 84。〕** |
 | R27 | P2 容量/保留 | TTL配置缺正值约束，失败限流桶无硬容量上限，refresh记录未定清理期限，队列/客户端上限及RPO/RTO未定。需配置校验与容量试验，不凭量小推导安全 |
 | R28 | P1 DTO接线 | AccountSession包含Account.passwordHash；必须手动映射User安全字段，禁止直接返回内部载体或把JWT/口令写日志 |
 

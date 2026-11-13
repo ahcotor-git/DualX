@@ -36,7 +36,8 @@ typedef InstanceHealthProbe = Future<HealthReport> Function(ConnectionConfig con
 class ConnectionPage extends StatefulWidget {
   const ConnectionPage({super.key, required this.store, this.onConnected, this.probe});
 
-  /// 连接配置存储端口。当前注入内存实现（不落盘）。
+  /// 连接配置存储端口。生产注入 `DiskConnectionConfigStore`（段 71 起落盘）；
+  /// 测试注入内存实现。
   final ConnectionConfigStore store;
 
   /// 保存成功后的回调（段 4b 在此接上设备登录页）。

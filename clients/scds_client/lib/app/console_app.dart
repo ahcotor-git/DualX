@@ -62,10 +62,12 @@ class ScdsConsoleApp extends StatefulWidget {
     this.fileIo = const PlatformFileIo(),
   });
 
-  /// 连接配置存储端口。当前为内存实现（不落盘）。
+  /// 连接配置存储端口。生产注入 `DiskConnectionConfigStore`（段 71 起落盘）；
+  /// 测试注入内存实现。
   final ConnectionConfigStore configStore;
 
-  /// 会话存储端口（账号 / 设备两类）。当前为内存实现（不落盘）。
+  /// 会话存储端口（账号 / 设备两类）。生产注入 `SecureSessionStore`（段 71 起落平台安全存储）；
+  /// 测试注入内存实现。
   final SessionStore sessionStore;
 
   /// 平台文件能力端口（段 69）：选文件（段 53 / 59）+ 落盘（段 58 / 59）。
