@@ -6,6 +6,7 @@ import '../../shared/api/device_models.dart';
 import '../../shared/auth/session_store.dart';
 import '../../shared/state/links_feed.dart';
 import '../../shared/state/links_socket.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键（段 62：device 域链路与基站 UI）。
 const Key kLinkPanelAccountKey = Key('linkPanel.account');
@@ -429,25 +430,17 @@ class _LinkPanelPageState extends State<LinkPanelPage> {
                   key: kLinkPanelAccountKey,
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
-                if (_error != null) ...<Widget>[
-                  const SizedBox(height: 8),
-                  Text(
-                    _error!,
-                    key: kLinkPanelErrorKey,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
-                  ),
-                ],
+                if (_error != null)
+                  ConsoleErrorLine(text: _error!, textKey: kLinkPanelErrorKey),
                 const Divider(height: 32),
                 _sectionTitle('链路状态（三种链路恒定各一条）'),
                 Text(_describeChannel(_feed.wsConnected), key: kLinkPanelChannelKey),
-                if (_feed.lastError != null) ...<Widget>[
-                  const SizedBox(height: 4),
-                  Text(
-                    _feed.lastError!,
-                    key: kLinkPanelFeedErrorKey,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                if (_feed.lastError != null)
+                  ConsoleErrorLine(
+                    text: _feed.lastError!,
+                    textKey: kLinkPanelFeedErrorKey,
+                    spacing: 4,
                   ),
-                ],
                 if (!gotFirstFrame)
                   const Text('加载中…', key: kLinkPanelLoadingKey)
                 else
@@ -595,14 +588,8 @@ class _SerialLinkDialogState extends State<_SerialLinkDialog> {
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kSerialLinkErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kSerialLinkErrorKey),
           ],
         ),
       ),
@@ -745,14 +732,8 @@ class _UwbLinkDialogState extends State<_UwbLinkDialog> {
                 ),
               ),
             ],
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kUwbLinkErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kUwbLinkErrorKey),
           ],
         ),
       ),
@@ -903,14 +884,8 @@ class _AnchorFormDialogState extends State<_AnchorFormDialog> {
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kAnchorFormErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kAnchorFormErrorKey),
           ],
         ),
       ),

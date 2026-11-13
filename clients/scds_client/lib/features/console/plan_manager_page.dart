@@ -5,6 +5,7 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/exercise_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kPlanManagerAccountKey = Key('planManager.account');
@@ -440,14 +441,8 @@ class _PlanManagerPageState extends State<PlanManagerPage> {
                 ),
               ],
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kPlanManagerErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kPlanManagerErrorKey),
             if (_showTemplate || _showImport) ...<Widget>[
               const SizedBox(height: 12),
               Wrap(
@@ -607,14 +602,8 @@ class _PlanFormDialogState extends State<_PlanFormDialog> {
               controller: _remark,
               decoration: const InputDecoration(labelText: '备注（可空）'),
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kPlanFormErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kPlanFormErrorKey),
           ],
         ),
       ),

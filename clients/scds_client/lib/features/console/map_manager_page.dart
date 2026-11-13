@@ -7,6 +7,7 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/map_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kMapManagerAccountKey = Key('mapManager.account');
@@ -442,14 +443,8 @@ class _MapManagerPageState extends State<MapManagerPage> {
               key: kMapManagerAccountKey,
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kMapManagerErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kMapManagerErrorKey),
             const Divider(height: 32),
             if (maps == null)
               const Text('加载中…', key: kMapManagerLoadingKey)
@@ -541,14 +536,8 @@ class _MapFormDialogState extends State<_MapFormDialog> {
                 ),
               ),
             ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kMapFormErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kMapFormErrorKey),
           ],
         ),
       ),

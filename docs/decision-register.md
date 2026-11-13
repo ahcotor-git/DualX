@@ -2997,3 +2997,30 @@ Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `m
 之后转部署运维细节。
 
 
+**段 83 落地（2026-11-13，审查报告余项：错误行组件抽取——批 3）**：
+承批 2，续抽 **3 页 9 处**至共享组件 `ConsoleErrorLine`。**只改渲染结构，不改文案 / 键 / 交互语义**。
+落**一笔**（**4 文件 / 3 改 + 本册**，**破「≤3 文件」上限已按无人值守授权显式声明例外**，
+先例段 53/61/62/65/68/69/71/81/82/83-批 1/批 2）。
+
+- **批 3 覆盖**：`link_panel_page.dart`（5 处，`kLinkPanelErrorKey` / `kLinkPanelFeedErrorKey` /
+  `kSerialLinkErrorKey` / `kUwbLinkErrorKey` / `kAnchorFormErrorKey`）、`map_manager_page.dart`（2 处，
+  `kMapManagerErrorKey` / `kMapFormErrorKey`）、`plan_manager_page.dart`（2 处，`kPlanManagerErrorKey` /
+  `kPlanFormErrorKey`）。**本批首次用到 `spacing: 4`**——`kLinkPanelFeedErrorKey` 原为
+  `SizedBox(height: 4)`（紧随通道提示的紧凑位），改后显式传 `spacing: 4`，其余 8 处走默认 8。
+  改造后三页已无内联 `colorScheme.error` 残留（grep 实测 0）。
+- **键仍落内层 `Text`**：沿用批 1 口径（`textKey` 施加在内层 [Text]），既有断言零改动。
+- **文件**：`lib/features/console/link_panel_page.dart` ＋ `lib/features/console/map_manager_page.dart`
+  ＋ `lib/features/console/plan_manager_page.dart`（**改**）＋ 本册。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**
+（复用既有「错误行」断言作行为不变证据——本段**未新增测试**）。Dart 产物**不进 Maven reactor**，
+未改 Java / 契约，故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：未在真机上核对各页错误行**视觉一致性**（间距 4 与 8 的差异、颜色）；批 4+ 未落地，
+代码库仍处**混合状态**（余约 12 页 / ~19 处仍内联）。
+
+**下一段（候选）**：错误组件抽取**批 4**（候选 `replay_export` / `roster_editor` / `vest_ledger`（3）/
+`uwb_calibration`（3）/ `floor_points`（2）/ `connection` / `account` / `command` / `device_login` /
+`situation` / `console_login` / `replay_player` 等），直至全量覆盖；之后转部署运维细节。
+
+
