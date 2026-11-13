@@ -3105,3 +3105,32 @@ Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `m
 不强行套组件），完成全量覆盖；之后转部署运维细节。
 
 
+**段 83 落地（2026-11-13，审查报告余项：错误行组件抽取——批 7 收尾·全量完成）**：
+承批 6，续抽最后 **3 页 3 处**至共享组件 `ConsoleErrorLine`，**段 83 全量抽取至此收尾**。
+**只改渲染结构，不改文案 / 键 / 交互语义**。落**一笔**（**4 文件 / 3 改 + 本册**，
+**破「≤3 文件」上限已按无人值守授权显式声明例外**，先例段 53/61/62/65/68/69/71/81/82/83-批 1~6）。
+
+- **批 7 覆盖**：`console_login_page.dart`（1 处，`kConsoleLoginErrorKey`，原 `SizedBox 12`）、
+  `situation_page.dart`（1 处，`kSituationErrorKey`，原 `SizedBox 8`）、`connection_page.dart`
+  （1 处，`kConnectionErrorKey`，原 `SizedBox 12`）。
+- **【甄别】`connection_page` 第 248 行三元配色按现状保留**：该处为「实例状态」行的
+  `color: _health!.isUp ? primary : error`（**同一行随健康状态变色**），**非「顶部错误行」模式**，
+  遂**不套组件**（避免把状态色语义错误地并入错误行）。此为全量抽取的**唯一豁免**。
+- **文件**：`lib/features/console/console_login_page.dart` ＋ `lib/features/situation/situation_page.dart`
+  ＋ `lib/features/connection/connection_page.dart`（**改**）＋ 本册。
+
+**全量收尾（段 83 累计）**：批 1~7 共抽 **38 处 / 20 文件** 至 `ConsoleErrorLine`，`spacing` 实测四档
+**0 / 4 / 8 / 12**；全库 `colorScheme.error` 现仅余**组件自身（2 行）**＋**上述 1 处三元配色豁免**，
+**混合状态清零**。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**
+（复用既有「错误行」断言作行为不变证据——段 83 全部批次**未新增测试**）。Dart 产物**不进 Maven reactor**，
+未改 Java / 契约，故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：未在真机上核对各页错误行**视觉一致性**（间距 0 / 4 / 8 / 12、颜色）；`spacing: 0`
+（`command_page`）与三元配色豁免未单独加断言。
+
+**下一段（候选）**：`docs/review.md` 余项转**部署运维细节**（偏运维，需环境授权，本机难闭环）；
+另可回头处理历史两处**误报更正**（单兵端 `RefreshingApiTransport` / 会话落盘，见前册）。
+
+

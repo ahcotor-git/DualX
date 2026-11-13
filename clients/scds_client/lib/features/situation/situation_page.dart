@@ -5,6 +5,7 @@ import '../../shared/api/api_problem.dart';
 import '../../shared/api/situation_models.dart';
 import '../../shared/auth/session_store.dart';
 import '../../shared/polling/poller.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kSituationVestNumKey = Key('situation.vestNum');
@@ -100,14 +101,11 @@ class _SituationPageState extends State<SituationPage> {
                           '（每 ${widget.interval.inMilliseconds} ms）',
                   key: kSituationRefreshCountKey,
                 ),
-                if (_poller.lastError != null) ...<Widget>[
-                  const SizedBox(height: 8),
-                  Text(
-                    _poller.lastError!,
-                    key: kSituationErrorKey,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                if (_poller.lastError != null)
+                  ConsoleErrorLine(
+                    text: _poller.lastError!,
+                    textKey: kSituationErrorKey,
                   ),
-                ],
                 const Divider(height: 32),
                 _row(kSituationStatusKey, '状态', unit?.status.wire),
                 _row(null, '队伍', unit?.team?.wire),

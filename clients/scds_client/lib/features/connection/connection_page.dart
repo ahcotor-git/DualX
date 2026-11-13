@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../shared/api/health_api.dart';
 import '../../shared/config/connection_config.dart';
 import '../../shared/config/connection_config_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键（避免用文案查找）。
 const Key kConnectionHostFieldKey = Key('connection.hostField');
@@ -214,14 +215,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   hintText: '11001',
                 ),
               ),
-              if (_error != null) ...<Widget>[
-                const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  key: kConnectionErrorKey,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+              if (_error != null)
+                ConsoleErrorLine(
+                  text: _error!,
+                  textKey: kConnectionErrorKey,
+                  spacing: 12,
                 ),
-              ],
               if (widget.probe != null) ...<Widget>[
                 const Divider(height: 32),
                 OutlinedButton(

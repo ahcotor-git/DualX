@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kConsoleLoginUsernameFieldKey = Key('consoleLogin.usernameField');
@@ -143,14 +144,12 @@ class _ConsoleLoginPageState extends State<ConsoleLoginPage> {
                 obscureText: true,
                 decoration: const InputDecoration(labelText: '密码'),
               ),
-              if (_error != null) ...<Widget>[
-                const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  key: kConsoleLoginErrorKey,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+              if (_error != null)
+                ConsoleErrorLine(
+                  text: _error!,
+                  textKey: kConsoleLoginErrorKey,
+                  spacing: 12,
                 ),
-              ],
               const SizedBox(height: 24),
               FilledButton(
                 key: kConsoleLoginSubmitButtonKey,
