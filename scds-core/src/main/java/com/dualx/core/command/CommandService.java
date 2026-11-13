@@ -1,5 +1,6 @@
 package com.dualx.core.command;
 
+import com.dualx.core.domain.AuditLog;
 import com.dualx.core.domain.BattleMode;
 import com.dualx.core.domain.Exercise;
 import com.dualx.core.domain.ExerciseCommand;
@@ -17,6 +18,7 @@ import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.repository.AccountRepository;
+import com.dualx.core.repository.AuditLogRepository;
 import com.dualx.core.repository.ExerciseCommandRepository;
 import com.dualx.core.repository.ExerciseLogRepository;
 import com.dualx.core.repository.PlanRosterRepository;
@@ -28,9 +30,12 @@ import com.dualx.protocol.serial.DownlinkCommands;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -73,12 +78,15 @@ public final class CommandService {
     /** core 侧不依赖 Spring 注入的 ObjectMapper（与 {@code MapLedgerService} 同一范式）。 */
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    private static final Logger log = LoggerFactory.getLogger(CommandService.class);
+
     private final ExerciseLifecycleService lifecycle;
     private final SituationQuery situations;
     private final PlanRosterRepository roster;
     private final DeviceLinkAdmin links;
     private final ExerciseCommandRepository commands;
     private final ExerciseLogRepository logs;
+    private final AuditLogRepository audits;
     private final AccountRepository accounts;
     private final MapLedgerService maps;
     private final SituationStateService state;
@@ -90,6 +98,7 @@ public final class CommandService {
                           DeviceLinkAdmin links,
                           ExerciseCommandRepository commands,
                           ExerciseLogRepository logs,
+                          AuditLogRepository audits,
                           AccountRepository accounts,
                           MapLedgerService maps,
                           SituationStateService state,
@@ -100,6 +109,7 @@ public final class CommandService {
         this.links = Objects.requireNonNull(links, "links");
         this.commands = Objects.requireNonNull(commands, "commands");
         this.logs = Objects.requireNonNull(logs, "logs");
+        this.audits = Objects.requireNonNull(audits, "audits");
         this.accounts = Objects.requireNonNull(accounts, "accounts");
         this.maps = Objects.requireNonNull(maps, "maps");
         this.state = Objects.requireNonNull(state, "state");
@@ -313,7 +323,34 @@ public final class CommandService {
                     vestNum == BROADCAST_VEST_NUM ? null : vestNum,
                     operatorName, detail, downlinkHex));
         }
+        recordAudit(exercise, vestNum, command, payloadJson, operatorId, now);
         return new Ack(vestNum, command, true, now, downlinkHex);
+    }
+
+    /**
+     * 记一条操作审计（{@code t_audit_log}）：回答「谁在何时下了命令」。
+     *
+     * <p><b>为什么不与 {@code t_exercise_log} 合并</b>：两张表职责不重叠——本表记「人的动作」，
+     * 复盘日志记「发出去的字节」。故 {@code e.g. 超范围 / 覆盖配置} 这类协议 {@code LogType}
+     * 里没有对应值的指令<b>不写复盘日志</b>，但<b>照写操作审计</b>；而下发未被受理
+     * （链路未开 / 队列满，{@code accepted=false}）时本方法不会被调用，队列与审计同时不落。</p>
+     *
+     * <p><b>{@code action} 由队列指令名派生</b>（{@code DIE} → {@code command.die}）：与
+     * {@code t_exercise_command.command} 同源，不另立一套易漂移的词汇表。</p>
+     *
+     * <p><b>尽力而为</b>：审计写失败只告警，不改变已发生的事实（字节已下发、队列行已落），
+     * 与决策 D11「留痕不能改变主操作结局」同一口径。</p>
+     */
+    private void recordAudit(Exercise exercise, int vestNum, String command, String payloadJson,
+                             UUID operatorId, Instant now) {
+        try {
+            audits.insert(new AuditLog(0L, operatorId, "command." + command.toLowerCase(Locale.ROOT),
+                    "VEST", vestNum == BROADCAST_VEST_NUM ? null : String.valueOf(vestNum),
+                    payloadJson, null, now));
+        } catch (RuntimeException failure) {
+            log.warn("操作审计写入失败（指令已下发，不受影响）：exercise={} vest={} command={}",
+                    exercise.id(), vestNum, command, failure);
+        }
     }
 
     /**

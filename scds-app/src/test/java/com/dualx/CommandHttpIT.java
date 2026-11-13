@@ -126,6 +126,8 @@ class CommandHttpIT {
                 jdbc.sql("DELETE FROM t_map_floor WHERE map_id = :mapId").param("mapId", mapId).update();
                 jdbc.sql("DELETE FROM t_map WHERE id = :mapId").param("mapId", mapId).update();
             }
+            // 操作审计（t_audit_log）没有 exercise_id，按指令域动作前缀回收本类产生的行。
+            jdbc.sql("DELETE FROM t_audit_log WHERE action LIKE 'command.%'").update();
         }
         if (client != null) {
             client.close();
@@ -149,10 +151,11 @@ class CommandHttpIT {
     }
 
     @Test
-    @DisplayName("判死/充弹走真实 HTTP：下行字节逐位等于组帧输出，落 SENT 行与审计；超范围下发但不写审计")
+    @DisplayName("判死/充弹走真实 HTTP：下行字节逐位等于组帧输出，落 SENT 行与复盘日志；超范围只写操作审计不写复盘日志")
     void commandDownlinkReachesSimulatedLinkAndPersistsSentRowWithAudit() throws Exception {
         int[] vests = startRunningExercise("happy", 2);
         int target = vests[0];
+        long auditsBefore = auditCount();
 
         // 判死：8B 帧 {00 09 FF <num:2BE> <sum> AF FA}
         String dieHex = Hex.encode(DownlinkCommands.die(target));
@@ -169,9 +172,17 @@ class CommandHttpIT {
         assertThat(row.get("state")).isEqualTo("SENT");
         assertThat(row.get("sentAt")).isNotNull();
         assertThat(row.get("downlinkHex")).isEqualTo(dieHex);
-        // 审计：DIE 有对应协议类型，落一条 t_exercise_log
+        // 复盘日志（t_exercise_log）：DIE 有对应协议类型，落一条
         assertThat(logCount(createdExercises.getLast(), "DIE")).isEqualTo(1);
         assertThat(logDownlinkHex(createdExercises.getLast(), "DIE")).isEqualTo(dieHex);
+        // 操作审计（t_audit_log）：记「谁在何时下了命令」，与复盘日志职责不重叠
+        assertThat(auditCount()).isEqualTo(auditsBefore + 1);
+        Map<String, Object> dieAudit = latestAudit();
+        assertThat(dieAudit.get("action")).isEqualTo("command.die");
+        assertThat(dieAudit.get("targetType")).isEqualTo("VEST");
+        assertThat(dieAudit.get("targetId")).isEqualTo(String.valueOf(target));
+        assertThat(dieAudit.get("accountId")).isNotNull();
+        assertThat(dieAudit.get("clientIp")).isNull();
 
         // 单兵充弹：11B 帧 {01 14 FF <num:2BE> <ammo:2BE> <weapon> <sum> AF FA}
         String reloadHex = Hex.encode(DownlinkCommands.reloadOne(target, 5, DownlinkCommands.WEAPON_PRIMARY));
@@ -186,6 +197,8 @@ class CommandHttpIT {
         assertThat(payload.path("ammo").asInt()).isEqualTo(5);
         assertThat(payload.path("weapon").asText()).isEqualTo("PRIMARY");
         assertThat(logCount(createdExercises.getLast(), "RELOAD")).isEqualTo(1);
+        assertThat(auditCount()).isEqualTo(auditsBefore + 2);
+        assertThat(latestAudit().get("action")).isEqualTo("command.reload");
 
         // 超范围：照发字节，但协议 LogType 里没有对应值 → 不写 t_exercise_log（只落队列行）
         long logsBefore = totalLogCount(createdExercises.getLast());
@@ -197,6 +210,9 @@ class CommandHttpIT {
         assertThat(commandRow(createdExercises.getLast(), target, "OUT_OF_RANGE").get("state"))
                 .isEqualTo("SENT");
         assertThat(totalLogCount(createdExercises.getLast())).isEqualTo(logsBefore);
+        // 复盘日志不写，但操作审计照写——本表记「人的动作」，与协议 LogType 无关
+        assertThat(auditCount()).isEqualTo(auditsBefore + 3);
+        assertThat(latestAudit().get("action")).isEqualTo("command.out_of_range");
     }
 
     @Test
@@ -218,15 +234,18 @@ class CommandHttpIT {
         // 链路未开：仍是 HTTP 200 的受理回执，但 accepted=false；此时既不入队也不写审计
         long commandsBefore = commandCount(createdExercises.getLast());
         long logsBefore = totalLogCount(createdExercises.getLast());
+        long auditsBefore = auditCount();
         String dieHex = Hex.encode(DownlinkCommands.die(target));
         assertAck(json(post("/api/v1/command/vests/" + target + "/kill")), target, "DIE", false, dieHex);
         assertThat(links.sentCommands()).isEmpty();
         assertThat(commandCount(createdExercises.getLast())).isEqualTo(commandsBefore);
         assertThat(totalLogCount(createdExercises.getLast())).isEqualTo(logsBefore);
+        // 未入队不留痕：队列与审计同时不落
+        assertThat(auditCount()).isEqualTo(auditsBefore);
     }
 
     @Test
-    @DisplayName("全体充弹：11B 广播帧只发一帧，队列行 vest_num=0，审计行 vest_num 为 NULL")
+    @DisplayName("全体充弹：11B 广播帧只发一帧，队列行 vest_num=0，复盘日志与操作审计均不指向具体马甲")
     void reloadAllBroadcastsOneFrameAndAuditsWithoutVestNum() throws Exception {
         String path = "/api/v1/command/reload-all";
         ObjectNode body = mapper.createObjectNode().put("ammo", 30).put("weapon", "SECONDARY");
@@ -257,10 +276,15 @@ class CommandHttpIT {
         assertThat(payload.path("ammo").asInt()).isEqualTo(30);
         assertThat(payload.path("weapon").asText()).isEqualTo("SECONDARY");
 
-        // 审计：RELOAD 一条；日志的 vest_num 记 NULL（广播不指向具体马甲，不是记 0）
+        // 复盘日志：RELOAD 一条；日志的 vest_num 记 NULL（广播不指向具体马甲，不是记 0）
         assertThat(logCount(exerciseId, "RELOAD")).isEqualTo(1);
         assertThat(logCountWithNullVest(exerciseId, "RELOAD")).isEqualTo(1);
         assertThat(logDownlinkHex(exerciseId, "RELOAD")).isEqualTo(hex);
+        // 操作审计：动作由队列指令名派生；广播不指向具体马甲，target_id 记 NULL
+        Map<String, Object> broadcastAudit = latestAudit();
+        assertThat(broadcastAudit.get("action")).isEqualTo("command.reload_all");
+        assertThat(broadcastAudit.get("targetType")).isEqualTo("VEST");
+        assertThat(broadcastAudit.get("targetId")).isNull();
 
         // 编成里有 2 个马甲，但广播帧只有一行的唯一凭据是 t_exercise_command 里的 vest_num=0
         assertThat(commandCount(exerciseId)).isEqualTo(1);
@@ -268,7 +292,7 @@ class CommandHttpIT {
     }
 
     @Test
-    @DisplayName("覆盖配置：未传字段取本场编成原值，14B 帧逐位等于组帧输出，只落队列行不写审计")
+    @DisplayName("覆盖配置：未传字段取本场编成原值，14B 帧逐位等于组帧输出，只落队列行不写复盘日志（操作审计照写）")
     void setVestConfigMergesWithRosterAndSendsPollConfigFrame() throws Exception {
         // 无演习：语境判定先于编成判定 → 409（此处的编号不必存在）
         String absentBeforeStart = "/api/v1/command/vests/" + FIRST_VEST_NUM + "/config";
@@ -306,8 +330,12 @@ class CommandHttpIT {
         assertThat(payload.path("ammo2").asInt()).isEqualTo(7);
         assertThat(payload.path("team").asText()).isEqualTo("RED");
 
-        // 不写审计：协议 LogType 里没有 CONFIG，也没有理由借用别的类型
+        // 不写复盘日志：协议 LogType 里没有 CONFIG，也没有理由借用别的类型
         assertThat(totalLogCount(exerciseId)).isEqualTo(logsBefore);
+        // 但操作审计照写——「改配置」是人的动作，与协议 LogType 无关
+        Map<String, Object> configAudit = latestAudit();
+        assertThat(configAudit.get("action")).isEqualTo("command.config");
+        assertThat(configAudit.get("targetId")).isEqualTo(String.valueOf(target));
 
         // 不在编成：与单兵指令同一个 404 码，不因内部改走编成表而换码
         String absentPath = "/api/v1/command/vests/" + LAST_VEST_NUM + "/config";
@@ -331,6 +359,7 @@ class CommandHttpIT {
         String exerciseId = createdExercises.getLast();
         long commandsBefore = commandCount(exerciseId);
         long logsBefore = totalLogCount(exerciseId);
+        long auditsBefore = auditCount();
 
         String path = "/api/v1/command/vests/" + target + "/move";
         JsonNode ack = json(post(path, mapper.createObjectNode().put("floorNum", 3).put("posNum", 7)));
@@ -341,9 +370,10 @@ class CommandHttpIT {
         // 手置位不是下行指令：没有字节可发，回执也没有下行帧
         assertThat(ack.path("downlinkHex").isNull()).isTrue();
         assertThat(links.sentCommands()).isEmpty();
-        // 也不进指令队列、不写审计：协议 LogType 里没有 MOVE，不能借用别的类型
+        // 也不进指令队列、不写复盘日志与操作审计：协议 LogType 里没有 MOVE，且该端点按裁定不取操作员
         assertThat(commandCount(exerciseId)).isEqualTo(commandsBefore);
         assertThat(totalLogCount(exerciseId)).isEqualTo(logsBefore);
+        assertThat(auditCount()).isEqualTo(auditsBefore);
 
         // 态势落点走唯一写手线程、异步完成：断言前先等它把事件处理完
         await("马甲 " + target + " 的手动置位落进态势", () -> situations.unit(target)
@@ -585,6 +615,28 @@ class CommandHttpIT {
     private static long commandCount(String exerciseId) {
         return jdbc.sql("SELECT COUNT(*) FROM t_exercise_command WHERE exercise_id = :id")
                 .param("id", exerciseId).query(Long.class).single();
+    }
+
+    private static long auditCount() {
+        return jdbc.sql("SELECT COUNT(*) FROM t_audit_log").query(Long.class).single();
+    }
+
+    /** 最近一条操作审计行（t_audit_log）；表为空即断言失败。 */
+    private static Map<String, Object> latestAudit() {
+        return jdbc.sql("SELECT account_id, action, target_type, target_id, detail_json, client_ip"
+                        + " FROM t_audit_log ORDER BY id DESC LIMIT 1")
+                .query((rs, rowNum) -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("accountId", rs.getString("account_id"));
+                    row.put("action", rs.getString("action"));
+                    row.put("targetType", rs.getString("target_type"));
+                    row.put("targetId", rs.getString("target_id"));
+                    row.put("detailJson", rs.getString("detail_json"));
+                    row.put("clientIp", rs.getString("client_ip"));
+                    return row;
+                })
+                .optional()
+                .orElseThrow(() -> new AssertionError("t_audit_log 里没有任何行"));
     }
 
     private static long totalLogCount(String exerciseId) {

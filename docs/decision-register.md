@@ -2783,4 +2783,35 @@ VCTools 工作负载**默认不含 ATL**（`--includeRecommended` 仍未带入�
 
 **观察项**：「T-PROD 部署（需真实目标环境，本机不可行）」——本机**类生产形态**已尽可能逼近（真 jar + 外置配置 + 独立 PEM + 黑盒全链），**真正的生产环境部署仍待现场**（**不解除**）。
 
+**段 78 落地（2026-11-12，审计日志接线：指令域 `t_audit_log` 由「空转」变「有生产写入」）**：
+承 `docs/review.md` 优先级第 2 项（第 1 项＝段 77 日志流水，已推送 `2e50cd2`）。`AuditLog` / `AuditLogRepository` /
+`t_audit_log`（V1 迁移）三者早已就绪但**生产零调用**，本段把 `AuditLogRepository.insert` 接进 `CommandService`。
+
+- **接线范围＝仅指令域**：全仓只有 `CommandController` 的指令端点把 `@AuthenticationPrincipal Jwt` 的操作员身份
+  传到了服务层；`ExerciseController.start/stopExercise` 与 `DeviceController` 链路开关**均无** `Jwt` 参数 ⇒
+  要覆盖演习/设备域须改控制器↔服务签名（多文件）。本段**不动这些签名**，演习 `.start` / 设备 `.link.open`
+  **暂不落审计**（表注释里的示例动作本段只兑现 `command.*` 一族；该范围此前全仓未裁定，本段据此裁定并留档）。
+- **动作名由队列指令名派生**：`action = "command." + command.toLowerCase()`（`DIE`→`command.die`、
+  `OUT_OF_RANGE`→`command.out_of_range`、`RELOAD_ALL`→`command.reload_all`、`CONFIG`→`command.config`），
+  与 `t_exercise_command.command` 同源，**不另立词汇表**。
+- **`targetType="VEST"`；广播 `targetId=null`**：`reloadAll` 的 `vestNum=0`（`BROADCAST_VEST_NUM`）不写成 `"0"`，
+  与复盘日志「广播记 NULL」同口径。
+- **`clientIp` 恒 `null`**：core 无请求上下文（不穿透 HTTP 层），留待将来在 api 层补齐。
+- **尽力而为**：`recordAudit` 只 catch `RuntimeException` 并 WARN，**不改主结局**（字节已下发、队列行已落）——
+  与 D11「留痕不能改变主操作结局」同一口径；核心意义是**审计写失败绝不能把一次已发生的物理下发变成 5xx**。
+- **未受理不留痕**：`accepted=false`（链路未开 / 队列满）时 `deliver` 早返回，**审计与队列同时不落**。
+- **`moveVest` 仍不写审计**：承「`moveVest` 口径」裁定（不取 `Jwt`、不发字节、不落队列），本段**不改变**该结论。
+- **两表职责不合并**：`t_exercise_log` 记「发出去的字节」（含 `downlink_hex`），`t_audit_log` 记「谁在何时下了命令」
+  ⇒ 超范围 / 覆盖配置**不写复盘日志但照写操作审计**。
+- **改动 3 文件（代码）**：`scds-core/.../command/CommandService.java`（注入 `AuditLogRepository` + 私有 `recordAudit`）、
+  `scds-app/.../config/CommandConfig.java`（装配补参）、`scds-app/src/test/java/com/dualx/CommandHttpIT.java`
+  （新增 `auditCount()`/`latestAudit()` 助手 + `cleanUp` 回收 `command.%` 审计行 + 5 用例审计断言）。
+
+**门禁**：`mvn test` → **BUILD SUCCESS**（`scds-protocol` 19 / `scds-gateway` 49 / `scds-core` / `scds-api` 139 /
+`scds-app` 333，含 `CommandHttpIT` **6 例**全绿）。本机跑 IT 依赖 `scds-local-mysql` 容器（`127.0.0.1:13306`，
+healthy）——**仿真通过不得写成现场通过**。
+
+**下一段（候选）**：`docs/review.md` 余项继续按优先级推进——开演/停演事务含硬件下行（`ExerciseLifecycleService`）、
+`SituationStateService` 吞异常无计数、`scds-solver` 零测试、`listHits` 接入指挥端态势页、长列表虚拟化等。
+
 

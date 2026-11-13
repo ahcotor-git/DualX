@@ -6,6 +6,7 @@ import com.dualx.core.exercise.ExerciseLifecycleService;
 import com.dualx.core.map.MapLedgerService;
 import com.dualx.core.port.DeviceLinkAdmin;
 import com.dualx.core.repository.AccountRepository;
+import com.dualx.core.repository.AuditLogRepository;
 import com.dualx.core.repository.ExerciseCommandRepository;
 import com.dualx.core.repository.ExerciseLogRepository;
 import com.dualx.core.repository.PlanRosterRepository;
@@ -38,12 +39,13 @@ public class CommandConfig {
                                          DeviceLinkAdmin deviceLinkAdmin,
                                          ExerciseCommandRepository commands,
                                          ExerciseLogRepository logs,
+                                         AuditLogRepository audits,
                                          AccountRepository accounts,
                                          MapLedgerService mapLedger,
                                          SituationStateService situationState,
                                          Clock clock) {
         return new CommandService(lifecycle, situations, planRoster, deviceLinkAdmin, commands, logs,
-                accounts, mapLedger, situationState, clock);
+                audits, accounts, mapLedger, situationState, clock);
     }
 
     /**
