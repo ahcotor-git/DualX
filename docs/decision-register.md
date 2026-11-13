@@ -2815,3 +2815,35 @@ healthy）——**仿真通过不得写成现场通过**。
 `SituationStateService` 吞异常无计数、`scds-solver` 零测试、`listHits` 接入指挥端态势页、长列表虚拟化等。
 
 
+**段 79 落地（2026-11-12，审查报告优先级第 3、4 项：一项判误报维持现状，一项补可观测计数）**：
+承段 78「下一段（候选）」清单前两项。两项**均无行为语义变更**：一项不改代码，一项只加计数器。
+
+- **第 3 项「开演/停演事务含硬件下行」→ 判为误报，维持现状（不改代码）**。审查报告把
+  `ExerciseLifecycleService.startExercise/stopExercise` 的「`@Transactional` 包住硬件下行」列为候选项；
+  但该口径**已于 2026-10-28 裁定**（见本册「exercise 生命周期」条：① 下发时机＝**同事务尾段下发**；
+  ② 失败处理＝**只留痕、不回滚**——`sendStartDownlink`/`sendFinishDownlink` → `sendOrRecord` 吞
+  `RuntimeException` 只 WARN + 写 `SYSTEM` 存证行，事务照常提交，201/200 照常）。审查报告未反映该已裁定口径，
+  本段据「**已裁定优先、不重复回滚**」判其**误报**，**不动代码**。
+- **第 4 项「`SituationStateService` 吞异常无计数」→ 补 `dispatchFailures` 计数**。写手线程（`scds-state-writer`
+  单消费者）此前在 `loop()` 内 `catch (RuntimeException)` 只 `log.error` 就把该事件丢掉——**日志是唯一痕迹，
+  运维无任何可观测的量**。本段：
+  - `loop()` 改为调用新方法 `handleSafely(StateEvent)`，异常吞并逻辑从循环体内移出（**单消费者循环绝不因
+    一条事件退出**的语义不变）。
+  - `handleSafely` 在 catch 中 `dispatchFailures.incrementAndGet()` 后再 `log.error`。
+  - 新增 `public long dispatchFailures()`，与同文件 `framesWithoutExercise()` / `uwbFramesWithoutFix()` /
+    `framesFromUnknownVest()` 三个既有计数**同一取向**（朴素 `AtomicLong` + 公开取值方法；本仓无 Micrometer）。
+  - **为何要计数**：只打日志而无数＝一次「静默丢事件」——现场翻日志才发现，且无法量化。计数让「有事件被跳过」
+    成为一个可被查询/告警的显式量。
+- **改动 3 文件（1 主 + 1 测 + 本册）**：`scds-core/.../state/SituationStateService.java`（字段 + `handleSafely`
+  + `loop` + `dispatchFailures()`）、`scds-core/src/test/java/com/dualx/core/state/SituationStateServiceTest.java`
+  （新增用例 `dispatchFailureIsCountedAndDoesNotStopLaterEvents`）、本册。
+
+**门禁**：`mvn -pl scds-core -am -Dtest=SituationStateServiceTest test` → `Tests run: 43, Failures: 0, Errors: 0`；
+`mvn test`（全反应堆）→ **BUILD SUCCESS**（`scds-protocol` 19 / `scds-gateway` 49 / `scds-core` / `scds-api` 139 /
+`scds-app` 333，含 `SituationStateIT` 7 例）。本机跑 IT 依赖 `scds-local-mysql` 容器（`127.0.0.1:13306`，healthy）
+——**仿真通过不得写成现场通过**。
+
+**下一段（候选）**：`docs/review.md` 余项继续按优先级推进——`scds-solver` 零测试、`listHits` 接入指挥端态势页、
+长列表虚拟化、错误组件抽取、部署运维细节。
+
+

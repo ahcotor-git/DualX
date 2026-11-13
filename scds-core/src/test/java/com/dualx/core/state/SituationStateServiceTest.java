@@ -542,6 +542,33 @@ class SituationStateServiceTest {
     }
 
     @Test
+    void dispatchFailureIsCountedAndDoesNotStopLaterEvents() {
+        // 端口约定实现方不得抛异常（见 push 契约），但它真抛了，写手线程也绝不能退出：
+        // 一条事件失败必须留下计数，后续事件照常处理。
+        boolean[] failing = {false};
+        SituationPushPort flaky = env -> {
+            if (failing[0]) {
+                throw new IllegalStateException("模拟推送端口违规抛异常");
+            }
+        };
+        SituationStateService svc = new SituationStateService(newQueue(), hitEvents, clock, sampler,
+                trackWriter, revisionLog, indoor, flaky);
+        svc.beginExercise(EXERCISE_ID, T0, List.of(roster(1, "红军-01", Team.RED)));
+
+        failing[0] = true;
+        svc.handleSafely(new StateEvent.Serial(heartbeat(1, 100, 30, 30), SOURCE));
+
+        assertThat(svc.dispatchFailures()).isEqualTo(1);
+
+        failing[0] = false;
+        svc.handleSafely(new StateEvent.Serial(heartbeat(1, 80, 30, 30), SOURCE));
+
+        assertThat(svc.dispatchFailures()).as("失败计数只加一次").isEqualTo(1);
+        assertThat(svc.unit(1)).get()
+                .extracting(UnitState::hp).as("后续事件仍被处理").isEqualTo(80);
+    }
+
+    @Test
     void beginExerciseIsIdempotentForSameExercise() {
         long revisionBefore = state.revision();
         state.dispatch(new StateEvent.Serial(heartbeat(1, 50, 10, 10), SOURCE));

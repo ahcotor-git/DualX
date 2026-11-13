@@ -121,6 +121,8 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private final AtomicLong uwbFramesWithoutFix = new AtomicLong();
     /** 不在编成内的马甲帧数（可观测：马甲未被编入却在上报）。 */
     private final AtomicLong framesFromUnknownVest = new AtomicLong();
+    /** 写手线程吞掉的运行时异常数（可观测：单消费者循环跳过该条后必须留下计数，否则等于静默丢事件）。 */
+    private final AtomicLong dispatchFailures = new AtomicLong();
 
     private volatile UUID exerciseId;
     private volatile Instant startedAt;
@@ -238,14 +240,29 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
     private void loop() {
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                dispatch(queue.take());
+                handleSafely(queue.take());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
-            } catch (RuntimeException e) {
-                // 单消费者循环绝不能因一条事件退出：态势后续帧必须继续被处理。
-                log.error("态势事件处理失败，已跳过该条", e);
             }
+        }
+    }
+
+    /**
+     * 处理一条事件，把运行时异常挡在写手循环之外。
+     *
+     * <p><b>单消费者循环绝不能因一条事件退出</b>：态势后续帧必须继续被处理，所以这里吞掉异常。
+     * 但吞掉的同时计入 {@link #dispatchFailures()}——只打日志而无数，等于一次「静默丢事件」：
+     * 现场看日志才发现，运维也没有任何可观测的量（与同文件另外三个计数同一取向）。</p>
+     *
+     * <p>包内可见，供单测同步直呼（与 {@link #dispatch(StateEvent)} 同一取向：生产由写手线程调用）。</p>
+     */
+    void handleSafely(StateEvent event) {
+        try {
+            dispatch(event);
+        } catch (RuntimeException e) {
+            dispatchFailures.incrementAndGet();
+            log.error("态势事件处理失败，已跳过该条", e);
         }
     }
 
@@ -876,6 +893,11 @@ public final class SituationStateService implements HardwareEventSink, AutoClose
 
     public long framesFromUnknownVest() {
         return framesFromUnknownVest.get();
+    }
+
+    /** 写手线程处理事件时吞掉的运行时异常数（>0 表示有态势事件被跳过）。 */
+    public long dispatchFailures() {
+        return dispatchFailures.get();
     }
 
     /** 停演终局（{@code t_exercise_unit} 的冻结来源）。 */
