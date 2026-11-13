@@ -2912,3 +2912,33 @@ healthy）——**仿真通过不得写成现场通过**。
 错误组件抽取、部署运维细节。
 
 
+**段 82 落地（2026-11-13，审查报告余项：长列表虚拟化——无界增长列表 `ListView.builder` 化）**：
+承段 81「下一段（候选）」首项。把两处**无界增长**的长列表（均至多保留 500 条）由 `ListView(children:)`
+的**即时全量构建**改为 `ListView.builder` 的**惰性构建**（屏外行不构建、不占内存）——**只改渲染方式，
+不改数据口径 / 契约 / 交互语义**。落**一笔**（**4 文件 / 全改**，**破「每原子任务 ≤3 文件」上限，
+已按无人值守授权显式声明例外**，先例段 53 / 61 / 62 / 65 / 68 / 69 / 71 / 81）。
+
+- **范围只取真正无界的两处**：「命中记录」页（`_hits`）与「演习控制」页的「当前演习日志」面板（`_logs`），
+  二者均由**周期轮询**持续追加、上限 `kMaxCachedHits` / `kExerciseLogMaxEntries`（均 500）。其余列表
+  （马甲 / 想定 / 底图 / 基站 / 编成 / 复盘等）由服务端数据界定、本段**不动**，避免一次铺开改动面。
+- **改法：固定首部即时构建 + 行惰性构建**。首部（账号 / 计数 / 错误行 / 分隔线；演习页另含状态块与日志面板
+  首部）是**固定少量控件**，放进 `itemCount` 前段直接返回；无界行按 `index - header.length` 惰性取 `entry`
+  渲染。空态占**一行**（`itemCount` +1），语义与既有渲染**逐字一致**。
+- **`_logPanel()` 拆为 `_logPanelHeader()`**：仅保留标题 / 计数 / 错误行 / 间隔等固定件；行改由 `build` 的
+  `ListView.builder` 构建。未注入日志端口时 `logRowCount = 0`，不产生额外行——既有只读用例行为不变。
+- **键与文案零变更**：所有控件键（`kHitRecords*` / `kExerciseControlLogs*` / `hitRecordsRowKey` /
+  `exerciseControlLogRowKey`）与行文案**原样保留**，既有断言无需改动。
+- **文件**：`lib/features/console/hit_records_page.dart`（**改**：`build` 改 `ListView.builder`）＋
+  `lib/features/console/exercise_control_page.dart`（**改**：同上 + `_logPanel` → `_logPanelHeader`）＋
+  `test/console_widget_test.dart`（**改**：新增「长流水虚拟化」「长日志虚拟化」两例）＋ 本册。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test test/console_widget_test.dart` → **237 例全绿**；
+`flutter test`（全量）→ **All tests passed!（532 例）**。Dart 产物**不进 Maven reactor**，未改 Java / 契约，
+故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：**未在真机上**观测长列表（500 条）滚动帧率 / 内存；虚拟化证明用例只断言「屏外末行不构建」
+（惰性生效），**未做性能基准对比**（不做未经证据的调参）。
+
+**下一段（候选）**：`docs/review.md` 余项继续按优先级推进——错误组件抽取、部署运维细节。
+
+

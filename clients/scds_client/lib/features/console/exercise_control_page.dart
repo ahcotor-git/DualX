@@ -436,6 +436,36 @@ class _ExerciseControlPageState extends State<ExerciseControlPage> {
   @override
   Widget build(BuildContext context) {
     final Exercise? current = _current;
+    // 首部与状态块是固定少量控件，即时构建；只有无界增长的日志行交由
+    // `ListView.builder` 惰性构建（屏外行不构建），长场次（至多
+    // kExerciseLogMaxEntries 条）滚动更平滑。未注入日志端口时不产生额外行。
+    final List<Widget> header = <Widget>[
+      Text(
+        _describeAccount(widget.session),
+        key: kExerciseControlAccountKey,
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      if (_error != null) ...<Widget>[
+        const SizedBox(height: 8),
+        Text(
+          _error!,
+          key: kExerciseControlErrorKey,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+      ],
+      const Divider(height: 32),
+      if (current == null)
+        const Text('加载中…', key: kExerciseControlLoadingKey)
+      else if (current.running)
+        ..._runningBlock(current)
+      else
+        ..._idleBlock(),
+      if (widget.logs != null) ..._logPanelHeader(),
+    ];
+    // 日志行（仅在注入日志端口时存在）：空态占一行，否则每条一行。
+    final bool logsEmpty = _logs.isEmpty;
+    final int logRowCount = widget.logs == null ? 0 : (logsEmpty ? 1 : _logs.length);
+    final bool running = current?.running ?? false;
     return Scaffold(
       appBar: AppBar(
         title: const Text('演习控制'),
@@ -448,41 +478,39 @@ class _ExerciseControlPageState extends State<ExerciseControlPage> {
         ],
       ),
       body: SafeArea(
-        child: ListView(
+        child: ListView.builder(
           padding: const EdgeInsets.all(16),
-          children: <Widget>[
-            Text(
-              _describeAccount(widget.session),
-              key: kExerciseControlAccountKey,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kExerciseControlErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+          itemCount: header.length + logRowCount,
+          itemBuilder: (BuildContext context, int index) {
+            if (index < header.length) {
+              return header[index];
+            }
+            if (logsEmpty) {
+              return Text(
+                running ? '暂无日志' : '无进行中的演习',
+                key: kExerciseControlLogsEmptyKey,
+              );
+            }
+            final ExerciseLogEntry entry = _logs[index - header.length];
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Text(
+                describeLogEntry(entry),
+                key: exerciseControlLogRowKey(entry.seq),
               ),
-            ],
-            const Divider(height: 32),
-            if (current == null)
-              const Text('加载中…', key: kExerciseControlLoadingKey)
-            else if (current.running)
-              ..._runningBlock(current)
-            else
-              ..._idleBlock(),
-            if (widget.logs != null) ..._logPanel(),
-          ],
+            );
+          },
         ),
       ),
     );
   }
 
-  /// 当前演习日志面板（仅在注入 [ExerciseControlPage.logs] 时渲染）——指挥台滚动日志。
+  /// 当前演习日志面板的**首部**（仅在注入 [ExerciseControlPage.logs] 时渲染）——
+  /// 指挥台滚动日志的标题 / 计数 / 错误行 / 间隔。
   ///
-  /// 按 seq 升序逐条展示；未进行中时提示「无进行中的演习」（此时表已停、列表已清）。
-  List<Widget> _logPanel() {
-    final bool running = _current?.running ?? false;
+  /// 仅固定少量控件；无界增长的日志行走 [build] 里的 `ListView.builder` 惰性构建。
+  /// 未进行中时下方提示「无进行中的演习」（此时表已停、列表已清）。
+  List<Widget> _logPanelHeader() {
     return <Widget>[
       const Divider(height: 32),
       Text(
@@ -501,21 +529,6 @@ class _ExerciseControlPageState extends State<ExerciseControlPage> {
         ),
       ],
       const SizedBox(height: 8),
-      if (_logs.isEmpty)
-        Text(
-          running ? '暂无日志' : '无进行中的演习',
-          key: kExerciseControlLogsEmptyKey,
-        )
-      else
-        ..._logs.map(
-          (ExerciseLogEntry entry) => Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text(
-              describeLogEntry(entry),
-              key: exerciseControlLogRowKey(entry.seq),
-            ),
-          ),
-        ),
     ];
   }
 }

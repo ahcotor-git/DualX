@@ -120,6 +120,28 @@ class _HitRecordsPageState extends State<HitRecordsPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 首部（账号 / 计数 / 错误行 / 分隔线）是固定少量控件，即时构建；
+    // 无界增长的命中行交由 `ListView.builder` 惰性构建——屏外行不构建、不占内存，
+    // 长场次（至多 kMaxCachedHits 条）滚动更平滑。空态占一行，语义与既有渲染一致。
+    final List<Widget> header = <Widget>[
+      Text(
+        _describeAccount(widget.session),
+        key: kHitRecordsAccountKey,
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      const SizedBox(height: 4),
+      Text('共 ${_hits.length} 条', key: kHitRecordsCountKey),
+      if (_error != null) ...<Widget>[
+        const SizedBox(height: 8),
+        Text(
+          _error!,
+          key: kHitRecordsErrorKey,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+      ],
+      const Divider(height: 32),
+    ];
+    final bool empty = _hits.isEmpty;
     return Scaffold(
       appBar: AppBar(
         title: const Text('命中记录'),
@@ -132,38 +154,25 @@ class _HitRecordsPageState extends State<HitRecordsPage> {
         ],
       ),
       body: SafeArea(
-        child: ListView(
+        child: ListView.builder(
           padding: const EdgeInsets.all(16),
-          children: <Widget>[
-            Text(
-              _describeAccount(widget.session),
-              key: kHitRecordsAccountKey,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 4),
-            Text('共 ${_hits.length} 条', key: kHitRecordsCountKey),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kHitRecordsErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+          itemCount: header.length + (empty ? 1 : _hits.length),
+          itemBuilder: (BuildContext context, int index) {
+            if (index < header.length) {
+              return header[index];
+            }
+            if (empty) {
+              return const Text('暂无命中记录', key: kHitRecordsEmptyKey);
+            }
+            final HitEvent hit = _hits[index - header.length];
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Text(
+                describeHitEvent(hit),
+                key: hitRecordsRowKey(hit.seq),
               ),
-            ],
-            const Divider(height: 32),
-            if (_hits.isEmpty)
-              const Text('暂无命中记录', key: kHitRecordsEmptyKey)
-            else
-              ..._hits.map(
-                (HitEvent hit) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Text(
-                    describeHitEvent(hit),
-                    key: hitRecordsRowKey(hit.seq),
-                  ),
-                ),
-              ),
-          ],
+            );
+          },
         ),
       ),
     );

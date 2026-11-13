@@ -3565,6 +3565,37 @@ void main() {
 
       await unmount(tester);
     });
+
+    testWidgets('长日志虚拟化：屏外行不构建（惰性），计数仍为全量', (WidgetTester tester) async {
+      const int total = 200;
+      await pumpExercise(
+        tester,
+        load: () async => exerciseOf(running: true, exerciseId: 'ex-1'),
+        logs: ({int? sinceSeq, int? limit}) async => sinceSeq == null
+            ? ExerciseLogPage(
+                items: <ExerciseLogEntry>[
+                  for (int i = 1; i <= total; i++) logOf(i, detail: '日志 $i'),
+                ],
+                latestSeq: total,
+              )
+            : const ExerciseLogPage(items: <ExerciseLogEntry>[]),
+      );
+      await advance(tester);
+
+      expect(
+        tester.widget<Text>(find.byKey(kExerciseControlLogsCountKey)).data,
+        '共 $total 条',
+        reason: '计数取自全量，与是否构建无关',
+      );
+      expect(find.byKey(exerciseControlLogRowKey(1)), findsOneWidget, reason: '屏内首行已构建');
+      expect(
+        find.byKey(exerciseControlLogRowKey(total)),
+        findsNothing,
+        reason: '屏外末行惰性不构建（虚拟化生效）',
+      );
+
+      await unmount(tester);
+    });
   });
 
   group('指挥端演习控制接线（段 51）', () {
@@ -7769,6 +7800,37 @@ void main() {
       expect(
         tester.widget<Text>(find.byKey(kHitRecordsErrorKey)).data,
         '命中流水拉取失败：HTTP_503',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('长流水虚拟化：屏外行不构建（惰性），计数仍为全量', (WidgetTester tester) async {
+      const int total = 200;
+      await pumpHits(
+        tester,
+        load: ({int? sinceSeq, int? limit}) async => sinceSeq == null
+            ? HitEventPage(
+                items: <HitEvent>[
+                  for (int i = 1; i <= total; i++)
+                    hitOf(i, hitVestNum: i, shooterNum: 3),
+                ],
+                latestSeq: total,
+              )
+            : const HitEventPage(items: <HitEvent>[]),
+      );
+      await advance(tester);
+
+      expect(
+        tester.widget<Text>(find.byKey(kHitRecordsCountKey)).data,
+        '共 $total 条',
+        reason: '计数取自全量，与是否构建无关',
+      );
+      expect(find.byKey(hitRecordsRowKey(1)), findsOneWidget, reason: '屏内首行已构建');
+      expect(
+        find.byKey(hitRecordsRowKey(total)),
+        findsNothing,
+        reason: '屏外末行惰性不构建（虚拟化生效）',
       );
 
       await unmount(tester);
