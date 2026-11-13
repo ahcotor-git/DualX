@@ -6,6 +6,7 @@ import '../features/console/command_page.dart';
 import '../features/console/console_login_page.dart';
 import '../features/console/exercise_control_page.dart';
 import '../features/console/floor_points_page.dart';
+import '../features/console/hit_records_page.dart';
 import '../features/console/link_panel_page.dart';
 import '../features/console/map_manager_page.dart';
 import '../features/console/overall_situation_page.dart';
@@ -324,6 +325,35 @@ class _ScdsConsoleAppState extends State<ScdsConsoleApp> {
               _openCommand(navigator: navigator, command: command, vestNum: vestNum),
           reloadAll: (ReloadRequest request) =>
               command.reloadAllVests(request: request, token: _account!.accessToken),
+          onOpenHits: () => _openHits(navigator: navigator, situations: situations),
+        ),
+      ),
+    );
+  }
+
+  /// 段 81：打开「命中记录」页（`GET /api/v1/situation/hits` 单独补拉命中流水）。
+  ///
+  /// `load` 是闭包，**每次取用时读 [_account]** 的当前 `accessToken`
+  /// （续期换到的新令牌才生效）；令牌到期由 [RefreshingApiTransport] 自动续期并重试一次。
+  /// 与「全体态势」页增量帧里的 `hits` **同源**（契约明写），本页只按 `sinceSeq` 游标增量续拉。
+  void _openHits({
+    required NavigatorState navigator,
+    required SituationApi situations,
+  }) {
+    final AccountSession? session = _account;
+    if (session == null) {
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext pageContext) => HitRecordsPage(
+          session: session,
+          load: ({int? sinceSeq, int? limit}) => situations.listHits(
+            token: _account!.accessToken,
+            sinceSeq: sinceSeq,
+            limit: limit,
+          ),
         ),
       ),
     );

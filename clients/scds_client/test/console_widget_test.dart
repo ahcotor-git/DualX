@@ -12,6 +12,7 @@ import 'package:scds_client/features/console/command_page.dart';
 import 'package:scds_client/features/console/console_login_page.dart';
 import 'package:scds_client/features/console/exercise_control_page.dart';
 import 'package:scds_client/features/console/floor_points_page.dart';
+import 'package:scds_client/features/console/hit_records_page.dart';
 import 'package:scds_client/features/console/link_panel_page.dart';
 import 'package:scds_client/features/console/map_manager_page.dart';
 import 'package:scds_client/features/console/overall_situation_page.dart';
@@ -265,6 +266,7 @@ void main() {
     required Future<SituationSocket> Function({int? sinceRevision}) connect,
     void Function(int vestNum)? onCommand,
     Future<CommandAck> Function(ReloadRequest request)? reloadAll,
+    VoidCallback? onOpenHits,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -274,6 +276,7 @@ void main() {
           connect: connect,
           onCommand: onCommand,
           reloadAll: reloadAll,
+          onOpenHits: onOpenHits,
         ),
       ),
     );
@@ -7618,6 +7621,205 @@ void main() {
       await pumpSummary(tester, () async => <TeamSummary>[]);
 
       expect(find.byKey(kTeamSummaryLinksEntryKey), findsNothing);
+
+      await unmount(tester);
+    });
+  });
+
+  /// 段 81：命中记录页——把只读端点 `GET /api/v1/situation/hits` 接入指挥端（游标增量续拉）。
+  ///
+  /// 用例全部跑在 `testWidgets` 的**假时钟**上，注入脚本化 `load` 桩——**不发真实请求**。
+  group('指挥端命中记录页（段 81）', () {
+    HitEvent hitOf(
+      int seq, {
+      int? hitVestNum,
+      int? shooterNum,
+      bool? shooterIsSoldier,
+      WeaponKind? shooterWeaponKind,
+      HitPart? hitPart,
+      bool? lethal,
+    }) =>
+        HitEvent(
+          seq: seq,
+          at: DateTime.utc(2026, 11, 12, 4, 0, seq),
+          hitVestNum: hitVestNum,
+          shooterNum: shooterNum,
+          shooterIsSoldier: shooterIsSoldier,
+          shooterWeaponKind: shooterWeaponKind,
+          hitPart: hitPart,
+          lethal: lethal,
+        );
+
+    Future<void> pumpHits(
+      WidgetTester tester, {
+      required HitRecordsLoader load,
+      Duration interval = const Duration(milliseconds: 50),
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HitRecordsPage(
+            session: accountSession(),
+            load: load,
+            interval: interval,
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    /// 有周期计时器在跑时不能 `pumpAndSettle`（永不 settle），改用固定拍数推进假时钟。
+    Future<void> advance(WidgetTester tester) async {
+      for (int i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+    }
+
+    testWidgets('首拍不带游标、按 latestSeq 增量续拉并逐条渲染', (WidgetTester tester) async {
+      final List<int?> cursors = <int?>[];
+      await pumpHits(
+        tester,
+        load: ({int? sinceSeq, int? limit}) async {
+          cursors.add(sinceSeq);
+          // 忠实于契约：只回 seq 大于 sinceSeq 的条目，游标推进后不再重复。
+          if (sinceSeq == null) {
+            return HitEventPage(
+              items: <HitEvent>[
+                hitOf(1, hitVestNum: 7, shooterNum: 3, lethal: false),
+                hitOf(2, hitVestNum: 9, shooterNum: 3, lethal: true),
+              ],
+              latestSeq: 2,
+            );
+          }
+          if (sinceSeq < 3) {
+            return HitEventPage(
+              items: <HitEvent>[hitOf(3, hitVestNum: 14, shooterNum: 21, lethal: true)],
+              latestSeq: 3,
+            );
+          }
+          return const HitEventPage(items: <HitEvent>[]);
+        },
+      );
+      await advance(tester);
+
+      expect(find.byKey(hitRecordsRowKey(1)), findsOneWidget);
+      expect(find.byKey(hitRecordsRowKey(2)), findsOneWidget);
+      expect(find.byKey(hitRecordsRowKey(3)), findsOneWidget);
+      expect(cursors.first, isNull, reason: '首拍不带游标（从 0 起拉）');
+      expect(cursors.contains(2), isTrue, reason: '续拉带上上次 latestSeq');
+      expect(
+        tester.widget<Text>(find.byKey(kHitRecordsCountKey)).data,
+        '共 3 条',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('命中行文案：单兵/武器、部位、致命三态，缺失显示破折号', (WidgetTester tester) async {
+      await pumpHits(
+        tester,
+        load: ({int? sinceSeq, int? limit}) async => sinceSeq == null
+            ? HitEventPage(
+                items: <HitEvent>[
+                  hitOf(
+                    1,
+                    hitVestNum: 7,
+                    shooterNum: 3,
+                    shooterIsSoldier: true,
+                    shooterWeaponKind: WeaponKind.grenade,
+                    hitPart: HitPart.head,
+                    lethal: true,
+                  ),
+                  hitOf(2),
+                ],
+                latestSeq: 2,
+              )
+            : const HitEventPage(items: <HitEvent>[]),
+      );
+      await advance(tester);
+
+      expect(
+        tester.widget<Text>(find.byKey(hitRecordsRowKey(1))).data,
+        '1｜#7 ← #3（单兵/GRENADE）｜HEAD｜阵亡',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(hitRecordsRowKey(2))).data,
+        '2｜— ← —（—/—）｜—｜—',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('拉取失败：显示错误行且不清空已收记录', (WidgetTester tester) async {
+      await pumpHits(
+        tester,
+        load: ({int? sinceSeq, int? limit}) async {
+          if (sinceSeq == null) {
+            return HitEventPage(
+              items: <HitEvent>[hitOf(1, hitVestNum: 7, shooterNum: 3)],
+              latestSeq: 1,
+            );
+          }
+          throw const ApiException(statusCode: 503);
+        },
+      );
+      await advance(tester);
+
+      expect(find.byKey(hitRecordsRowKey(1)), findsOneWidget, reason: '失败不清空已收记录');
+      expect(find.byKey(kHitRecordsErrorKey), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(kHitRecordsErrorKey)).data,
+        '命中流水拉取失败：HTTP_503',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('空流水：提示「暂无命中记录」', (WidgetTester tester) async {
+      await pumpHits(
+        tester,
+        load: ({int? sinceSeq, int? limit}) async =>
+            const HitEventPage(items: <HitEvent>[]),
+      );
+      await advance(tester);
+
+      expect(find.byKey(kHitRecordsEmptyKey), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(kHitRecordsEmptyKey)).data,
+        '暂无命中记录',
+      );
+
+      await unmount(tester);
+    });
+
+    testWidgets('全体态势页「命中记录」入口：提供回调时点击触发', (WidgetTester tester) async {
+      bool opened = false;
+      final TestSituationConnector connector = TestSituationConnector(silent: true);
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) async => fullEnvelope(revision: 1),
+        connect: connector.call,
+        onOpenHits: () => opened = true,
+      );
+
+      expect(find.byKey(kOverallSituationHitsEntryKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kOverallSituationHitsEntryKey));
+      await tester.pump();
+
+      expect(opened, isTrue);
+
+      await unmount(tester);
+    });
+
+    testWidgets('未注入命中记录入口时不渲染该入口', (WidgetTester tester) async {
+      final TestSituationConnector connector = TestSituationConnector(silent: true);
+      await pumpOverall(
+        tester,
+        fetch: ({int? sinceRevision}) async => fullEnvelope(revision: 1),
+        connect: connector.call,
+      );
+
+      expect(find.byKey(kOverallSituationHitsEntryKey), findsNothing);
 
       await unmount(tester);
     });

@@ -2875,3 +2875,40 @@ healthy）——**仿真通过不得写成现场通过**。
 错误组件抽取、部署运维细节。
 
 
+**段 81 落地（2026-11-13，审查报告优先级第 6 项：`listHits` 接入指挥端——「命中记录」页）**：
+承段 80「下一段（候选）」首项（原文「`listHits` 接入指挥端态势页」）与用户裁定切入点「**`listHits` 接入指挥端**」。
+把此前**只落共享层、无 UI** 的只读端点 `GET /api/v1/situation/hits`（`operationId: listHits`）接进指挥端：
+新增「命中记录」页（`HitRecordsPage`），由「全体态势」页 AppBar 入口进入。落**一笔**（**5 文件 / 1 新 4 改**，
+**破「每原子任务 ≤3 文件」上限，已按无人值守授权显式声明例外**，先例段 53 / 61 / 62 / 65 / 68 / 69 / 71）。
+
+- **三层现状：API / 模型 / 缓存均已就绪，缺口只在 UI**。`SituationApi.listHits`（`sinceSeq` / `limit`）与
+  `HitEvent` / `HitEventPage`（`items` / `latestSeq`）**段 46 已落地且已有单测**；`SituationCache.hits` /
+  `latestHitSeq` 亦已缓存。本段**只补 UI 接线**，**未改 API / 模型 / 缓存 / 契约**。
+- **命中流水「单独补拉」**：契约（`paths/situation.yaml`）明写 `listHits` 与态势增量里的 `hits` **同源**，
+  供「命中记录」面板单独补拉。故本页按 `sinceSeq` **游标增量**续拉——**首拍不带游标**（从 0 起），
+  此后以响应 `latestSeq` 续拉（服务端 `seq` **单调递增**，续拉天然去重，不重复渲染）；本地至多保留
+  `kMaxCachedHits`（**500**，对齐契约 `hitsLimit` 上限），超出丢最早的。
+- **与「全体态势」页的分工**：态势页读**双通道** `SituationFeed`（WS 主 + HTTP 兜底）逐单元展示；本页是
+  **只读补拉**的独立视图，沿用「当前演习日志」面板（段 51 续）的游标口径——**拉取失败只置错误文案、
+  不清空已收记录**（与 `PollingFeed` 一致）。
+- **入口落在「全体态势」页**：`OverallSituationPage` 增**可选** `onOpenHits`（`null` 时 AppBar 不渲染该入口，
+  既有只读用例的渲染与行为**保持不变**），入口键 `kOverallSituationHitsEntryKey`；令牌由闭包读当前
+  `accessToken`，续期换令牌后自动生效。
+- **不臆造缺省**：命中行 `describeHitEvent` 逐字段取契约字面量，可选字段（被击中者 / 开枪者 / 单兵与否 /
+  武器种类 / 命中部位 / 是否致命）**缺失时显示破折号**，绝不把「未提供」渲染成「未阵亡」之类的确定结论。
+- **文件**：`lib/features/console/hit_records_page.dart`（**新**）＋ `lib/features/console/overall_situation_page.dart`
+  （**改**：`onOpenHits` 端口 + AppBar 入口键）＋ `lib/app/console_app.dart`（**改**：`_openHits` 装配，闭包读
+  当前 `accessToken`）＋ `test/console_widget_test.dart`（**改**：`pumpOverall` 增 `onOpenHits` + 新增
+  「指挥端命中记录页（段 81）」组 **6 例**）＋ 本册。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test test/console_widget_test.dart` → **235 例全绿**；
+`flutter test`（全量）→ **All tests passed!（530 例）**。Dart 产物**不进 Maven reactor**，未改 Java / 契约，
+故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：**未对着真实后端实例**跑过真实命中流水（真实 `sinceSeq` 游标推进、`latestSeq` 边界、
+空场次 200 空数组均未验证）；真实命中流水条目数与分页上限未压测。
+
+**下一段（候选）**：`docs/review.md` 余项继续按优先级推进——长列表虚拟化（`ListView.builder` 化）、
+错误组件抽取、部署运维细节。
+
+

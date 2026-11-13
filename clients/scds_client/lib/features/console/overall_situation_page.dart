@@ -18,6 +18,9 @@ const Key kOverallSituationResyncButtonKey = Key('overallSituation.resync');
 const Key kOverallSituationWaitingKey = Key('overallSituation.waiting');
 const Key kOverallSituationEmptyKey = Key('overallSituation.empty');
 
+/// 段 81 新增：进入「命中记录」页的入口（未注入回调时整块不渲染）。
+const Key kOverallSituationHitsEntryKey = Key('overallSituation.hitsEntry');
+
 /// 段 47 新增：全体充弹（广播）入口与对话框控件键。
 const Key kOverallSituationReloadAllButtonKey = Key('overallSituation.reloadAll');
 const Key kReloadAllAmmoFieldKey = Key('reloadAll.ammoField');
@@ -50,6 +53,7 @@ class OverallSituationPage extends StatefulWidget {
     required this.connect,
     this.onCommand,
     this.reloadAll,
+    this.onOpenHits,
   });
 
   /// 已登录的账号会话（提供身份快照）。
@@ -67,6 +71,10 @@ class OverallSituationPage extends StatefulWidget {
 
   /// 段 47 新增：全体充弹（广播）端口；为 `null` 时 AppBar 不渲染该入口。
   final Future<CommandAck> Function(ReloadRequest request)? reloadAll;
+
+  /// 段 81 新增：打开「命中记录」页（`GET /situation/hits` 单独补拉）；为 `null`
+  /// 时 AppBar 不渲染该入口（既有只读用例不注入本端口，渲染与行为保持不变）。
+  final VoidCallback? onOpenHits;
 
   @override
   State<OverallSituationPage> createState() => _OverallSituationPageState();
@@ -144,6 +152,12 @@ class _OverallSituationPageState extends State<OverallSituationPage> {
       appBar: AppBar(
         title: const Text('全体态势'),
         actions: <Widget>[
+          if (widget.onOpenHits != null)
+            TextButton(
+              key: kOverallSituationHitsEntryKey,
+              onPressed: widget.onOpenHits,
+              child: const Text('命中记录'),
+            ),
           if (widget.reloadAll != null)
             TextButton(
               key: kOverallSituationReloadAllButtonKey,
