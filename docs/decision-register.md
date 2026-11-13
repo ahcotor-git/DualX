@@ -2972,3 +2972,28 @@ Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `m
 `replay_list`），直至全量覆盖；之后转部署运维细节。
 
 
+**段 83 落地（2026-11-13，审查报告余项：错误行组件抽取——批 2）**：
+承批 1，续抽 **3 页 5 处**至共享组件 `ConsoleErrorLine`。**只改渲染结构，不改文案 / 键 / 交互语义**。
+落**一笔**（**4 文件 / 3 改 + 本册**，**破「≤3 文件」上限已按无人值守授权显式声明例外**，
+先例段 53/61/62/65/68/69/71/81/82/83-批 1）。
+
+- **批 2 覆盖**：`team_summary_page.dart`（1 处，`kTeamSummaryErrorKey`）、
+  `replay_statistics_page.dart`（2 处，`kReplayStatisticsFormErrorKey` / `kReplayStatisticsErrorKey`）、
+  `replay_list_page.dart`（2 处，`kReplayListFormErrorKey` / `kReplayListErrorKey`）。五处均为
+  `SizedBox(height: 8)` 同形块，统一由组件默认 `spacing: 8` 承接（未传参）。
+- **键仍落内层 `Text`**：沿用批 1 口径（`textKey` 施加在内层 [Text]），既有断言零改动。
+- **文件**：`lib/features/console/team_summary_page.dart` ＋ `lib/features/console/replay_statistics_page.dart`
+  ＋ `lib/features/console/replay_list_page.dart`（**改**）＋ 本册。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**
+（复用既有「错误行」断言作行为不变证据——本段**未新增测试**）。Dart 产物**不进 Maven reactor**，
+未改 Java / 契约，故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：未在真机上核对各页错误行**视觉一致性**（间距 / 颜色）；批 2+ 未全量落地，代码库仍处
+**混合状态**（部分页用组件、部分页仍内联，余约 14 页续推）。
+
+**下一段（候选）**：错误组件抽取**批 3**（候选 `link_panel` 5 处 / `map_manager` / `plan_manager` /
+`replay_export` / `roster_editor` / `vest_ledger` / `uwb_calibration` 等），直至全量覆盖；
+之后转部署运维细节。
+
+

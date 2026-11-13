@@ -7,6 +7,7 @@ import '../../shared/api/api_problem.dart';
 import '../../shared/api/replay_models.dart';
 import '../../shared/api/situation_models.dart' show TeamSummary;
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 import 'replay_list_page.dart' show describeReplaySummary;
 import 'replay_player_page.dart' show formatReplayOffset;
 
@@ -209,22 +210,10 @@ class _ReplayStatisticsPageState extends State<ReplayStatisticsPage> {
                 ),
               ],
             ),
-            if (_formError != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _formError!,
-                key: kReplayStatisticsFormErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kReplayStatisticsErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_formError != null)
+              ConsoleErrorLine(text: _formError!, textKey: kReplayStatisticsFormErrorKey),
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kReplayStatisticsErrorKey),
             const Divider(height: 32),
             if (stats == null)
               const Text('加载中…', key: kReplayStatisticsLoadingKey)

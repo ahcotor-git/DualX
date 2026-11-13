@@ -5,6 +5,7 @@ import '../../shared/api/api_problem.dart';
 import '../../shared/api/exercise_models.dart' show PageMeta;
 import '../../shared/api/replay_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kReplayListAccountKey = Key('replayList.account');
@@ -266,22 +267,10 @@ class _ReplayListPageState extends State<ReplayListPage> {
                 ),
               ],
             ),
-            if (_formError != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _formError!,
-                key: kReplayListFormErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                key: kReplayListErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
+            if (_formError != null)
+              ConsoleErrorLine(text: _formError!, textKey: kReplayListFormErrorKey),
+            if (_error != null)
+              ConsoleErrorLine(text: _error!, textKey: kReplayListErrorKey),
             const Divider(height: 32),
             if (items == null)
               const Text('加载中…', key: kReplayListLoadingKey)

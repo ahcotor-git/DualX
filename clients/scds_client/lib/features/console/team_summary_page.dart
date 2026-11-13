@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../shared/api/situation_models.dart';
 import '../../shared/auth/session_store.dart';
 import '../../shared/polling/poller.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kTeamSummaryAccountKey = Key('teamSummary.account');
@@ -199,14 +200,8 @@ class _TeamSummaryPageState extends State<TeamSummaryPage> {
                           '（每 ${widget.interval.inMilliseconds} ms）',
                   key: kTeamSummaryRefreshCountKey,
                 ),
-                if (_poller.lastError != null) ...<Widget>[
-                  const SizedBox(height: 8),
-                  Text(
-                    _poller.lastError!,
-                    key: kTeamSummaryErrorKey,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
-                  ),
-                ],
+                if (_poller.lastError != null)
+                  ConsoleErrorLine(text: _poller.lastError!, textKey: kTeamSummaryErrorKey),
                 const Divider(height: 32),
                 if (teams != null && teams.isEmpty)
                   const Text('本场没有已编成的队伍', key: kTeamSummaryEmptyKey),
