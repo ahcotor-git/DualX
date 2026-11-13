@@ -4,6 +4,7 @@ import '../../shared/api/api_contract.dart';
 import '../../shared/api/api_problem.dart';
 import '../../shared/api/auth_models.dart';
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kConsoleAccountIdentityKey = Key('consoleAccount.identity');
@@ -253,14 +254,12 @@ class _AccountPageState extends State<AccountPage> {
             Text(_describeExpiry(_session), key: kConsoleAccountExpiryKey),
             const SizedBox(height: 4),
             Text(_describePermissions(_user), key: kConsoleAccountPermissionsKey),
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                key: kConsoleAccountErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+            if (_error != null)
+              ConsoleErrorLine(
+                text: _error!,
+                textKey: kConsoleAccountErrorKey,
+                spacing: 12,
               ),
-            ],
             if (_notice != null) ...<Widget>[
               const SizedBox(height: 12),
               Text(_notice!, key: kConsoleAccountNoticeKey),

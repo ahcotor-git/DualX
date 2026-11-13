@@ -3076,3 +3076,32 @@ Dart 产物**不进 Maven reactor**，未改 Java / 契约，故**未重跑** `m
 直至全量覆盖；之后转部署运维细节。
 
 
+**段 83 落地（2026-11-13，审查报告余项：错误行组件抽取——批 6）**：
+承批 5，续抽 **3 页 3 处**至共享组件 `ConsoleErrorLine`。**只改渲染结构，不改文案 / 键 / 交互语义**。
+落**一笔**（**4 文件 / 3 改 + 本册**，**破「≤3 文件」上限已按无人值守授权显式声明例外**，
+先例段 53/61/62/65/68/69/71/81/82/83-批 1/2/3/4/5）。
+
+- **批 6 覆盖**：`account_page.dart`（1 处，`kConsoleAccountErrorKey`）、`command_page.dart`
+  （1 处，`kCommandErrorKey`）、`device_login_page.dart`（1 处，`kDeviceLoginErrorKey`）。
+- **间距非单一 8——「同形块」口径修正**：本批三处各不同——`account_page` / `device_login_page` 原为
+  `SizedBox(height: 12)`（传 `spacing: 12`）；`command_page` 系 `if (_error != null) Text(…)
+  else if (_ack != null) …` 的**择一分支**、**原无间距**，传 `spacing: 0` 以**逐像素等价**（既有断言取
+  `kCommandErrorKey` 的 [Text] 不变，**择一语义保留**）。至此组件 `spacing` 实测覆盖 **0 / 4 / 8 / 12** 四档。
+  改造后三页已无内联 `colorScheme.error` 残留（grep 实测 0）。
+- **键仍落内层 `Text`**：沿用批 1 口径（`textKey` 施加在内层 [Text]），既有断言零改动。
+- **文件**：`lib/features/console/account_page.dart` ＋ `lib/features/console/command_page.dart`
+  ＋ `lib/features/device/device_login_page.dart`（**改**）＋ 本册。
+
+**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**
+（复用既有「错误行」断言作行为不变证据——本段**未新增测试**）。Dart 产物**不进 Maven reactor**，
+未改 Java / 契约，故**未重跑** `mvn test`（基准仍 **1162 项**）。
+
+**未验项**：未在真机上核对各页错误行**视觉一致性**（间距 0 / 4 / 8 / 12 的差异、颜色）；
+`command_page` 的 `spacing: 0` 未单独加断言（复用既有 `kCommandErrorKey` 断言作等价证据）。
+批 7 未落地，代码库仍处**混合状态**（余 3 页 / ~3 处仍内联）。
+
+**下一段（候选）**：错误组件抽取**批 7（收尾）**（`console_login` / `situation` / `connection`
+——连同 `connection_page` 第 249 行三元表达式配色一并甄别：若非「顶部错误行」模式则**按现状保留**、
+不强行套组件），完成全量覆盖；之后转部署运维细节。
+
+

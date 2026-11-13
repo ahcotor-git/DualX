@@ -5,6 +5,7 @@ import '../../shared/api/api_problem.dart';
 import '../../shared/api/command_models.dart';
 import '../../shared/api/situation_models.dart' show Team;
 import '../../shared/auth/session_store.dart';
+import '../../shared/widgets/console_error_line.dart';
 
 /// 供测试与后续集成定位的控件键。
 const Key kCommandTargetKey = Key('command.target');
@@ -509,10 +510,10 @@ class _CommandPageState extends State<CommandPage> {
             ],
             const Divider(height: 32),
             if (_error != null)
-              Text(
-                _error!,
-                key: kCommandErrorKey,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ConsoleErrorLine(
+                text: _error!,
+                textKey: kCommandErrorKey,
+                spacing: 0,
               )
             else if (_ack != null)
               Text(describeCommandAck(_ack!), key: kCommandAckKey)
