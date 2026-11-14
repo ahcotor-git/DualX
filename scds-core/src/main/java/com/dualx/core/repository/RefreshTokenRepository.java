@@ -133,6 +133,28 @@ public class RefreshTokenRepository {
                 .update();
     }
 
+    /**
+     * 清理已过期一段时间的历史行（review R27）。
+     *
+     * <p><b>判据取 {@code expires_at} 而不是 {@code revoked_at}。</b>已撤销的行在令牌有效期内
+     * 是重放检测的证据（见类注释），不能一撤销就删；而令牌一旦过期，即便被重放也会在
+     * {@code refresh} 里先撞上过期判定，行本身不再有用。于是「过期满保留期」是唯一安全的
+     * 删除线：未过期的撤销行一律留着。</p>
+     *
+     * <p>用 {@code LIMIT} 分批删除，避免一次大删除长时间持锁而干扰登录路径（与
+     * {@code ExerciseCommandRepository} 的批量清理同一取向）。</p>
+     *
+     * @param cutoff 删除 {@code expires_at} 早于此时刻的行
+     * @param limit  单批上限
+     * @return 实际删除行数
+     */
+    public int deleteExpiredBefore(Instant cutoff, int limit) {
+        return jdbc.sql("DELETE FROM t_refresh_token WHERE expires_at < :cutoff LIMIT :limit")
+                .param("cutoff", SqlTime.toDb(cutoff))
+                .param("limit", limit)
+                .update();
+    }
+
     private static String uuid(UUID value) {
         return value == null ? null : value.toString();
     }

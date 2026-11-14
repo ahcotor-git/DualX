@@ -7,7 +7,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -41,6 +42,13 @@ import java.util.Optional;
  * 故不需要跨实例共享计数；代价是重启会放掉正在锁定的账号——现场重启本就伴随人工
  * 在场，可接受，为此引入中间件则得不偿失。</p>
  *
+ * <p><b>键数有硬上限</b>（review R27）。账号维度因为「未登记用户名共用一个键」而天然有界，
+ * 但客户端 IP 维度按请求源地址建键，伪造源地址的一方可以把它撑到无穷；空壳清理只回收
+ * 「窗口内已无失败」的键，挡不住这种灌入。故以 {@link #MAX_BUCKETS} 封顶，满额时按
+ * 「最久未触达」淘汰键。淘汰**只挑未处于锁定期的键**：正在生效的锁是限流唯一的产出，
+ * 为腾位置而提前解除它等于自毁长矛；若现存的键全在锁定期，则放弃登记这一次失败
+ * （见 {@link #admitBucket}）。</p>
+ *
  * <p>线程安全：登录流量极低，直接对整个实例加锁，换取实现上的零心智负担。</p>
  */
 @Component
@@ -68,8 +76,19 @@ public class LoginThrottle {
     /** 设备登录适用的口径：设备自身 + 客户端 IP（IP 维度与账号登录共用，D03-6）。 */
     private static final List<Scope> DEVICE_DIMENSIONS = List.of(Scope.DEVICE, Scope.CLIENT_IP);
 
+    /** 同时在跟踪的键数硬上限（review R27）。 */
+    public static final int MAX_BUCKETS = 10_000;
+
     private final Clock clock;
-    private final Map<String, Bucket> buckets = new HashMap<>();
+
+    /**
+     * 键 → 桶。用**访问序**的 LinkedHashMap 当 LRU：满额时迭代顺序即「最久未触达在前」，
+     * 淘汰最久未触达的键无需额外排序（迭代器正好指向链表头）。
+     */
+    private final Map<String, Bucket> buckets = new LinkedHashMap<>(16, 0.75f, true);
+
+    /** 键数上限；生产取 {@link #MAX_BUCKETS}，测试可收紧以验证淘汰路径。 */
+    private final int maxBuckets;
 
     /** Spring 用无参构造（多构造器且未标注时，Spring 选无参那个）。 */
     public LoginThrottle() {
@@ -78,7 +97,13 @@ public class LoginThrottle {
 
     /** 供测试注入可控时钟；生产路径不走这里。 */
     LoginThrottle(Clock clock) {
+        this(clock, MAX_BUCKETS);
+    }
+
+    /** 供测试同时收紧键数上限；生产路径不走这里。 */
+    LoginThrottle(Clock clock, int maxBuckets) {
         this.clock = clock;
+        this.maxBuckets = maxBuckets;
     }
 
     /**
@@ -134,11 +159,52 @@ public class LoginThrottle {
         Instant now = clock.instant();
         synchronized (this) {
             for (Scope scope : dimensions) {
-                buckets.computeIfAbsent(scope.key(subject, clientIp), key -> new Bucket())
-                        .recordFailure(now, scope.maxFailures());
+                String key = scope.key(subject, clientIp);
+                Bucket bucket = buckets.get(key);
+                if (bucket == null) {
+                    bucket = admitBucket(key, now);
+                }
+                if (bucket != null) {
+                    bucket.recordFailure(now, scope.maxFailures());
+                }
             }
             evictStale(now);
         }
+    }
+
+    /**
+     * 为新键腾出位置并登记。满额时先清空壳，再淘汰最久未触达的**未锁定**键；若现存的键全部
+     * 处于锁定期，则放弃登记本次失败并返回 {@code null}——让「键数上限」与「不解除有效锁」
+     * 两条同时成立，代价只是极少数场景下少记一次失败。
+     */
+    private Bucket admitBucket(String key, Instant now) {
+        if (buckets.size() >= maxBuckets) {
+            evictStale(now);
+            if (buckets.size() >= maxBuckets && !evictLeastRecentlyUsedUnlocked(now)) {
+                return null;
+            }
+        }
+        Bucket bucket = new Bucket();
+        buckets.put(key, bucket);
+        return bucket;
+    }
+
+    /**
+     * 淘汰最久未触达的**未锁定**键。访问序 LinkedHashMap 的迭代顺序即「最久未触达在前」，
+     * 故从链表头起扫到第一个未锁定的即可，命中即删。
+     *
+     * @return false 表示当前所有键都在锁定期内，没有一个可以安全淘汰
+     */
+    private boolean evictLeastRecentlyUsedUnlocked(Instant now) {
+        Iterator<Map.Entry<String, Bucket>> candidates = buckets.entrySet().iterator();
+        while (candidates.hasNext()) {
+            Map.Entry<String, Bucket> entry = candidates.next();
+            if (!entry.getValue().isLocked(now)) {
+                candidates.remove();
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

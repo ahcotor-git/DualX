@@ -256,6 +256,68 @@ class LoginThrottleTest {
         assertThat(throttle.lockout("someone-else", "10.0.0.12")).isEmpty();
     }
 
+    @Test
+    void trackedKeysAreCapped_andAnActiveLockIsNeverEvicted() {
+        // 收紧上限到 4，否则要灌一万个键才触到边界（review R27）
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock, 4);
+
+        // 先把 u-locked 锁上：它的桶最旧，但正处在锁定期，腾位置时必须绕开
+        for (int i = 0; i < LoginThrottle.ACCOUNT_MAX_FAILURES; i++) {
+            throttle.recordFailure("u-locked", IP);
+        }
+        assertThat(throttle.lockout("u-locked", IP)).isPresent();
+
+        // 再灌入远超上限的其它账号（同一出口 IP），迫使淘汰反复发生
+        for (int i = 0; i < 50; i++) {
+            throttle.recordFailure("flood" + i, IP);
+        }
+
+        assertThat(throttle.trackedKeyCount()).isLessThanOrEqualTo(4);
+        // 有效锁不得因为腾位置而提前解除
+        assertThat(throttle.lockout("u-locked", IP)).isPresent();
+    }
+
+    @Test
+    void evictionDropsTheLeastRecentlyTouchedUnlockedKey() {
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock, 3);
+
+        throttle.recordFailure("old", IP);      // 新键：account:old、ip:IP → 2
+        throttle.recordFailure("keep", IP);     // 新键：account:keep → 3（满额）
+        throttle.recordFailure("freshest", IP); // 满额：淘汰最久未触达的 account:old，再放入新键
+
+        // account:old 的计数已随淘汰清零：接着试 4 次不该锁；
+        // 若它还在，会与淘汰前的那次累计成 5 次而被锁。
+        for (int i = 0; i < LoginThrottle.ACCOUNT_MAX_FAILURES - 1; i++) {
+            throttle.recordFailure("old", IP);
+        }
+        assertThat(throttle.lockout("old", IP)).isEmpty();
+    }
+
+    @Test
+    void whenEveryTrackedKeyIsLocked_theNewKeyIsDroppedRatherThanReleasingALock() {
+        var clock = new MutableClock();
+        var throttle = new LoginThrottle(clock, 2);
+
+        // 同一 IP 失败到两个维度都锁上：账号 5 次、IP 30 次
+        for (int i = 0; i < LoginThrottle.CLIENT_IP_MAX_FAILURES; i++) {
+            throttle.recordFailure("a", IP);
+        }
+        assertThat(throttle.lockout("a", IP)).isPresent();
+        assertThat(throttle.trackedKeyCount()).isEqualTo(2);
+
+        // 上限已被两个有效锁占满：新账号既挤不进来，也不能把任何一条锁挤出去
+        throttle.recordFailure("b", IP);
+
+        assertThat(throttle.trackedKeyCount()).isEqualTo(2);
+        assertThat(throttle.lockout("a", IP)).isPresent();
+        // b 没建成自己的键，但仍会被共用的 IP 维度挡住
+        assertThat(throttle.lockout("b", IP)).get()
+                .extracting(LoginThrottle.Lockout::scope)
+                .isEqualTo(Scope.CLIENT_IP);
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             latch.await();
