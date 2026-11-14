@@ -3232,3 +3232,26 @@ R23（测试隔离仍共用同一本机容器）、R25（配置事实登记）�
 3. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换。
 
 
+**段 87 落地（2026-11-14，A-3：新建 `.gitattributes` 统一行尾）**：
+承段 86「下一段（候选）」①（＝A-3）。用户裁定（经 AskUserQuestion）：下一段方向「**A-3 .gitattributes（推荐）**」，
+其口径逐字为「新建 `.gitattributes` 统一行尾。需先定口径（**推荐：文本统一 LF、二进制不动、含 `*.md`/`*.java`/`*.dart`/`*.kt`/`*.yaml`**）；纯本机、零风险。」。**纯仓库元数据、零行尾内容改动**。
+
+- **现状**：仓库**原本无** `.gitattributes`，且 `git config core.autocrlf=true`（`core.eol` 未设）；
+  Windows 上 LF↔CRLF 漂移与 `warning: LF will be replaced by CRLF` 告警由此而来（历次「LF→CRLF 警告为无害噪音」的根因）。
+- **新增 `.gitattributes`（1 文件，**新**）**，口径三层：
+  - **默认** `* text=auto eol=lf`（未点名者也按文本自动识别、检出统一 LF）；
+  - **文本显式声明 LF**：`*.md` / `*.txt` / `*.java` / `*.kt` / `*.kts` / `*.gradle` / `*.dart` / `*.yaml` / `*.yml` / `*.xml` / `*.json` / `*.properties` / `*.sql` / `*.sh` / `*.ps1` / `*.mjs` / `*.js` / `*.ts` / `*.pem`；
+  - **Windows 批处理保留 CRLF**：`*.bat` / `*.cmd`；**二进制 `binary`（不做任何转换）**：约 30 项（`*.png` / `*.jpg` / `*.jpeg` / `*.gif` / `*.ico` / `*.webp` / `*.ttf` / `*.otf` / `*.woff` / `*.woff2` / `*.jar` / `*.jks` / `*.keystore` / `*.p12` / `*.pfx` / `*.apk` / `*.aab` / `*.so` / `*.dll` / `*.dylib` / `*.exe` / `*.lib` / `*.xlsx` / `*.zip` / `*.gz`）。
+- **文件**：`.gitattributes`（**新**）＋ 本册——**2 文件：未破「≤3 文件」上限**。
+
+**门禁**：本段**纯仓库元数据**（未改 Java / 契约 / Dart / 既有文件行尾）⇒ **未重跑** `mvn test`（基准 **1162 项**）与 `flutter test`（基准 **532 例**）。
+
+**未验项**：本次**只落属性文件**，**不改工作树历史内容**——既有**已提交**文件的行尾**未做全量 renormalize**（如需重写整库行尾须另开段并显式评估 `git add --renormalize .` 的大范围 diff 影响）；
+`core.autocrlf=true` 仍为本机全局设置（`.gitattributes` 的 `eol=lf` **按属性优先于 `core.autocrlf`**，故检出为 LF）；`*.bat` / `*.cmd` 在本仓暂未实际出现，保留规则属**前瞻性声明**。
+
+**下一段（候选）**：
+1. **B 档**（本机可跑，集成需 `scds-local-mysql` 13306）：R27 配置校验单测（`AuthJwtProperties` TTL / 顺序 / 容量）、R20 登录时序 dummy hash（**行为变更，须评估**）、R18/R19 并发与大小写限流 IT、`mvn test` 全量基线复核；
+2. **全库行尾 renormalize**（承接本段「未验项」，大范围 diff，**需显式评估与授权**）；
+3. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换。
+
+
