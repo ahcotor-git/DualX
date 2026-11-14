@@ -3289,3 +3289,57 @@ R23（测试隔离仍共用同一本机容器）、R25（配置事实登记）�
 4. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换。
 
 
+**段 89 落地（2026-11-14，R27 容量项 · 本机可闭环子集：`LoginThrottle` 键数硬上限 ＋ refresh 历史行清理期限）**：
+承段 88「下一段（候选）① **R27 容量项**」。用户在**无人值守模式**下仅回「**继续**」，按既定推荐项推进本段。
+R27 原判「部分成立」，逐项拆开后**只有前两项能在本机闭环**，本段落这两项；**队列 / 客户端上限与 RPO / RTO** 属产品 / 运维口径，**仅登记**。
+**本段属行为变更**（限流多一条淘汰路径、应用内新增一小时一拍的清理任务）。
+
+- **① `LoginThrottle` 键数硬上限 ＋ 淘汰（`MAX_BUCKETS = 10_000`）**：原 `buckets` 为 `HashMap`，**键数无上限**；
+  `evictStale` 只回收「窗口内已无失败」的**空壳桶**。**账号维度天然有界**（未登记用户名共用 `unknown` 一个键），
+  但**客户端 IP 维度按请求源地址建键**，伪造源地址者可灌到无穷，空壳清理挡不住。
+  落点：`buckets` 改用**访问序** `LinkedHashMap`（`new LinkedHashMap<>(16, 0.75f, true)`）当 LRU（迭代顺序即「最久未触达在前」）；
+  满额流程 `admitBucket`：`evictStale` 清空壳 → 仍满则 `evictLeastRecentlyUsedUnlocked` → 仍腾不出位则**放弃登记本次失败**（返回 `null`）。
+  **关键口径——淘汰只挑未处于锁定期的键**：正在生效的锁是限流**唯一的产出**，为腾位置提前解除它等于**自毁长矛**；
+  若现存键全部在锁定期，宁可**少记一次失败**。代价有界（单 IP 每 5 分钟至多 30 次失败、锁定期内一次都不记，`recordFailure` 只在未锁定时被调用）。
+- **② refresh 历史行清理期限（`scds.auth.refresh.retention`，默认 `7d`）**：`t_refresh_token` **只增不减**（每次登录 / 滚动刷新各插一行；退出与重放处置只置 `revoked_at` 不删），长期运行无界增长。
+  **关键口径——删除线判据取 `expires_at` 而非 `revoked_at`**：已撤销行在**令牌有效期内**是**重放检测的证据**（识别「同一令牌被两端换发」），**不能一撤销就删**；
+  令牌一旦**过期**即便被重放也先撞过期判定，行失去作用 ⇒「过期满保留期」是**唯一安全删除线**，**未过期的撤销行一律留着**。
+  落点：`RefreshTokenRepository.deleteExpiredBefore(cutoff, limit)`（`DELETE … LIMIT` 分批，避免大删除长时间持锁）＋
+  `RefreshTokenCleanupTask`（core `@Component`，`PERIOD_MS = 3_600_000L` / `BATCH_LIMIT = 500` / `MAX_BATCHES_PER_TICK = 10`）＋
+  `RefreshRetentionProperties`（`@ConfigurationProperties("scds.auth.refresh")`，`@DefaultValue("7d")`，紧凑构造器校验**显式 0 / 负数即启动失败**，与 `scds.command.sent-ttl` 同一取向）。
+- **装配踩坑（已修）**：`RefreshTokenCleanupTask` 初版有**两个带参构造器且未标 `@Autowired`** ⇒ Spring 找无参构造失败，
+  报 `BeanCreationException … No default constructor found`（11 个 IT 上下文全挂）。修法：**收敛为单参构造** +
+  `private static final Clock CLOCK = Clock.systemUTC();`（与 `AuthService` 同一约定）。教训：多构造器类**必须保留无参构造或标 `@Autowired`**——
+  `LoginThrottle` 之所以可用多构造器，正是因为它显式保留了 `public LoginThrottle()`。
+- **门禁冲突（本段发现并处置，重要）**：首轮 `mvn -B clean verify` 里 `ApplicationStartupIT` **失败**
+  （`t_refresh_token` 启动前 2 → 启动后 0）。**根因**：`@Scheduled(fixedDelay = …)` **无初始延迟**，
+  第一拍在**上下文启动时立即执行**，删掉了测试库里 2 条**已过期超过 7 天**的遗留行；
+  该 IT 以「启动前后四张表**行数相等**」守一条**既有安全不变式——「启动过程不改动库内数据」**。
+  **处置**：`@Scheduled(fixedDelay = PERIOD_MS, initialDelay = PERIOD_MS)`，**第一拍晚一个周期**（清理不紧急，推迟无代价）；
+  既有的 `ExerciseCommandExpiryTask` / `ExportTaskService` 无 `initialDelay`，但它们**只在有待处理行时才写库**（常态空操作），与本任务**每拍都删行**性质不同。
+- **计数口径（承接段 88 教训，本段补出可复算方法）**：`surefire-reports/*.xml` 的 **`tests` 属性对纯 `@Nested` 外层类同样报 `0`**
+  （`TrackSamplingTest` XML `tests="0"`，但文件里**确有 21 个 `<testcase>`**）⇒ XML `tests` 求和同样少算（本段实测 core 609）。
+  **`.txt` 与 `.xml` 的 `tests` 属性都不可作为计数依据**；正确口径是 **Surefire 模块小结行 / 逐类控制台输出**，
+  可复算等价物为各模块 **`TEST-*.xml` 中 `<testcase>` 元素计数之和**（本段实测 core **630**，与模块小结一致）。
+- **文件（**代码笔 5 文件：3 改 2 新；破「≤3 文件」上限，已显式声明例外**）**：
+  `scds-core/src/main/java/com/dualx/core/auth/LoginThrottle.java`（改）、
+  `scds-core/src/test/java/com/dualx/core/auth/LoginThrottleTest.java`（改，12 → 15）、
+  `scds-core/src/main/java/com/dualx/core/repository/RefreshTokenRepository.java`（改，新增 `deleteExpiredBefore`）、
+  `scds-core/src/main/java/com/dualx/core/auth/RefreshTokenCleanupTask.java`（**新**）、
+  `scds-core/src/test/java/com/dualx/core/auth/RefreshTokenCleanupTaskIT.java`（**新**，3 用例）。
+  **文档笔 4 文件**（`docs/testing.md` §78 ＋ `docs/review.md` R27 两处 ＋ 本册 ＋ `snapshot.md`；**破「≤3 文件」已显式声明例外**）。
+
+**门禁**：`mvn -B clean verify` → **BUILD SUCCESS / 1188 项 / 0/0/0**
+（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core **630** ＋ api 139 ＋ app 333）；基线对账：1182（段 88）＋ 3（`LoginThrottleTest`）＋ 3（`RefreshTokenCleanupTaskIT`）＝ **1188**。
+
+**未验项**：① 键数上限的**真实灌入压力测试**未做（单测以收紧上限至 2 / 3 / 4 验证「淘汰最久未触达的未锁定键」与「全锁时宁少记不解除锁」）；
+② 清理任务的**真装配节拍**未观测（core 测试上下文不跑 `@Scheduled`；`ApplicationStartupIT` 只覆盖「启动窗口内不删行」，未等满一小时拍）；
+③ 保留期默认值 `7d` 未做容量试验定参；④ R27 剩余（队列 / 客户端上限、RPO / RTO）与 R20 遗留（密码长度约束）、全库行尾 renormalize、C 档均未闭环。
+
+**下一段（候选）**：
+1. **R06 设计决策**（设备登录 × `signing=false`：独立设备能力 or 禁用该端点；**需先定设计再动代码**）；
+2. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+3. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+4. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
+
+

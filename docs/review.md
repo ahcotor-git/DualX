@@ -43,10 +43,10 @@
 | R24 | **部分成立** | 已有 `deploy/minipc`（compose + `deploy.sh` / `verify.sh`，后端用不可变 tag）；仍 **`mysql:8.4` 浮动标签**、公网 TLS 未落、备份 / 恢复未验证、无代码级 dev 密钥拒用门禁（仅文档约定） |
 | R25 | **部分成立** | `ScdsUwbProperties` banner 仍有 `modeEn/uwbEn` 重复标识；`deployment-mode` 无消费者属**正交设计登记**（非缺陷） |
 | R26 | 已更正（误报） | 见该行批注：Flutter 单工程双端 + 持续 Poll + 会话落盘均已落地 |
-| R27 | **部分成立** | TTL 正值 / 顺序校验已落（`AuthJwtProperties.requirePositive` 等）；**限流桶无硬上限**、**refresh 记录无清理期限**、**队列 / 客户端上限与 RPO / RTO 未定** 仍成立 |
+| R27 | **部分成立（段 89 已落本机可闭环两项）** | TTL 正值 / 顺序校验已落（`AuthJwtProperties.requirePositive` 等）；**限流桶键数硬上限 + LRU 淘汰**（`LoginThrottle.MAX_BUCKETS`，段 89）与 **refresh 记录清理期限**（`scds.auth.refresh.retention` 默认 `7d` + `RefreshTokenCleanupTask`，段 89）**已落地**；**队列 / 客户端上限与 RPO / RTO** 仍成立（产品 / 运维口径，本机不可闭环） |
 | R28 | 已落地 | `AuthController.toUser` 只映射 `userId/username/displayName/roles`，**不含 `passwordHash`** |
 
-**复核后仍成立的待办（3 项）**：R06（设备登录 × 禁用签发）、R24（发布前运维项）、R27（容量 / 保留）。（**R20 登录时序已于段 88 落地**，见 review 表 R20 行与 testing.md §77。）
+**复核后仍成立的待办（3 项）**：R06（设备登录 × 禁用签发）、R24（发布前运维项）、R27（容量 / 保留；**本机可闭环的两项已于段 89 落地**，余队列 / 客户端上限与 RPO / RTO）。（**R20 登录时序已于段 88 落地**，见 review 表 R20 行与 testing.md §77。）
 **部分成立、其余落点未完成（4 项）**：R11（单实例保护）、R16（离线声明）、R23（测试隔离）、R25（配置事实）。
 
 ## 1. 结论
@@ -114,7 +114,7 @@
 | R24 | P1 发布前 **〔复核 2026-11-14：部分成立——已有 deploy/minipc 制品与脚本；浮动标签/TLS/备份/dev 密钥门禁仍缺〕** | 无生产配置/应用部署制品定义/服务管理脚本、TLS/备份恢复验证；mysql:8.4是可漂移标签，公开dev密钥没有生产拒用门禁。所有生产项需先明确标准后实现 |
 | R25 | P2 配置事实 **〔复核 2026-11-14：部分成立——`deployment-mode` 无消费者属正交设计登记；banner 重复标识仍在〕** | deployment-mode未消费、硬件开关未实现、UWB配置未绑定Spring bean；solver banner仍有modeEn/uwbEn重复与旧串口标识。不能把这些日志当真实链路状态 |
 | R26 | P1 客户端 | 无Flutter工程；单兵队伍视图、持续Poll与安全存储/生命周期未实现，不能开始“正式客户端验收”。**〔更正 2026-11-13（段 84）：该项已被取代，且含两处误报——①「安全存储未实现」不成立：段 71 起两端会话均落平台安全存储（`lib/main.dart` 注入 `SecureSessionStore`）；②「单兵端未包装 `RefreshingApiTransport`」不成立：该装饰器对设备端属“有意排除”（`DeviceSession` 无 `refreshToken`、契约无设备刷新端点）。Flutter 单工程双端、持续 Poll 亦均已落地。证据见 decision-register 段 71 / CLIENT-RESILIENCE 段 C·D / 段 84。〕** |
-| R27 | P2 容量/保留 **〔复核 2026-11-14：部分成立——TTL 正值校验已落；桶上限/refresh 清理/RPO·RTO 仍缺〕** | TTL配置缺正值约束，失败限流桶无硬容量上限，refresh记录未定清理期限，队列/客户端上限及RPO/RTO未定。需配置校验与容量试验，不凭量小推导安全 |
+| R27 | P2 容量/保留 **〔复核 2026-11-14：部分成立——TTL 正值校验已落、限流桶键数硬上限与 refresh 清理期限见段 89；队列 / 客户端上限与 RPO·RTO 仍缺〕** | TTL配置缺正值约束，失败限流桶无硬容量上限，refresh记录未定清理期限，队列/客户端上限及RPO/RTO未定。需配置校验与容量试验，不凭量小推导安全。〔**段 89 已落**：`LoginThrottle` 加 `MAX_BUCKETS = 10_000` 硬上限 + 按「最久未触达」淘汰（**只挑未锁定的键**，避免为腾位而提前解除有效锁）；`RefreshTokenCleanupTask` 按 `scds.auth.refresh.retention`（默认 `7d`）清理**过期已超保留期**的行——判据取 `expires_at` 而非 `revoked_at`，未过期的撤销行作为重放证据保留。**队列 / 客户端上限与 RPO / RTO 仍未定**，保留〕** |
 | R28 | P1 DTO接线 **〔复核 2026-11-14：已落地——toUser 只映射 userId/username/displayName/roles〕** | AccountSession包含Account.passwordHash；必须手动映射User安全字段，禁止直接返回内部载体或把JWT/口令写日志 |
 
 静态入口：

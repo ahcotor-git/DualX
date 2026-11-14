@@ -1,7 +1,18 @@
 # scds-next 交接快照
 
 > 更新：2026-11-14，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 88 B 档本机可闭环收尾：R20 登录时序 dummy hash（代码笔）＋ 全量基线计数口径纠错（文档笔）**——
+> 当前任务：**段 89 R27 容量项 · 本机可闭环子集：`LoginThrottle` 键数硬上限 ＋ refresh 历史行清理期限**——
+> 承段 88「下一段（候选）① R27 容量项」。用户在**无人值守模式**下仅回「继续」，按推荐项推进；R27 逐项拆开后**只有前两项本机可闭环**，
+> **队列 / 客户端上限与 RPO / RTO** 属产品 / 运维口径，**仅登记**。**本段属行为变更**。
+> **① 限流键数硬上限**：`buckets` 由 `HashMap` 改**访问序** `LinkedHashMap` 当 LRU ＋ `MAX_BUCKETS = 10_000`；满额时 `evictStale` 清空壳 → `evictLeastRecentlyUsedUnlocked` 淘汰 → 仍腾不出位则**放弃记这次失败**。**关键口径：淘汰只挑未处于锁定期的键**（有效锁是限流唯一产出，为腾位提前解除它等于自毁长矛），全锁时宁少记一次失败。
+> **② refresh 历史行清理**：`RefreshTokenRepository.deleteExpiredBefore(cutoff, limit)`（`DELETE … LIMIT` 分批）＋ `RefreshTokenCleanupTask`（1 小时一拍、`BATCH_LIMIT = 500`、最多 10 批）＋ `scds.auth.refresh.retention`（默认 `7d`，显式 0 / 负数启动失败）。**关键口径：删除线判据取 `expires_at` 而非 `revoked_at`**——未过期的撤销行是**重放检测证据**，必须留着。
+> **两处踩坑（均已处置）**：① 初版两带参构造器未标 `@Autowired` ⇒ `No default constructor found`（11 个 IT 全挂），收敛为**单参构造 + 静态 `CLOCK`**；② `@Scheduled` **无初始延迟** ⇒ 启动即删行，撞 `ApplicationStartupIT` 的「**启动不改行数**」不变式，改 `initialDelay = PERIOD_MS`（第一拍晚一周期）。
+> **门禁**：`mvn -B clean verify` → **BUILD SUCCESS / 1188 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core **630** ＋ api 139 ＋ app 333；1182 ＋ 3 ＋ 3 ＝ 1188）。
+> **计数口径补充**：`surefire-reports/*.xml` 的 `tests` 属性对纯 `@Nested` 外层类**同样报 0**（`TrackSamplingTest` XML 报 0 但含 21 个 `<testcase>`）⇒ `.txt` / `.xml` 的 `tests` 属性**都不可用**；正确口径＝**模块小结行 / 逐类控制台**（可复算等价物：各模块 `TEST-*.xml` 的 `<testcase>` 计数之和）。
+> **代码笔（5 文件：3 改 2 新，破「≤3 文件」已显式声明例外）**：`LoginThrottle.java` ＋ `LoginThrottleTest.java`（12 → 15）＋ `RefreshTokenRepository.java` ＋ `RefreshTokenCleanupTask.java`（新）＋ `RefreshTokenCleanupTaskIT.java`（新，3 用例）。
+> **文档笔（4 文件，破「≤3 文件」已显式声明例外）**：`docs/testing.md`（§78）＋ `docs/review.md`（R27 复核表行 + 第 4 节行 + 待办口径）＋ `docs/decision-register.md`（段 89）＋ 本快照。
+> 下一项**（候选，按推荐序）**：① **R06 设计决策**（设备登录 × `signing=false`：独立设备能力 or 禁用端点，**需先定设计**）；② 全库行尾 renormalize（大范围 diff，需显式授权）；③ C 档（真机 / GUI / 现场硬件 / T-PROD）；④ R27 剩余项定型（队列 / 客户端上限与 RPO · RTO，**需产品 / 运维口径**）。
+> 上一原子任务：**段 88 B 档本机可闭环收尾：R20 登录时序 dummy hash（代码笔）＋ 全量基线计数口径纠错（文档笔）**——
 > 承段 87「下一段（候选）① B 档」；用户裁定（经 AskUserQuestion）R20 方向「**实施 dummy hash（推荐）**」。
 > **问题（R20，review 表「仍成立」项）**：`AuthService.login` 原 `account==null || !enabled() || !matches(...)` 的 `||` 短路 ⇒「账号不存在/停用」**不做 BCrypt**，可**从响应时间枚举用户名**。
 > **修法**：新增常量 `DUMMY_PASSWORD_HASH`，登录事务内**先无条件算一次** `matches`（不存在用 dummy 摘要 / 存在含停用用真实摘要），两条失败路径 BCrypt 次数一致；开销由未登记账号共用限流桶（`unknown`，5 次锁 5 分钟）**封顶**。
@@ -9,8 +20,6 @@
 > **门禁**：`mvn -B clean verify` → **BUILD SUCCESS / 1182 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 624 ＋ api 139 ＋ app 333）。
 > **计数口径纠错（重要）**：复核时一度以「汇总各模块 `surefire-reports/*.txt`」得 core 603 / 总计 **1161**，误判「用例静默未跑」；**根因**：`TrackSamplingTest` 是**纯 `@Nested`**（外层 `.txt` 报 `0`，少算 `$Sampler` 13 + `$Writer` 8 = **21**）。**正确口径**＝Surefire **模块小结行 / 控制台逐类输出**。基线对账：1162（`617aa0b`）＋ 18（solver）＋ 1（`0cd9ba3`）＋ 1（R20）＝ **1182**，**无用例丢失**。
 > **文档笔（4 文件，破「≤3 文件」已显式声明例外）**：`docs/testing.md`（§77）＋ `docs/review.md`（R20 行就地批注 / 待办 4 → 3）＋ `docs/decision-register.md`（段 88）＋ 本快照。
-> 下一项**（候选，按推荐序）**：① **R27 容量项**（`LoginThrottle` 键数硬上限 / refresh 清理期限 / 队列·客户端上限与 RPO·RTO；设计较重，**建议独立成段**）；② **R06 设计决策**（设备登录 × `signing=false`：独立设备能力 or 禁用端点）；③ 全库行尾 renormalize（大范围 diff，需显式授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）。
-> 上一原子任务：**段 87 A-3：新建 `.gitattributes` 统一行尾**（纯仓库元数据，2 文件，推送 `7aa6240`；口径：默认 `* text=auto eol=lf`、文本显式 LF、`*.bat`/`*.cmd` 保留 CRLF、约 30 项 `binary`；**未做全库 renormalize**）。
 > 上一原子任务：**段 86 A 档本机文档收尾：A-2 快照回写 ＋ A-4 架构 / 环境手册与现状对齐**（`architecture.md` / `environments.md` 顶部「现状更新（2026-11-14，段 86）」banner ＋ 点名行更正；2 文件，未破 ≤3）。
 > 上一原子任务：**段 85 审查报告全表复核：`R01~R28` 逐条重新核验（纯文档：`review.md` 全表复核章节 + 各行就地复核批注）**——
 > 承段 84，并经用户就「本机还可继续完善哪些事项」作答后助理推荐的 **A-1（`review.md` 余项复核更正）**；用户回「继续」推进本段。
@@ -1511,13 +1520,15 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn -B clean verify`：2026-11-14（段 88），**1182项，失败/错误/跳过均0**：
-protocol19 + solver18 + gateway49 + **core624**（622→624，+2 = `0cd9ba3` 的 `SituationStateServiceTest` +1 ＋ 段 88 R20 `AuthServiceIT` +1）+ api139 + app333。
-（上一基线为 2026-11-10 的 **1162 项 / core622**〔§70，solver/domain 计 0〕；此后 `39d0b9b` 令 solver 由零测试到回归网 **+18**（UwbSolver 10 + UwbFilter 8），
-`0cd9ba3` 令 core **+1**，段 88 R20 再 **+1**——即 1162 → 1182，**无用例丢失**，详见 testing §70 / §77。）
+**当前**全量`mvn -B clean verify`：2026-11-14（段 89），**1188项，失败/错误/跳过均0**：
+protocol19 + solver18 + gateway49 + **core630**（624→630，+6 = 段 89 `LoginThrottleTest` 12→15〔+3〕＋ 新增 `RefreshTokenCleanupTaskIT`〔+3〕）+ api139 + app333。
+（上一基线为 2026-11-14 段 88 的 **1182 项 / core624**；此前 2026-11-10 §70 为 **1162 项 / core622**〔solver/domain 计 0〕——`39d0b9b` 令 solver 由零测试到回归网 **+18**（UwbSolver 10 + UwbFilter 8），
+`0cd9ba3` 令 core **+1**，段 88 R20 **+1**，段 89 R27 **+6**——即 1162 → 1182 → 1188，**无用例丢失**，详见 testing §70 / §77 / §78。）
 计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）或**控制台逐类输出**取值；按 `target/surefire-reports/*.txt`
 的 `Tests run` 累加会**少算 `@Nested` 外层类**——`TrackSamplingTest` 外层 `.txt` 报 `0`，其 `$Sampler` 13 + `$Writer` 8 = **21** 项不计入
-（段 88 曾据此误算 core 603 / 总计 1161）；口径说明见 testing §77.3（及 §20）。
+（段 88 曾据此误算 core 603 / 总计 1161）；**`surefire-reports/*.xml` 的 `tests` 属性对纯 `@Nested` 外层类同样报 `0`**
+（段 89 据 XML `tests` 属性求和误得 core 609），可复算的等价口径是**各模块 `TEST-*.xml` 的 `<testcase>` 计数之和**；
+口径说明见 testing §77.3 / §78.3.1（及 §20）。
 L6 单实例保护口径收口新增证据：**无测试增减**——本任务只改类 javadoc 与文档（`testing.md` §28.3/§29.3 订正 +
 新增第 30 节、`decision-register.md` 网关下行段订正 + 文末「L6 口径订正」节），全量仍 **1151 项**（0/0/0）不变；
 判据与现场验收清单详见 testing 第 30 节。

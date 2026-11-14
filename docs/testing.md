@@ -5106,3 +5106,88 @@ PC4「未完成导出即下载 → 409 `REPLAY_EXPORT_FAILED`」（需人工造�
 - **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式授权**）。
 - **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换。
 
+## 78. R27 容量项（本机可闭环子集）：`LoginThrottle` 键数硬上限 ＋ refresh 历史行清理期限
+
+承段 88「下一段（候选）① **R27 容量项**」。R27 原为「部分成立」，逐项拆开后只有**前两项**能在本机闭环，
+本段落这两项；**队列 / 客户端上限与 RPO / RTO** 属产品 / 运维口径，本机不可闭环，**仅登记**（见 §78.4）。
+
+### 78.1 ① `LoginThrottle` 键数硬上限 ＋ 淘汰（`MAX_BUCKETS = 10_000`）
+
+- **原状**：`buckets` 是 `HashMap`，**键数无上限**。`evictStale` 只回收「窗口内已无失败」的**空壳桶**，
+  对「仍在窗口内的键」一个都不放。**账号维度天然有界**（未登记用户名共用 `unknown` 一个键），
+  但**客户端 IP 维度按请求源地址建键**——伪造源地址的一方可以把它灌到无穷，空壳清理挡不住。
+- **落点**：`Map<String, Bucket> buckets = new LinkedHashMap<>(16, 0.75f, true)`——**访问序**的 `LinkedHashMap`
+  当 LRU，迭代顺序即「最久未触达在前」，淘汰无需额外排序；新增 `MAX_BUCKETS = 10_000` 硬上限，
+  测试可经包级构造器（`LoginThrottle(Clock, int maxBuckets)`）收紧以走通淘汰路径。
+- **满额流程**（`admitBucket`）：`evictStale(now)` 先清空壳 → 仍满则 `evictLeastRecentlyUsedUnlocked(now)`
+  → 仍无法腾位则**放弃登记本次失败**（返回 `null`）。
+- **淘汰只挑未处于锁定期的键（关键口径）**：正在生效的锁是限流**唯一的产出**，为腾位置提前解除它
+  等于**自毁长矛**。故 `evictLeastRecentlyUsedUnlocked` 从链表头起扫到**第一个未锁定**的键才删；
+  若现存键**全部在锁定期**，则宁可**少记这一次失败**。代价有界：单 IP 每 5 分钟至多 30 次失败、
+  锁定期内一次都不记（`recordFailure` 只在未锁定时被调用），10 000 个键同时全锁已远超正常量级。
+
+### 78.2 ② refresh 历史行清理期限（`scds.auth.refresh.retention`，默认 `7d`）
+
+- **原状**：`t_refresh_token` **只增不减**——每次登录、每次滚动刷新各插一行；退出 / 重放处置只置
+  `revoked_at` 而不删。行数随使用时长无界增长，长期运行缓慢吃盘。
+- **删除线取「过期满保留期」——判据是 `expires_at` 而不是 `revoked_at`（关键口径）**：
+  已撤销行在**令牌有效期内**是**重放检测的证据**（`refresh` 靠它识别「同一令牌被两端换发」），
+  **不能一撤销就删**；而令牌一旦**过期**，即便被重放也会先撞过期判定，行本身不再有用。
+  故「`expires_at` 早于 `now - retention`」是**唯一安全的删除线**，**未过期的撤销行一律留着**。
+- **载体**：`RefreshTokenRepository.deleteExpiredBefore(Instant cutoff, int limit)`（`DELETE … LIMIT` 分批，
+  避免一次大删除长时间持锁而干扰登录路径）＋ `RefreshTokenCleanupTask`（core `@Component`）：
+  `PERIOD_MS = 3_600_000L`（1 小时一拍）、`BATCH_LIMIT = 500`、`MAX_BATCHES_PER_TICK = 10`。
+- **配置**：`scds.auth.refresh.retention`（`@ConfigurationProperties("scds.auth.refresh")`，`@DefaultValue("7d")`），
+  紧凑构造器校验**显式配 0 / 负数即启动失败**（保留期为 0 会让撤销行刚过期就被抹掉，而配置上看不出异常），
+  与 `scds.command.sent-ttl` 同一取向。
+- **触发约定**：`@EnableScheduling` **只在唯一入口 `ScdsNextApplication`**，故本任务在应用内自动跑、
+  在 `scds-core` 测试上下文里**不会自己跑**（测试直接调 `tick()`），与 `ExerciseCommandExpiryTask` 同源。
+  **第一拍带 `initialDelay`（＝一个周期），不随启动立即开跑**——理由见 §78.3。
+
+### 78.3 门禁实测（2026-11-14，`scds-local-mysql` 13306 healthy，Java 21）
+
+命令：仓库根 `mvn -B clean verify` → **BUILD SUCCESS**。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| solver | 18 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | **630** | 0/0/0 | **624 → 630（+6）**：`LoginThrottleTest` **12 → 15**（+3）＋ `RefreshTokenCleanupTaskIT`（新，+3） |
+| api | 139 | 0/0/0 | 未改动 |
+| app | 333 | 0/0/0 | 未改动（`ApplicationStartupIT` 曾因本段新增任务失败，修在 §78.3.2） |
+| domain | 0 | 无测试 | |
+| 总计 | **1188** | **0/0/0** | 全 reactor SUCCESS；1182（段 88）＋ 3 ＋ 3 ＝ **1188** |
+
+**78.3.1 计数口径（承接 §77.3 的教训，此处给出可复算的方法）**：`surefire-reports/*.xml` 的
+**`tests` 属性对纯 `@Nested` 外层类同样报 `0`**（`TrackSamplingTest` 的 XML `tests="0"`，但文件里**确有 21 个
+`<testcase>`**）⇒ **XML 的 `tests` 属性求和同样少算**（本段实测 core 609）。**可复算的正确口径** = 各模块
+`TEST-*.xml` 中 **`<testcase>` 元素计数**之和（本段实测 core **630**，与 Surefire 模块小结一致）；
+`.txt` / `.xml` 的 `tests` 属性**两者都不可作为计数依据**。
+
+**78.3.2 启动即清理与「启动不改行数」不变式的冲突（本段发现并处置）**：首轮全量 `verify` 里
+`ApplicationStartupIT.productionApplicationStartsAndClosesWithRealSecurityAndDatabase` **失败**：
+
+```
+expected: {"t_account"=2L, …, "t_refresh_token"=2L}
+ but was: {"t_account"=2L, …, "t_refresh_token"=0L}
+```
+
+- **根因**：`@Scheduled(fixedDelay = …)` **没有初始延迟**，第一拍在**上下文启动时立即执行**，
+  把测试库里 2 条**已过期超过 7 天**的遗留行删掉了。该 IT 以「启动前后 `t_account` /
+  `t_account_role` / `t_refresh_token` / `t_exercise` **行数相等**」守一条**既有安全不变式**
+  ——「**启动过程不改动库内数据**」，现场重启不该顺带触发一轮删除。
+- **处置**：`@Scheduled(fixedDelay = PERIOD_MS, initialDelay = PERIOD_MS)`——**第一拍晚一个周期**。
+  清理本身不紧急（要删的行早已过期），推迟一个周期没有代价；不变式因此保持成立。
+  （既有的 `ExerciseCommandExpiryTask` / `ExportTaskService` 无 `initialDelay`，但它们**只在有待处理行时才写库**，
+  常态是空操作，故不与该不变式冲突；本任务**每一拍都删行**，性质不同。）
+
+### 78.4 未验项 / 后续
+
+- **R27 剩余（本机不可闭环，仅登记）**：**队列 / 客户端上限**与 **RPO / RTO** 定型——属产品 / 运维口径，
+  需与现场标准一起定，不在本机推导。
+- **未验项**：① 键数上限的**真实灌入压力测试**未做（单测只以收紧上限到 2 / 3 / 4 验证淘汰与「不解除有效锁」两条性质）；
+  ② 清理任务的**真装配节拍**未观测（`scds-core` 测试上下文不跑 `@Scheduled`；`scds-app` 的 `ApplicationStartupIT` 只覆盖
+  「启动窗口内不删行」，**未等满一小时拍**）；③ 保留期默认值 `7d` 与跨段实测的取值依据未做容量试验。
+- **R20 遗留**：密码长度约束仍未定义；**全库行尾 renormalize** 需显式授权；**C 档**（真机 / GUI / 现场硬件 / T-PROD）仍未闭环。
+
