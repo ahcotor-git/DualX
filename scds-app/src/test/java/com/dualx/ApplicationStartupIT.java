@@ -2,6 +2,7 @@ package com.dualx;
 
 import com.dualx.api.auth.AccountAuthController;
 import com.dualx.api.auth.AuthController;
+import com.dualx.api.auth.DeviceAuthController;
 import com.dualx.api.error.ApiExceptionHandler;
 import com.dualx.api.security.AuthJwtProperties;
 import com.dualx.api.security.RsaTokenSigner;
@@ -130,8 +131,10 @@ class ApplicationStartupIT {
             assertThat(context.getBeansOfType(SecurityConfig.class)).hasSize(1);
             assertThat(context.getBeansOfType(ApiExceptionHandler.class)).hasSize(1);
             assertThat(context.getBeansOfType(AuthController.class)).hasSize(1);
-            // 签发端点随 signing-enabled 条件注册：只验签实例不注册 login/refresh/logout（设计 03 Q1）
+            // 签发端点随 signing-enabled 条件注册：只验签实例不注册账号 login/refresh/logout（设计 03 Q1）
             assertThat(context.getBeansOfType(AccountAuthController.class)).hasSize(signing ? 1 : 0);
+            // 设备登录同样要签设备令牌，故与账号签发共用能力开关（review R06）
+            assertThat(context.getBeansOfType(DeviceAuthController.class)).hasSize(signing ? 1 : 0);
             assertThat(context.getBeansOfType(AdminAccountBootstrap.class)).hasSize(1);
             assertThat(context.getBeansOfType(AuthService.class)).hasSize(1);
             assertThat(context.getBean(AdminProperties.class))
@@ -203,6 +206,18 @@ class ApplicationStartupIT {
                         401, "AUTH_TOKEN_INVALID", "/api/v1/auth/me");
                 expectProblem(mapper, get(client, base, "/api/v1/full-startup-missing", admin),
                         404, "ROUTE_NOT_FOUND", "/api/v1/full-startup-missing");
+                // 三个「匿名换取令牌」的入口一律免鉴权：请求必须能抵达 dispatcher。
+                // signing=true 时它们存在，空体先撞契约校验（400）；signing=false 时对应 controller
+                // 不注册、路由缺席（404）。若把放行随能力一并收回，匿名客户端会先撞上末条兜底的
+                // hasAuthority(AUD_EDGE) 拿到 401——那是「令牌不成立」，不是「本实例没有这个能力」
+                // （testing.md RT-DISABLED 记录过这个偏差，T-SEC-4 要求带 / 不带 token 都是 404）。
+                int issuanceStatus = signing ? 400 : 404;
+                String issuanceCode = signing ? "VALIDATION_FAILED" : "ROUTE_NOT_FOUND";
+                for (String path : List.of("/api/v1/auth/login", "/api/v1/auth/refresh",
+                        "/api/v1/auth/device/login")) {
+                    expectProblem(mapper, post(client, base, path, "{}", null),
+                            issuanceStatus, issuanceCode, path);
+                }
             }
             assertThat(rowCounts(environment)).isEqualTo(before);
         } finally {
@@ -225,6 +240,18 @@ class ApplicationStartupIT {
             throws Exception {
         var request = HttpRequest.newBuilder(URI.create(base + path))
                 .timeout(Duration.ofSeconds(5)).header("X-Trace-Id", "full-startup-http").GET();
+        if (bearer != null) {
+            request.header("Authorization", "Bearer " + bearer);
+        }
+        return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> post(HttpClient client, String base, String path, String body, String bearer)
+            throws Exception {
+        var request = HttpRequest.newBuilder(URI.create(base + path))
+                .timeout(Duration.ofSeconds(5)).header("X-Trace-Id", "full-startup-http")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body));
         if (bearer != null) {
             request.header("Authorization", "Bearer " + bearer);
         }

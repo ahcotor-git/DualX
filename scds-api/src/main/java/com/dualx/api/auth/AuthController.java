@@ -1,6 +1,5 @@
 package com.dualx.api.auth;
 
-import com.dualx.api.dto.auth.DeviceLoginRequest;
 import com.dualx.api.dto.auth.DeviceSelf;
 import com.dualx.api.dto.auth.DeviceTokenPair;
 import com.dualx.api.dto.auth.TokenPair;
@@ -16,29 +15,28 @@ import com.dualx.core.error.BusinessException;
 import com.dualx.core.ledger.VestLedgerService;
 import com.dualx.core.port.DeviceTokenClaims;
 import com.dualx.core.state.SituationQuery;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
 /**
- * 认证接口中不随签发能力变化的部分：取自身信息与设备认证。
+ * 认证接口中不随签发能力变化的部分：取自身信息。
  *
- * <p>{@code GET /api/v1/auth/me} 只读，只验签不签发的实例也要能回答「我是谁」，因此本类
- * 不条件注册。签发端点 {@code login} / {@code refresh} / {@code logout} 在
- * {@link AccountAuthController}，它们只在 {@code signing-enabled=true} 时存在。</p>
+ * <p>{@code GET /api/v1/auth/me} 与 {@code GET /api/v1/auth/device/me} 都只验签不签发，只验签的
+ * 实例同样要能回答「我是谁」、要能服务已签发的设备令牌，因此本类**不条件注册**。签发端点则随
+ * 能力开关注册：账号三件套 {@code login} / {@code refresh} / {@code logout} 在
+ * {@link AccountAuthController}，设备登录在 {@link DeviceAuthController}，它们只在
+ * {@code signing-enabled=true} 时存在。</p>
  *
- * <p>{@code device/login} 与 {@code device/me} 都已接 {@link DeviceAuthService}（绑定密钥校验 +
- * SID 单端在线）：{@code me} 的身份来自台账、实时状态来自态势读侧，两者都不是本层自己的数据。</p>
+ * <p>{@code device/me} 已接 {@link DeviceAuthService}（SID 单端在线）：身份来自台账、实时状态
+ * 来自态势读侧，两者都不是本层自己的数据。</p>
  *
  * <p>包内共享的「服务结果 → 契约 DTO」映射也放在本类：它是包里唯一无条件存在的控制器，
- * 让条件注册的 {@link AccountAuthController} 反向依赖它，方向才稳定。</p>
+ * 让条件注册的 {@link AccountAuthController} 与 {@link DeviceAuthController} 反向依赖它，
+ * 方向才稳定。</p>
  */
 @RestController
 public class AuthController {
@@ -60,14 +58,6 @@ public class AuthController {
     @GetMapping("/api/v1/auth/me")
     public User getCurrentUser(@AuthenticationPrincipal Jwt jwt) {
         return toUser(authService.me(accountId(jwt)));
-    }
-
-    /** 单兵终端登录：马甲编号 + 绑定密钥换取设备令牌。 */
-    @PostMapping("/api/v1/auth/device/login")
-    public DeviceTokenPair deviceLogin(@RequestBody @Valid DeviceLoginRequest request,
-                                      HttpServletRequest httpRequest) {
-        return toDeviceTokenPair(deviceAuthService.login(request.vestNum(), request.secret(),
-                httpRequest.getRemoteAddr()));
     }
 
     /**

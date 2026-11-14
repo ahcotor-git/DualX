@@ -110,6 +110,12 @@ public class DeviceAuthService {
         }
     }
 
+    /**
+     * 只验签的实例上本方法不会被走到：{@code signing-enabled=false} 时
+     * {@code DeviceAuthController} 整类不注册，路由缺席即 404（review R06）。
+     * 留着它是与 {@link AuthService#login} 对称的兜底——万一将来有别的调用方绕过 HTTP
+     * 直接调本服务，也应是明确的失败，而不是签出一枚没人验得过的令牌。
+     */
     private void requireSigning() {
         if (!tokenSigner.enabled()) {
             throw new IllegalStateException("Token signing is disabled");

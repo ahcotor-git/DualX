@@ -2,6 +2,7 @@ package com.dualx.api;
 
 import com.dualx.api.auth.AccountAuthController;
 import com.dualx.api.auth.AuthController;
+import com.dualx.api.auth.DeviceAuthController;
 import com.dualx.api.command.CommandController;
 import com.dualx.api.device.DeviceController;
 import com.dualx.api.error.ApiExceptionHandler;
@@ -249,6 +250,7 @@ class ApiSkeletonSmokeIT {
         });
         mockMvc = MockMvcBuilders.standaloneSetup(
                         new AccountAuthController(authService),
+                        new DeviceAuthController(deviceAuthService),
                         new AuthController(authService, deviceAuthService, vestLedgerService, situationQuery),
                         new ExerciseController(planService, lifecycle, situationQuery),
                         new CommandController(commandService),

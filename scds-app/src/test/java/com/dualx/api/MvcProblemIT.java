@@ -1,6 +1,7 @@
 package com.dualx.api;
 
 import com.dualx.api.auth.AuthController;
+import com.dualx.api.auth.DeviceAuthController;
 import com.dualx.api.error.ApiExceptionHandler;
 import com.dualx.api.support.TraceIdFilter;
 import com.dualx.core.auth.AuthService;
@@ -84,7 +85,7 @@ class MvcProblemIT {
             SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class,
             OAuth2ResourceServerAutoConfiguration.class, ManagementWebSecurityAutoConfiguration.class})
     @Import({ApiExceptionHandler.class, TraceIdFilter.class, AuthController.class,
-            Endpoints.class, LegacyValidatedEndpoints.class})
+            DeviceAuthController.class, Endpoints.class, LegacyValidatedEndpoints.class})
     static class MvcApplication {
 
         /** 本测试只验证 MVC 错误出口，不建立数据库上下文：账号服务用替身，方法不会被调到。 */

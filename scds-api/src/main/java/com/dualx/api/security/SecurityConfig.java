@@ -26,6 +26,10 @@ import java.util.List;
  * <p><b>白名单是只增不改清单</b>：每新增一条 {@code permitAll}，必须回到
  * docs/design/03-auth.md §4.4 登记一行。鉴权漏洞几乎从来不是「判断写错」，
  * 而是「某次联调顺手放行了一个端点，然后再没人删」。</p>
+ *
+ * <p><b>本类不读能力开关。</b>「哪些端点存在」由 controller 的条件注册决定，
+ * 过滤链只管「哪些端点免鉴权」。两者混在一起时，收窄白名单会顺手把缺失路由的 404
+ * 变成 401——匿名客户端再也看不到「本实例没有这个能力」。</p>
  */
 @Configuration
 @EnableMethodSecurity
@@ -42,14 +46,11 @@ public class SecurityConfig {
 
     private final ApiProblemAuthenticationEntryPoint authenticationEntryPoint;
     private final ApiProblemAccessDeniedHandler accessDeniedHandler;
-    private final AuthJwtProperties properties;
 
     public SecurityConfig(ApiProblemAuthenticationEntryPoint authenticationEntryPoint,
-                          ApiProblemAccessDeniedHandler accessDeniedHandler,
-                          AuthJwtProperties properties) {
+                          ApiProblemAccessDeniedHandler accessDeniedHandler) {
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.accessDeniedHandler = accessDeniedHandler;
-        this.properties = properties;
     }
 
     @Bean
@@ -86,14 +87,14 @@ public class SecurityConfig {
         // 当成实例不健康；/error 是 Boot 的错误页转发目标，拦它会把所有错误变成 401。
         registry.requestMatchers(HttpMethod.GET, "/actuator/health", "/error").permitAll();
 
-        // 设备登录恒在：它属于边缘本地事务（校验 t_vest 绑定关系），与账号签发能力无关。
-        registry.requestMatchers(HttpMethod.POST, "/api/v1/auth/device/login").permitAll();
-
-        if (properties.signingEnabled()) {
-            // 仅在具备签发能力时才放行——否则这两个端点根本没注册（404），
-            // 放行一条不存在的路径只会让白名单与真实路由对不上账。
-            registry.requestMatchers(HttpMethod.POST, "/api/v1/auth/login", "/api/v1/auth/refresh").permitAll();
-        }
+        // 三个「匿名换取令牌」的入口一律放行：它们本来就不带 Bearer，与能力开关无关。
+        // 关闭签发能力的实例上对应 controller 不注册，路由缺席即 404——但这条 404 只有让请求
+        // **抵达 dispatcher** 才看得见：若连放行也随能力一并收回去，匿名客户端会先撞上末条
+        // 兜底的 hasAuthority(AUD_EDGE)，拿到 401「令牌不成立」这个与本端点语义无关的信号
+        // （testing.md RT-DISABLED 记录过这个偏差；T-SEC-4 要求带 / 不带 token 都是 404）。
+        registry.requestMatchers(HttpMethod.POST,
+                        "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/device/login")
+                .permitAll();
 
         // 受保护文件的签名 URL（D09-②）：授权凭据是短时效签名而非令牌，故免 Bearer——
         // `<img>` 与浏览器不会为图片请求带上 Authorization。**放行不等于放行访问**：
