@@ -14,6 +14,41 @@
 > 逐项证据见 [testing.md](testing.md) 第 7~15 节与第 3 节测试矩阵。其余条目未被重新核验，
 > 仍以本文为准（尤其 R05、R06、R26 Flutter 客户端、R27 容量与保留）。本文保留为历史记录。
 
+> **全表复核（2026-11-14，段 85）**：对 **R01~R28 逐条**重新核验（此前 2026-10-27 注记只覆盖 R07/R08/R12/R13/R17 与 R21 的 COMMAND 部分）。
+> 下表为结论与当前证据；**各行已就地加复核批注**。「仍成立 / 部分成立」者**保留为待办**，不因 green build 放行。
+
+| ID | 复核结论 | 依据（当前代码） |
+|---|---|---|
+| R01 | 已落地 | `SecurityConfig` 已改为 `/actuator/metrics/**`（整棵子树，要求 ADMIN）；`SecurityMetricsIT` 覆盖子路径 403 |
+| R02 | 已落地 | `JwtDecoderConfig` 统一时间校验，纯过期 → `AUTH_TOKEN_EXPIRED`；`SecurityJwtValidationIT` 覆盖纯过期 / 混合错误 / 时钟偏移 |
+| R03 | 已落地 | `JwtDecoderConfig.validateRawClaims` 强制 `exp/sub/aud/iss`（设备另需 `sid`）；缺 `exp` 返回 401 `AUTH_TOKEN_INVALID` |
+| R04 | 已落地 | 自定义 `ApiExceptionHandler`（`@Order(-1)`）捕获 `MethodArgumentNotValidException` → `VALIDATION_FAILED` + `traceId`；`MvcProblemIT` 覆盖 |
+| R05 | 已落地 | 账号签发端点拆出 `AccountAuthController` 并以 `@ConditionalOnProperty(signing-enabled)` 条件注册；`signing=false` 时路由缺席 → 404 |
+| R06 | **部分成立** | 已加门控，但**未解决**：`DeviceAuthService.login` 首行 `requireSigning()`，`signing=false` 时抛 `IllegalStateException` → 500；「独立设备能力 or 禁用该端点」的设计决策**仍待定**，且无该场景测试 |
+| R07 / R08 | 已被取代 | 2026-10-27 已记，见 testing.md 第 7~15 节 |
+| R09 | 已落地 | 迁移按递增落地：V1~V7、V9、V10、V11（V8 空缺、不补，见 testing.md:1029） |
+| R10 | 已落地 | 自愈已实现：`V10` 增 `owner_instance/heartbeat_at/end_reason`；`ExerciseLivenessRecover` Runner 启动收尾；`ExerciseLogType.SYSTEM`；各仓储 `deleteByExerciseId` |
+| R11 | **部分成立** | Runner 时机 + 恢复门禁（就绪位 + 503 `INSTANCE_NOT_READY`）已落；**单实例保护仍在部署层**（容器约定），Java 侧无同库互斥 / 分布式锁 |
+| R12 / R13 | 已被取代 | 2026-10-27 已记，见 testing.md |
+| R14 | 已落地 | `SecurityConfig` 按域写权限矩阵（台账/基站=ADMIN；想定/演习/地图/复盘=DIRECTOR+；指令/链路另计）；`RolePermissions` 与服务端同源；`DeviceScope` 裁剪设备可见字段 |
+| R15 | 已落地 | `DeviceLinkAdmin` 注释已改为 409 语义（`DEVICE_LINK_ALREADY_OPEN`）；网关新增 `UwbSerialLink` 真实串口实现 |
+| R16 | **部分成立** | `AuthJwtProperties` 构造器强制 `jwks-uri` 为空（非空即拒启动）；但 `JwtDecoderConfig` 远端分支仍在（生产不可达），`jwks-refresh-ms` **仍无消费者** |
+| R17 | 已被取代 | 2026-10-27 已记，见 testing.md |
+| R18 | 已落地 | 限流判定在校验口令**之前**，`LoginThrottle.lockout()` 实例级 `synchronized`；`AuthServiceIT` / `LoginThrottleTest` 覆盖并发绕过 |
+| R19 | 已落地 | 限流键改用**库内 `account.id()`**（未登记账号收敛到 `unknown`），大小写变体共享同桶；`AuthServiceIT` 覆盖 |
+| R20 | 仍成立 | 账号不存在 / 停用走 `\|\|` 短路，**不做** BCrypt；全库无 dummy hash；仅错误码相同，时序未抹平 |
+| R21 | 已落地 | 各控制器统一抛 `BusinessException(ApiErrorCode.*)` 交全局出口，不再默认 500（COMMAND 部分 2026-10-27 已记） |
+| R22 | 已落地 | 新增 `VestLedgerService.retire()` 实现**逻辑注销**（置 `enabled=false` + 清会话）；`DeviceController` 走服务层，不直调物理删除 |
+| R23 | **部分成立** | 已分离**独立测试库**（`scds_next_test` / `scds_test` 用户，不再与开发库共库）；仍与开发库**共用同一本机容器**（13306）；`AuthServiceIT` 真提交 + `@AfterEach` 清理为**有意**设计（验真实提交与行锁） |
+| R24 | **部分成立** | 已有 `deploy/minipc`（compose + `deploy.sh` / `verify.sh`，后端用不可变 tag）；仍 **`mysql:8.4` 浮动标签**、公网 TLS 未落、备份 / 恢复未验证、无代码级 dev 密钥拒用门禁（仅文档约定） |
+| R25 | **部分成立** | `ScdsUwbProperties` banner 仍有 `modeEn/uwbEn` 重复标识；`deployment-mode` 无消费者属**正交设计登记**（非缺陷） |
+| R26 | 已更正（误报） | 见该行批注：Flutter 单工程双端 + 持续 Poll + 会话落盘均已落地 |
+| R27 | **部分成立** | TTL 正值 / 顺序校验已落（`AuthJwtProperties.requirePositive` 等）；**限流桶无硬上限**、**refresh 记录无清理期限**、**队列 / 客户端上限与 RPO / RTO 未定** 仍成立 |
+| R28 | 已落地 | `AuthController.toUser` 只映射 `userId/username/displayName/roles`，**不含 `passwordHash`** |
+
+**复核后仍成立的待办（4 项）**：R06（设备登录 × 禁用签发）、R20（登录时序）、R24（发布前运维项）、R27（容量 / 保留）。
+**部分成立、其余落点未完成（4 项）**：R11（单实例保护）、R16（离线声明）、R23（测试隔离）、R25（配置事实）。
+
 ## 1. 结论
 
 项目是可构建的多模块后端基础工程，协议、仓储和部分账号核心能力已验证，
@@ -30,11 +65,11 @@
 
 | ID | 优先级 | 事实、影响与修复方向 | 证据 |
 |---|---|---|---|
-| R01 | P1 | 指标只保护精确/actuator/metrics，VIEWER访问jvm.memory.used子路径得到200。匹配整个metrics子树并加载真实安全链回归，不能只测根路径403 | [SecurityConfig:99-100](../scds-api/src/main/java/com/dualx/api/security/SecurityConfig.java#L99-L100)、RT-METRICS-DETAIL |
-| R02 | P1 | 正确签名、exp已过300s的JWT得到401 INVALID，而目标EXPIRED。EntryPoint只识别Spring JwtValidationException，手搭Nimbus processor还会先处理时间claims。统一时间校验入口或明确异常分类，必须用生产decoder真实过期令牌验证 | [decoder:98-100](../scds-api/src/main/java/com/dualx/api/security/JwtDecoderConfig.java#L98-L100)、[EntryPoint:62-70](../scds-api/src/main/java/com/dualx/api/security/ApiProblemAuthenticationEntryPoint.java#L62-L70)、RT-EXPIRED |
-| R03 | P1 | 缺exp的合法签名账号用途JWT通过认证并进501占位。仅安装默认时间validator不等于强制exp存在。新增用途级必需claims、类型和边界验证，至少exp/sub/aud；设备还要sid | [decoder:59-62](../scds-api/src/main/java/com/dualx/api/security/JwtDecoderConfig.java#L59-L62)、RT-CLAIMS |
-| R04 | P1 | POST device/login JSON={}得到Boot默认400 Problem，无code/traceId，违反统一错误硬约束。自定义Advice在standalone能工作，不代表与Boot ProblemDetails advice共存时生效；调整异常出口优先级/整合策略，覆盖所有Spring MVC错误 | [ApiExceptionHandler:29-46](../scds-api/src/main/java/com/dualx/api/error/ApiExceptionHandler.java#L29-L46)、[application.yml](../scds-app/src/main/resources/application.yml)、RT-VALIDATION |
-| R05 | P1 | signing=false时无令牌POST auth/login得到401，目标404；AuthController无条件注册、过滤链又只在true时放行。条件Controller和“缺席路由也返回404”的授权顺序要一起解决，测带token/不带token两种情况 | [SecurityConfig:92-96](../scds-api/src/main/java/com/dualx/api/security/SecurityConfig.java#L92-L96)、[AuthController](../scds-api/src/main/java/com/dualx/api/auth/AuthController.java)、RT-DISABLED |
+| R01 | P1 **〔复核 2026-11-14：已落地〕** | 指标只保护精确/actuator/metrics，VIEWER访问jvm.memory.used子路径得到200。匹配整个metrics子树并加载真实安全链回归，不能只测根路径403 | [SecurityConfig:99-100](../scds-api/src/main/java/com/dualx/api/security/SecurityConfig.java#L99-L100)、RT-METRICS-DETAIL |
+| R02 | P1 **〔复核 2026-11-14：已落地〕** | 正确签名、exp已过300s的JWT得到401 INVALID，而目标EXPIRED。EntryPoint只识别Spring JwtValidationException，手搭Nimbus processor还会先处理时间claims。统一时间校验入口或明确异常分类，必须用生产decoder真实过期令牌验证 | [decoder:98-100](../scds-api/src/main/java/com/dualx/api/security/JwtDecoderConfig.java#L98-L100)、[EntryPoint:62-70](../scds-api/src/main/java/com/dualx/api/security/ApiProblemAuthenticationEntryPoint.java#L62-L70)、RT-EXPIRED |
+| R03 | P1 **〔复核 2026-11-14：已落地〕** | 缺exp的合法签名账号用途JWT通过认证并进501占位。仅安装默认时间validator不等于强制exp存在。新增用途级必需claims、类型和边界验证，至少exp/sub/aud；设备还要sid | [decoder:59-62](../scds-api/src/main/java/com/dualx/api/security/JwtDecoderConfig.java#L59-L62)、RT-CLAIMS |
+| R04 | P1 **〔复核 2026-11-14：已落地〕** | POST device/login JSON={}得到Boot默认400 Problem，无code/traceId，违反统一错误硬约束。自定义Advice在standalone能工作，不代表与Boot ProblemDetails advice共存时生效；调整异常出口优先级/整合策略，覆盖所有Spring MVC错误 | [ApiExceptionHandler:29-46](../scds-api/src/main/java/com/dualx/api/error/ApiExceptionHandler.java#L29-L46)、[application.yml](../scds-app/src/main/resources/application.yml)、RT-VALIDATION |
+| R05 | P1 **〔复核 2026-11-14：已落地〕** | signing=false时无令牌POST auth/login得到401，目标404；AuthController无条件注册、过滤链又只在true时放行。条件Controller和“缺席路由也返回404”的授权顺序要一起解决，测带token/不带token两种情况 | [SecurityConfig:92-96](../scds-api/src/main/java/com/dualx/api/security/SecurityConfig.java#L92-L96)、[AuthController](../scds-api/src/main/java/com/dualx/api/auth/AuthController.java)、RT-DISABLED |
 
 上述401/403响应中实际存在X-Trace-Id及Problem.traceId；R04是MVC路径不一致，
 不能误判为TraceIdFilter没有执行。复现记录详见 [testing.md](testing.md)。
@@ -43,18 +78,18 @@
 
 | ID | 优先级/类别 | 事实、影响与下一动作 |
 |---|---|---|
-| R06 | P0 设计冲突 | “设备登录恒可用”与当前signer false禁用三类签发冲突；设备登录确实需要私钥。先确认独立设备能力还是禁用该端点，不能直接接成500 |
-| R07 | P0 未完成安全链 | DeviceAuthService、SID校验/30s缓存主动失效未实现；不存在SID的device token实测进入device/me占位。补单端在线、停用/换绑和事务失败回归，device/me当前仍按裁定留501 |
-| R08 | P0 未完成业务 | 6个auth HTTP方法均501；AuthService并未公开接线。其余60个REST业务方法也为占位，gateway为0源码，没有真实演习/态势链 |
-| R09 | P0 迁移阻塞 | 本地已经应用V9，V8不存在。直接补V8不能作为正常顺序升级：会成为低于当前版本的未应用迁移并受到Flyway校验/顺序限制。建议确认下一递增V10，禁止改历史迁移或默认开启out-of-order |
-| R10 | P0 自愈未实现 | owner_instance/heartbeat/end_reason与SYSTEM日志不支持；原方案“标记但不删除”已被确认决定替代。必须迁移、非协议日志类型、JDBC映射、存证后按场次清理同事务 |
-| R11 | P1 启动设计 | ApplicationRunner不是ApplicationReadyEvent之后，更不保证监听端口不收请求；必须恢复门禁。第二进程连同库时无条件收尾会误停活跃场次，单实例保护属于方案前提 |
-| R12 | P1 契约冲突 | 链路HTTP数组、WS单对象、候选首帧数组/增量对象不满足同构。须确认统一数组快照或信封，修改契约前不能直接实现不同根类型 |
-| R13 | P1 恢复设计 | revision重启归零，旧N与新进程N重叠时仅数值窗口判断会漏掉跨代。须确认epoch或每次重连全量规则；订阅/快照间隙也要并发测试 |
-| R14 | P1 授权未完成 | 大多数接口只检查account aud，尚无写权限及设备字段裁剪。RolePermissions是返回给UI的映射，不是服务端强制授权；接口接线前配明确角色矩阵 |
-| R15 | P1 网关契约冲突 | DeviceLinkAdmin已打开重开的注释，与契约409 ALREADY_OPEN冲突；契约允许UWB SERIAL而端口仅TCP，HTTP可手动开TCP与旧“开演才listen”规则也需统一 |
-| R16 | P1 离线能力描述 | 非空jwks-uri优先远端验签，没有本地降级，jwks-refresh-ms无消费者。严格离线只用本地PEM且jwks-uri空；不得声称多钥PEM链或自动刷新已支持 |
-| R17 | P1 测试缺口 | 无真实Security/WS/完整app自动测试；19协议测试不等于solver数值对拍。已人工启动也不等于物理断网、真驱动、现场长稳、生产节点验证 |
+| R06 | P0 设计冲突 **〔复核 2026-11-14：部分成立——已加 `requireSigning()` 门控，但 `signing=false` 时设备登录仍 500，设计决策待定〕** | “设备登录恒可用”与当前signer false禁用三类签发冲突；设备登录确实需要私钥。先确认独立设备能力还是禁用该端点，不能直接接成500 |
+| R07 | P0 未完成安全链 **〔复核 2026-11-14：已被取代，见 testing.md 第 7~15 节〕** | DeviceAuthService、SID校验/30s缓存主动失效未实现；不存在SID的device token实测进入device/me占位。补单端在线、停用/换绑和事务失败回归，device/me当前仍按裁定留501 |
+| R08 | P0 未完成业务 **〔复核 2026-11-14：已被取代，见 testing.md 第 7~15 节〕** | 6个auth HTTP方法均501；AuthService并未公开接线。其余60个REST业务方法也为占位，gateway为0源码，没有真实演习/态势链 |
+| R09 | P0 迁移阻塞 **〔复核 2026-11-14：已落地——V10/V11 已按递增落地〕** | 本地已经应用V9，V8不存在。直接补V8不能作为正常顺序升级：会成为低于当前版本的未应用迁移并受到Flyway校验/顺序限制。建议确认下一递增V10，禁止改历史迁移或默认开启out-of-order |
+| R10 | P0 自愈未实现 **〔复核 2026-11-14：已落地——自愈 Runner / SYSTEM 日志 / 按场次清理均实现〕** | owner_instance/heartbeat/end_reason与SYSTEM日志不支持；原方案“标记但不删除”已被确认决定替代。必须迁移、非协议日志类型、JDBC映射、存证后按场次清理同事务 |
+| R11 | P1 启动设计 **〔复核 2026-11-14：部分成立——恢复门禁已落，单实例保护仍在部署层〕** | ApplicationRunner不是ApplicationReadyEvent之后，更不保证监听端口不收请求；必须恢复门禁。第二进程连同库时无条件收尾会误停活跃场次，单实例保护属于方案前提 |
+| R12 | P1 契约冲突 **〔复核 2026-11-14：已被取代，见 testing.md〕** | 链路HTTP数组、WS单对象、候选首帧数组/增量对象不满足同构。须确认统一数组快照或信封，修改契约前不能直接实现不同根类型 |
+| R13 | P1 恢复设计 **〔复核 2026-11-14：已被取代，见 testing.md 第 7~15 节〕** | revision重启归零，旧N与新进程N重叠时仅数值窗口判断会漏掉跨代。须确认epoch或每次重连全量规则；订阅/快照间隙也要并发测试 |
+| R14 | P1 授权未完成 **〔复核 2026-11-14：已落地——写权限矩阵 + DeviceScope 已强制〕** | 大多数接口只检查account aud，尚无写权限及设备字段裁剪。RolePermissions是返回给UI的映射，不是服务端强制授权；接口接线前配明确角色矩阵 |
+| R15 | P1 网关契约冲突 **〔复核 2026-11-14：已落地——注释改 409 语义，UwbSerialLink 已实现〕** | DeviceLinkAdmin已打开重开的注释，与契约409 ALREADY_OPEN冲突；契约允许UWB SERIAL而端口仅TCP，HTTP可手动开TCP与旧“开演才listen”规则也需统一 |
+| R16 | P1 离线能力描述 **〔复核 2026-11-14：部分成立——`jwks-uri` 已被强制为空，但远端分支仍在且 `jwks-refresh-ms` 仍无消费者〕** | 非空jwks-uri优先远端验签，没有本地降级，jwks-refresh-ms无消费者。严格离线只用本地PEM且jwks-uri空；不得声称多钥PEM链或自动刷新已支持 |
+| R17 | P1 测试缺口 **〔复核 2026-11-14：已被取代，见 testing.md 第 7~15 节〕** | 无真实Security/WS/完整app自动测试；19协议测试不等于solver数值对拍。已人工启动也不等于物理断网、真驱动、现场长稳、生产节点验证 |
 
 主要证据：
 [V4](../scds-core/src/main/resources/db/migration/V4__exercise.sql)、
@@ -70,17 +105,17 @@
 
 | ID | 优先级 | 事实与建议 |
 |---|---|---|
-| R18 | P1 | AuthService限流检查在账号锁之前，多个并发请求可同时通过未锁定判定，再排队做BCrypt，绕过“第6次校验前拒绝”时序。重新核对原子预算/锁定检查位置，补并发IT |
-| R19 | P1 | DB使用utf8mb4_0900_ai_ci，账号查找忽略大小写/重音；LoginThrottle键使用原字符串。变体失败分散到不同账号桶，需与DB身份规则一致的归一化/账号ID限流，测试IP阈值不足以替代账号阈值 |
-| R20 | P2 | 不存在账号/停用时短路不做BCrypt，存在错误口令时做；统一响应文案仍有时序差异。评估dummy hash及请求成本边界，密码长度约束也未完整定义 |
-| R21 | P1 接线前 | BusinessException仅映射AUTH等少数码，EXERCISE/COMMAND等默认500。相关服务落地时逐项映射契约404/409/400，不按前缀猜，增加表驱动用例 |
-| R22 | P1 接线前 | 台账删除契约是逻辑删除，VestRepository.deleteByVestNum为物理删除；schema无外键，引用检查与演习期间禁止注销必须由服务负责，不能将仓储方法直接暴露 |
-| R23 | P2 测试隔离 | IT与开发共库；AuthServiceIT真实提交且AfterEach清理，异常杀进程可留残数据。建议专用测试库；测试连接默认无rewrite参数，不能作为性能基线 |
-| R24 | P1 发布前 | 无生产配置/应用部署制品定义/服务管理脚本、TLS/备份恢复验证；mysql:8.4是可漂移标签，公开dev密钥没有生产拒用门禁。所有生产项需先明确标准后实现 |
-| R25 | P2 配置事实 | deployment-mode未消费、硬件开关未实现、UWB配置未绑定Spring bean；solver banner仍有modeEn/uwbEn重复与旧串口标识。不能把这些日志当真实链路状态 |
+| R18 | P1 **〔复核 2026-11-14：已落地〕** | AuthService限流检查在账号锁之前，多个并发请求可同时通过未锁定判定，再排队做BCrypt，绕过“第6次校验前拒绝”时序。重新核对原子预算/锁定检查位置，补并发IT |
+| R19 | P1 **〔复核 2026-11-14：已落地——限流键改用库内 account.id()〕** | DB使用utf8mb4_0900_ai_ci，账号查找忽略大小写/重音；LoginThrottle键使用原字符串。变体失败分散到不同账号桶，需与DB身份规则一致的归一化/账号ID限流，测试IP阈值不足以替代账号阈值 |
+| R20 | P2 **〔复核 2026-11-14：仍成立——无 dummy hash，短路时序差仍在〕** | 不存在账号/停用时短路不做BCrypt，存在错误口令时做；统一响应文案仍有时序差异。评估dummy hash及请求成本边界，密码长度约束也未完整定义 |
+| R21 | P1 接线前 **〔复核 2026-11-14：已落地——统一 BusinessException(ApiErrorCode.*) 交全局出口〕** | BusinessException仅映射AUTH等少数码，EXERCISE/COMMAND等默认500。相关服务落地时逐项映射契约404/409/400，不按前缀猜，增加表驱动用例 |
+| R22 | P1 接线前 **〔复核 2026-11-14：已落地——新增 VestLedgerService.retire() 逻辑注销〕** | 台账删除契约是逻辑删除，VestRepository.deleteByVestNum为物理删除；schema无外键，引用检查与演习期间禁止注销必须由服务负责，不能将仓储方法直接暴露 |
+| R23 | P2 测试隔离 **〔复核 2026-11-14：部分成立——已分离独立测试库，仍共用同一本机容器；真提交+清理为有意设计〕** | IT与开发共库；AuthServiceIT真实提交且AfterEach清理，异常杀进程可留残数据。建议专用测试库；测试连接默认无rewrite参数，不能作为性能基线 |
+| R24 | P1 发布前 **〔复核 2026-11-14：部分成立——已有 deploy/minipc 制品与脚本；浮动标签/TLS/备份/dev 密钥门禁仍缺〕** | 无生产配置/应用部署制品定义/服务管理脚本、TLS/备份恢复验证；mysql:8.4是可漂移标签，公开dev密钥没有生产拒用门禁。所有生产项需先明确标准后实现 |
+| R25 | P2 配置事实 **〔复核 2026-11-14：部分成立——`deployment-mode` 无消费者属正交设计登记；banner 重复标识仍在〕** | deployment-mode未消费、硬件开关未实现、UWB配置未绑定Spring bean；solver banner仍有modeEn/uwbEn重复与旧串口标识。不能把这些日志当真实链路状态 |
 | R26 | P1 客户端 | 无Flutter工程；单兵队伍视图、持续Poll与安全存储/生命周期未实现，不能开始“正式客户端验收”。**〔更正 2026-11-13（段 84）：该项已被取代，且含两处误报——①「安全存储未实现」不成立：段 71 起两端会话均落平台安全存储（`lib/main.dart` 注入 `SecureSessionStore`）；②「单兵端未包装 `RefreshingApiTransport`」不成立：该装饰器对设备端属“有意排除”（`DeviceSession` 无 `refreshToken`、契约无设备刷新端点）。Flutter 单工程双端、持续 Poll 亦均已落地。证据见 decision-register 段 71 / CLIENT-RESILIENCE 段 C·D / 段 84。〕** |
-| R27 | P2 容量/保留 | TTL配置缺正值约束，失败限流桶无硬容量上限，refresh记录未定清理期限，队列/客户端上限及RPO/RTO未定。需配置校验与容量试验，不凭量小推导安全 |
-| R28 | P1 DTO接线 | AccountSession包含Account.passwordHash；必须手动映射User安全字段，禁止直接返回内部载体或把JWT/口令写日志 |
+| R27 | P2 容量/保留 **〔复核 2026-11-14：部分成立——TTL 正值校验已落；桶上限/refresh 清理/RPO·RTO 仍缺〕** | TTL配置缺正值约束，失败限流桶无硬容量上限，refresh记录未定清理期限，队列/客户端上限及RPO/RTO未定。需配置校验与容量试验，不凭量小推导安全 |
+| R28 | P1 DTO接线 **〔复核 2026-11-14：已落地——toUser 只映射 userId/username/displayName/roles〕** | AccountSession包含Account.passwordHash；必须手动映射User安全字段，禁止直接返回内部载体或把JWT/口令写日志 |
 
 静态入口：
 [AuthService:80-94](../scds-core/src/main/java/com/dualx/core/auth/AuthService.java#L80-L94)、
