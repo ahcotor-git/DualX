@@ -38,6 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -123,6 +125,20 @@ class AuthServiceIT {
         assertCode(() -> auth.login(enabled.username(), "wrong", IP), ApiErrorCode.AUTH_BAD_CREDENTIALS);
         assertThat(countTokens(enabled.id(), false)).isZero();
         verify(signer, never()).signAccessToken(any());
+    }
+
+    @Test
+    void missingAccountStillPaysOnePasswordHashComparison() {
+        // review R20：账号不存在时也要对固定 dummy 摘要做一次 BCrypt，否则「账号不存在」比
+        // 「口令错误」快得多，可从耗时枚举用户名。这里用探针编码器断言 matches 确实被调用；
+        // 不做耗时断言，避免在共享 CI 上 flaky。
+        PasswordEncoder probe = spy(passwords);
+        AuthService probing = new AuthService(accounts, roles, tokens, throttle, probe, signer, transactions);
+
+        assertCode(() -> probing.login("missing-" + UuidV7.generate(), PASSWORD, IP),
+                ApiErrorCode.AUTH_BAD_CREDENTIALS);
+
+        verify(probe).matches(eq(PASSWORD), argThat(hash -> hash != null && !hash.isBlank()));
     }
 
     @Test

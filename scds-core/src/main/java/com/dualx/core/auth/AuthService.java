@@ -51,6 +51,20 @@ public class AuthService {
      */
     private static final String UNKNOWN_ACCOUNT_KEY = "unknown";
 
+    /**
+     * 账号不存在时用来「陪跑」一次口令校验的固定 BCrypt 摘要（review R20）。
+     *
+     * <p>失败分支若在「账号不存在」处直接短路，返回耗时还不到「口令错误」那次 BCrypt 的零头，
+     * 攻击者可据此把「用户名是否存在」从响应时间上枚举出来。因此对固定摘要也跑一次
+     * {@code matches}，让两条失败路径的开销落在同一量级。摘要明文随机且从不作为口令被接受，
+     * 「命中」只是巧合（本表也只用于注定失败的路径）。
+     *
+     * <p>开销有界：未登记用户名共用一个限流桶（见 {@link #login}），5 次失败即锁 5 分钟，
+     * 且锁定判定在口令校验之前，故额外 BCrypt 的次数被限流封顶，不构成放大攻击面。
+     */
+    private static final String DUMMY_PASSWORD_HASH =
+            "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+
     private final AccountRepository accounts;
     private final AccountRoleRepository accountRoles;
     private final RefreshTokenRepository refreshTokens;
@@ -109,8 +123,12 @@ public class AuthService {
             Account account = candidate == null
                     ? null
                     : accounts.findByIdForUpdate(candidate.id()).orElse(null);
-            if (account == null || !account.enabled()
-                    || !passwordEncoder.matches(password, account.passwordHash())) {
+            // 账号不存在时也不能省掉这次 BCrypt：对固定 dummy 摘要照样比对一次，
+            // 否则「账号不存在 → 极快返回」与「口令错误 → 一次 BCrypt」的耗时差
+            // 会被用来枚举用户名（review R20）。停用账号有真实摘要，走真实比对。
+            String storedHash = account == null ? DUMMY_PASSWORD_HASH : account.passwordHash();
+            boolean passwordMatches = passwordEncoder.matches(password, storedHash);
+            if (account == null || !account.enabled() || !passwordMatches) {
                 throttle.recordFailure(accountKey, clientIp);
                 throw new BusinessException(ApiErrorCode.AUTH_BAD_CREDENTIALS, "账号或密码错误");
             }
