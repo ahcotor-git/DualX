@@ -210,9 +210,9 @@ public interface TokenSigner {
 
 ```
 permitAll：
-  POST  /api/v1/auth/login          仅 signing-enabled=true 时存在
+  POST  /api/v1/auth/login          signing-enabled=false 时 controller 不注册 → 404
   POST  /api/v1/auth/refresh        同上
-  POST  /api/v1/auth/device/login   当前恒在；D02目标仅设备签发启用时存在
+  POST  /api/v1/auth/device/login   signing-enabled=false 时 controller 不注册 → 404
   GET   /api/v1/files               受保护文件的取文件路由；授权凭据是查询参数里的短时效签名，不是 Bearer
   GET   /actuator/health            探活
   GET   /error                      Boot 内部错误转发
@@ -235,8 +235,16 @@ authenticated：
 - **白名单是"只增不改"清单**：任何新增 `permitAll` 必须回到本文档登记一行。理由——鉴权漏洞几乎从不是"写错了判断"，而是"某次调试顺手放行了一个端点，然后再也没人删"。
 - **服务端授权规则同属"只增不改"**：`SecurityConfig` 里每条按域声明的角色规则都必须在 §4.5.1 的矩阵里出现，
   并与 `RolePermissions` 同源。漏写一组**不会报错**，只会静默退化成"任意账号都能写"，这类缺口没有测试之外的发现途径。
+- **三个「匿名换取令牌」的入口不随能力开关收窄放行**：`login` / `refresh` / `device/login`
+  在 `signing-enabled=false` 时 controller 整类不注册，此时它们靠「路由缺席」给出 404。
+  但 404 只有请求**抵达 dispatcher** 才看得见——若把这三条 `permitAll` 也随能力收回，匿名客户端
+  会先撞上末条兜底的 `anyRequest().hasAuthority(AUD_EDGE)`，拿到 401「令牌不成立」这个与本端点
+  语义无关的信号（旧记录见 testing.md RT-DISABLED）。段 90 已按此纠正 R05/R06：
+  **免鉴权清单只回答「哪些路径免鉴权」，不回答「哪些端点存在」**，后者交给条件注册。
 - D02拟议能力关闭时精确404出口、账号与设备独立白名单见03b第5节；
   本轮未修改SecurityConfig，不能将该目标矩阵当成运行结果。
+  （段 90 只纠正了「放行随能力收回」这一处偏差；03b §5 的**安全层**固定 404 出口仍未实现，
+  即无效 Bearer 访问已关闭能力路径时不会是 404。）
 
 ### 4.5 角色 → 权限点
 

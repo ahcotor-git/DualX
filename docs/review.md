@@ -24,7 +24,7 @@
 | R03 | 已落地 | `JwtDecoderConfig.validateRawClaims` 强制 `exp/sub/aud/iss`（设备另需 `sid`）；缺 `exp` 返回 401 `AUTH_TOKEN_INVALID` |
 | R04 | 已落地 | 自定义 `ApiExceptionHandler`（`@Order(-1)`）捕获 `MethodArgumentNotValidException` → `VALIDATION_FAILED` + `traceId`；`MvcProblemIT` 覆盖 |
 | R05 | 已落地 | 账号签发端点拆出 `AccountAuthController` 并以 `@ConditionalOnProperty(signing-enabled)` 条件注册；`signing=false` 时路由缺席 → 404 |
-| R06 | **部分成立** | 已加门控，但**未解决**：`DeviceAuthService.login` 首行 `requireSigning()`，`signing=false` 时抛 `IllegalStateException` → 500；「独立设备能力 or 禁用该端点」的设计决策**仍待定**，且无该场景测试 |
+| R06 | 已落地（段 90） | 设备登录拆出 `DeviceAuthController`，与账号签发共用 `signing-enabled` 条件注册；`signing=false` 时路由缺席 → 404，不再是 `requireSigning()` 的 500。同段一并纠正 R05 遗留偏差：三条「匿名换取令牌」的 `permitAll` 不随能力收回，匿名请求也能抵达 dispatcher 看到这条 404（此前先撞末条兜底得 401）。03b §5 的**安全层**固定 404 出口（连无效 Bearer 也是 404）仍未实现，见 03-auth.md §4.4 |
 | R07 / R08 | 已被取代 | 2026-10-27 已记，见 testing.md 第 7~15 节 |
 | R09 | 已落地 | 迁移按递增落地：V1~V7、V9、V10、V11（V8 空缺、不补，见 testing.md:1029） |
 | R10 | 已落地 | 自愈已实现：`V10` 增 `owner_instance/heartbeat_at/end_reason`；`ExerciseLivenessRecover` Runner 启动收尾；`ExerciseLogType.SYSTEM`；各仓储 `deleteByExerciseId` |
@@ -46,7 +46,7 @@
 | R27 | **部分成立（段 89 已落本机可闭环两项）** | TTL 正值 / 顺序校验已落（`AuthJwtProperties.requirePositive` 等）；**限流桶键数硬上限 + LRU 淘汰**（`LoginThrottle.MAX_BUCKETS`，段 89）与 **refresh 记录清理期限**（`scds.auth.refresh.retention` 默认 `7d` + `RefreshTokenCleanupTask`，段 89）**已落地**；**队列 / 客户端上限与 RPO / RTO** 仍成立（产品 / 运维口径，本机不可闭环） |
 | R28 | 已落地 | `AuthController.toUser` 只映射 `userId/username/displayName/roles`，**不含 `passwordHash`** |
 
-**复核后仍成立的待办（3 项）**：R06（设备登录 × 禁用签发）、R24（发布前运维项）、R27（容量 / 保留；**本机可闭环的两项已于段 89 落地**，余队列 / 客户端上限与 RPO / RTO）。（**R20 登录时序已于段 88 落地**，见 review 表 R20 行与 testing.md §77。）
+**复核后仍成立的待办（2 项）**：R24（发布前运维项）、R27（容量 / 保留；**本机可闭环的两项已于段 89 落地**，余队列 / 客户端上限与 RPO / RTO）。（**R06 设备登录 × 禁用签发已于段 90 落地**，见 review 表 R06 行；**R20 登录时序已于段 88 落地**，见 review 表 R20 行与 testing.md §77。）
 **部分成立、其余落点未完成（4 项）**：R11（单实例保护）、R16（离线声明）、R23（测试隔离）、R25（配置事实）。
 
 ## 1. 结论
@@ -78,7 +78,7 @@
 
 | ID | 优先级/类别 | 事实、影响与下一动作 |
 |---|---|---|
-| R06 | P0 设计冲突 **〔复核 2026-11-14：部分成立——已加 `requireSigning()` 门控，但 `signing=false` 时设备登录仍 500，设计决策待定〕** | “设备登录恒可用”与当前signer false禁用三类签发冲突；设备登录确实需要私钥。先确认独立设备能力还是禁用该端点，不能直接接成500 |
+| R06 | P0 设计冲突 **〔复核 2026-11-14（段 90）：已落地——设备登录拆出 `DeviceAuthController` 与账号签发共用 `signing-enabled` 条件注册，`signing=false` 时路由缺席 → 404；`requireSigning()` 降为绕过 HTTP 的兜底。设计决策取「共用账号签发能力」而非独立设备能力〕** | “设备登录恒可用”与当前signer false禁用三类签发冲突；设备登录确实需要私钥。已确认与账号签发共用能力开关，禁用时端点整体缺席（404），不再接成500 |
 | R07 | P0 未完成安全链 **〔复核 2026-11-14：已被取代，见 testing.md 第 7~15 节〕** | DeviceAuthService、SID校验/30s缓存主动失效未实现；不存在SID的device token实测进入device/me占位。补单端在线、停用/换绑和事务失败回归，device/me当前仍按裁定留501 |
 | R08 | P0 未完成业务 **〔复核 2026-11-14：已被取代，见 testing.md 第 7~15 节〕** | 6个auth HTTP方法均501；AuthService并未公开接线。其余60个REST业务方法也为占位，gateway为0源码，没有真实演习/态势链 |
 | R09 | P0 迁移阻塞 **〔复核 2026-11-14：已落地——V10/V11 已按递增落地〕** | 本地已经应用V9，V8不存在。直接补V8不能作为正常顺序升级：会成为低于当前版本的未应用迁移并受到Flyway校验/顺序限制。建议确认下一递增V10，禁止改历史迁移或默认开启out-of-order |

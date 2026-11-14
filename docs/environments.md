@@ -271,6 +271,7 @@ Linux私钥建议0600、部署目录0700；Windows按服务账号配置ACL，不
 | Flyway建议升级告警 | 当前Flyway声明的已测MySQL上界低于8.4；本机已成功，不等于正式支持保证 |
 | Mockito动态agent告警 | 当前Java21测试通过；后续升级JDK前配置测试agent，不按生产故障处理 |
 | auth仍501 | **已过时**：auth 已接线（login / refresh / logout / me 已实现；段 70 真实例 `me` 200）。占位遗留只在未实现业务域 |
-| signing=false下账号login | **已更正**：不是 401——`AccountAuthController` 以 `@ConditionalOnProperty(signing-enabled)` 条件注册，`signing=false` 时路由**缺席 → 404**（review R05 已落地）；**设备 login 仍 500**（`requireSigning()` 抛 `IllegalStateException`，R06 设计决策待定） |
+| signing=false下账号login | **已更正**：不是 401——`AccountAuthController` 以 `@ConditionalOnProperty(signing-enabled)` 条件注册，`signing=false` 时路由**缺席 → 404**（review R05 已落地） |
+| signing=false下设备login | **已更正**（review R06 已落地）：不是 500——`DeviceAuthController` 与账号签发共用同一能力开关，`signing=false` 时路由**缺席 → 404**；且 `login` / `refresh` / `device/login` 三条 `permitAll` 不再随能力收回，匿名请求也能抵达 dispatcher 看到这条 404，而不是先撞末条兜底拿到 401 |
 | 12001不监听 | gateway **已有源码**；12001 为**按需监听**（`gateway.mode`），默认不监听；端口参数存在不代表链路已开 |
 | GitHub推送失败 | 保留本地提交和未提交文档，核验远端后再同步，不reset或force push |

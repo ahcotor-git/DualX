@@ -1,7 +1,19 @@
 # scds-next 交接快照
 
 > 更新：2026-11-14，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 89 R27 容量项 · 本机可闭环子集：`LoginThrottle` 键数硬上限 ＋ refresh 历史行清理期限**——
+> 当前任务：**段 90 R06 设备登录 × 禁用签发（＋R05 遗留偏差一并纠正）：条件注册控制器 ＋「免鉴权清单不回答端点是否存在」**——
+> 承段 89「下一段（候选）① R06 设计决策」。用户在**无人值守模式**下经 AskUserQuestion 裁定口径「**保留放行 → 匿名也 404（推荐）**」＋「**一并纠正账号侧（推荐）**」。**本段属行为变更**：`signing=false` 时 `device/login` 由 **500 改 404**；三条签发端点的匿名响应由 **401 改 404**。
+> **设计决策**：设备登录**不另立独立设备能力**，与账号签发**共用同一能力开关**（两者都必需私钥；拆成两个开关只会多出「设备能签、账号不能签」的无意义状态）。能力关闭 ⇒ 端点**整体缺席（404）**，而不是注册后抛 500。
+> **关键洞察（本段核心，也是 R05 当初没做完的一半）**：条件注册只让**路由缺席**，但 **404 只有请求抵达 dispatcher 才看得见**。R05 当初把 `login` / `refresh` 的 `permitAll` 随能力一并收回 ⇒ 匿名请求先撞末条兜底 `anyRequest().hasAuthority(AUD_EDGE)` → **401**（testing §2 RT-DISABLED 的历史实测，本段取代）。**纠正口径**：`SecurityConfig` **不读能力开关**——「哪些端点存在」交给 controller 条件注册，过滤链只管「哪些端点免鉴权」；三条「匿名换取令牌」入口**无条件 `permitAll`**。
+> **落点**：① `DeviceAuthController`（**新**，scds-api）整类 `@ConditionalOnProperty(… signing-enabled … matchIfMissing=true)`，与 R05 `AccountAuthController` 同源；`device/login` 迁入，**`device/me` 不迁**（只验签不签发）。② `AuthController` 只删 `deviceLogin` 与其 import，保留只读端点与**包内共享静态映射**（条件注册的两个控制器反向依赖它，方向才稳定）。③ `SecurityConfig` 删 `AuthJwtProperties` 字段与构造器第三参。④ `DeviceAuthService.requireSigning()` **保留**，降级为绕过 HTTP 的兜底。⑤ `docs/design/03-auth.md` §4.4 白名单登记三行 ＋ 约定「**免鉴权清单只回答「哪些路径免鉴权」，不回答「哪些端点存在」**」。
+> **拆控制器牵动的两处「定向装配」测试（实证发现，均已补）**：`MvcProblemIT`（`@Import` 补 `DeviceAuthController.class`；首跑 27 项里 **5 项失败**）＋ `ApiSkeletonSmokeIT`（`standaloneSetup` 手工列表补 `new DeviceAuthController(deviceAuthService)`；断言全 70 条契约路由）。**教训**：搬端点必须同时检索「显式列出控制器」的测试——它们不走组件扫描，只表现为路由 404。
+> **一次构建命令误用（非本段缺陷，留档）**：`mvn -B -o -pl scds-api test` **不带 `-am`** ⇒ `failed to discover tests`，真因 `NoClassDefFoundError: SituationEnvelope`（上游取自**本地仓库陈旧快照 jar**，而编译期用 reactor 最新 `target/classes`）。**正确用法**：加 `-am`。同轮 `Boot Manifest-JAR contains absolute paths …` / `'other' has different root` 是本机**盘符混排**（`E:` 工程 + `C:` 仓库）的表象。
+> **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1188 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ api 139 ＋ app 333）。**与段 89 基线同数**——本段**不新增用例**，只在既有用例内加断言。
+> **代码笔（7 文件：1 新 6 改，破「≤3 文件」已显式声明例外）**：`DeviceAuthController.java`（新）＋ `AuthController.java` ＋ `SecurityConfig.java` ＋ `DeviceAuthService.java` ＋ `ApplicationStartupIT.java` ＋ `MvcProblemIT.java` ＋ `ApiSkeletonSmokeIT.java`。
+> **文档笔（6 文件，破「≤3 文件」已显式声明例外）**：`docs/design/03-auth.md`（§4.4）＋ `docs/testing.md`（§79 ＋ §2 RT-DISABLED 标注取代）＋ `docs/review.md`（R06 三处）＋ `docs/environments.md`（排障表两行）＋ `docs/decision-register.md`（段 90）＋ 本快照。
+> **环境**：门禁需 `scds-local-mysql`（13306）在跑；本机 Docker Desktop 需**管理员**启动，容器随引擎重启 `Exited (255)`，须 `docker start` 重新拉起。
+> 下一项**（候选，按推荐序）**：① **03b §5 / §8 工作包 5**（能力矩阵的**安全层**精确 404 出口：连无效 Bearer 也是 404；账号与设备独立白名单）；② 全库行尾 renormalize（大范围 diff，需显式授权）；③ C 档（真机 / GUI / 现场硬件 / T-PROD）；④ R27 剩余项定型（队列 / 客户端上限与 RPO · RTO，**需产品 / 运维口径**）。
+> 上一原子任务：**段 89 R27 容量项 · 本机可闭环子集：`LoginThrottle` 键数硬上限 ＋ refresh 历史行清理期限**——
 > 承段 88「下一段（候选）① R27 容量项」。用户在**无人值守模式**下仅回「继续」，按推荐项推进；R27 逐项拆开后**只有前两项本机可闭环**，
 > **队列 / 客户端上限与 RPO / RTO** 属产品 / 运维口径，**仅登记**。**本段属行为变更**。
 > **① 限流键数硬上限**：`buckets` 由 `HashMap` 改**访问序** `LinkedHashMap` 当 LRU ＋ `MAX_BUCKETS = 10_000`；满额时 `evictStale` 清空壳 → `evictLeastRecentlyUsedUnlocked` 淘汰 → 仍腾不出位则**放弃记这次失败**。**关键口径：淘汰只挑未处于锁定期的键**（有效锁是限流唯一产出，为腾位提前解除它等于自毁长矛），全锁时宁少记一次失败。
@@ -1520,8 +1532,10 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn -B clean verify`：2026-11-14（段 89），**1188项，失败/错误/跳过均0**：
-protocol19 + solver18 + gateway49 + **core630**（624→630，+6 = 段 89 `LoginThrottleTest` 12→15〔+3〕＋ 新增 `RefreshTokenCleanupTaskIT`〔+3〕）+ api139 + app333。
+**当前**全量`mvn -B clean verify`：2026-11-14（段 90），**1188项，失败/错误/跳过均0**：
+protocol19 + solver18 + gateway49 + core630 + api139 + app333——**段 90 不新增用例**（R06 设备登录×禁用签发属行为变更：`device/login` 500→404、
+三条签发端点匿名响应 401→404），只在既有用例内加断言，故与段 89 基线同数。
+（段 89 同命令亦为 **1188 项**：protocol19 + solver18 + gateway49 + **core630**（624→630，+6 = `LoginThrottleTest` 12→15〔+3〕＋ 新增 `RefreshTokenCleanupTaskIT`〔+3〕）+ api139 + app333。）
 （上一基线为 2026-11-14 段 88 的 **1182 项 / core624**；此前 2026-11-10 §70 为 **1162 项 / core622**〔solver/domain 计 0〕——`39d0b9b` 令 solver 由零测试到回归网 **+18**（UwbSolver 10 + UwbFilter 8），
 `0cd9ba3` 令 core **+1**，段 88 R20 **+1**，段 89 R27 **+6**——即 1162 → 1182 → 1188，**无用例丢失**，详见 testing §70 / §77 / §78。）
 计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）或**控制台逐类输出**取值；按 `target/surefire-reports/*.txt`

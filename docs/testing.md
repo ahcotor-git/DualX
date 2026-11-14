@@ -71,7 +71,7 @@ signing=true与false均成功，健康探测200，验证结束停止了本次启
 | RT-CLAIMS | 合法签名但没有exp的账号用途token访问exercise/current | **501**，已越过安全链 | 失败，应401，R03 |
 | RT-EXPIRED | 合法签名exp=now-300s访问exercise/current | **401 AUTH_TOKEN_INVALID** | 错误类别失败，应EXPIRED，R02 |
 | RT-SID | device token携带不存在SID访问auth/device/me | **501**，已越过安全链 | SID校验尚缺，R07 |
-| RT-DISABLED | signing=false，无令牌POST auth/login | **401** | 目标404未实现，R05 |
+| RT-DISABLED | signing=false，无令牌POST auth/login | **401** | 目标404未实现，R05（**段 90 已取代，见 §79**） |
 | RT-VALIDATION | signing=false，无令牌POST device/login，JSON={} | **400默认Problem，无code/traceId** | 契约失败，R04 |
 | RT-BUSINESS | 正常账号aud token访问exercise/current | 501 NOT_IMPLEMENTED | 只证明认证后进入占位，不证明开演 |
 
@@ -5190,4 +5190,90 @@ expected: {"t_account"=2L, …, "t_refresh_token"=2L}
   ② 清理任务的**真装配节拍**未观测（`scds-core` 测试上下文不跑 `@Scheduled`；`scds-app` 的 `ApplicationStartupIT` 只覆盖
   「启动窗口内不删行」，**未等满一小时拍**）；③ 保留期默认值 `7d` 与跨段实测的取值依据未做容量试验。
 - **R20 遗留**：密码长度约束仍未定义；**全库行尾 renormalize** 需显式授权；**C 档**（真机 / GUI / 现场硬件 / T-PROD）仍未闭环。
+
+## 79. R06 设备登录 × 禁用签发（＋R05 遗留偏差一并纠正）：条件注册控制器 ＋「免鉴权清单不回答端点是否存在」
+
+承段 89「下一段（候选）① **R06 设计决策**」。用户在**无人值守模式**下经 AskUserQuestion 裁定口径：
+**「保留放行 → 匿名也 404（推荐）」** ＋ **「一并纠正账号侧（推荐）」**。**本段属行为变更**
+（`signing=false` 时 `device/login` 由 500 改 404；三个签发端点的匿名响应由 401 改 404）。
+
+### 79.1 问题与关键洞察
+
+- **原状（R06）**：`DeviceAuthService.login` 首行 `requireSigning()`，`signing=false` 时抛 `IllegalStateException` → 500。
+  这等于把「**本实例没有这个能力**」报成「**服务端缺陷**」——客户端既拿不到可据以换 `baseUrl` 的信号，运维也会去查一个不存在的 bug。
+- **洞察（本段核心，也是 R05 当初没做完的一半）**：把端点拆成**条件注册控制器**只让**路由缺席**；
+  但 **404 只有请求抵达 dispatcher 才看得见**。R05 当初把这三条 `permitAll` 也**随能力开关一并收回**，
+  于是匿名请求先撞上末条兜底的 `anyRequest().hasAuthority(AUD_EDGE)` → **401 `AUTH_TOKEN_INVALID`**
+  （§2 RT-DISABLED 实测记录，本段取代之）。
+- **纠正口径**：`SecurityConfig` **不读能力开关**——「哪些端点存在」交给 controller 的条件注册，
+  过滤链只管「哪些端点免鉴权」。`login` / `refresh` / `device/login` 三条**无条件 `permitAll`**。
+
+### 79.2 落点
+
+- **`DeviceAuthController`（新，scds-api）**：整类 `@ConditionalOnProperty(prefix = "scds.auth.jwt",
+  name = "signing-enabled", havingValue = "true", matchIfMissing = true)`，与 R05 的 `AccountAuthController` 同源；
+  `device/login` 从 `AuthController` 迁入。**`device/me` 不迁**：它只验签不签发（校 SID 单端在线 + 读台账），
+  与 `/auth/me` 同理留在**不条件注册**的 `AuthController`。
+- **`AuthController`**：仅删 `deviceLogin` 与其专属 import；保留 `getCurrentUser` / `getDeviceSelf` 及包内共享静态映射
+  （`toUser` / `toTokenPair` / `toDeviceTokenPair` / `accountId` / `deviceClaims`）——**方向稳定**的关键是让条件注册的两个控制器
+  反向依赖这个唯一无条件存在的控制器。
+- **`SecurityConfig`**：删除 `AuthJwtProperties` 字段与构造器第三参，**本类不再依赖能力开关**；
+  三条签发入口合并为一条无条件 `permitAll`。
+- **`DeviceAuthService.requireSigning()` 保留**（未删）：降级为**绕过 HTTP 直接调用服务**的兜底——
+  那种情况下也应是明确失败，而不是签出一枚没人验得过的令牌。
+- **文档**：`docs/design/03-auth.md` §4.4 免鉴权白名单登记三行（代码库硬规「新增 `permitAll` 必须回本文登记」）
+  ＋ 补充约定说明「**免鉴权清单只回答「哪些路径免鉴权」，不回答「哪些端点存在」**」。
+
+### 79.3 门禁实测（2026-11-14，`scds-local-mysql` 13306 healthy，Java 21）
+
+命令：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS**。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| solver | 18 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 630 | 0/0/0 | 未改动 |
+| api | 139 | 0/0/0 | 未改动（用例内断言调整，见 79.3.2） |
+| app | 333 | 0/0/0 | 未改动（`ApplicationStartupIT` 新增断言，见 79.3.1） |
+| domain | 0 | 无测试 | |
+| 总计 | **1188** | **0/0/0** | 与段 89 基线一致——**本段不新增用例，只在既有用例内加断言** |
+
+**79.3.1 `ApplicationStartupIT` 新增断言（`signing=true` / `signing=false` 两个子类各跑一遍）**：
+① `context.getBeansOfType(DeviceAuthController.class)` 数量 `signing ? 1 : 0`；
+② 三条签发路径 `POST /api/v1/auth/{login,refresh,device/login}` 匿名空体，**`signing=true` → 400 `VALIDATION_FAILED`**
+（控制器在、先撞契约校验），**`signing=false` → 404 `ROUTE_NOT_FOUND`**（控制器不在、路由缺席）。
+两条合起来才证明「**放行没随能力收回**」——若放行被收回，`signing=false` 那支会得到 401 而非 404。新增 `post` 辅助方法。
+
+**79.3.2 拆控制器牵动的两处「定向装配」测试（本段实证发现，均已补）**：
+`device/login` 迁走后，**显式列控制器**（而非全量组件扫描）的测试会因路由缺席而失败——**两处都是先失败、后定位、再补**：
+
+- `scds-app` `MvcProblemIT`：`@Import({… AuthController.class …})` ＋ `@EnableAutoConfiguration(exclude = …)` 的聚焦 MVC 上下文。
+  首跑 **27 项里 5 项失败**（`device/login` 由 400/401 变 404）。补 `DeviceAuthController.class` 到 `@Import` 后 27/27 通过。
+- `scds-api` `ApiSkeletonSmokeIT`：`MockMvcBuilders.standaloneSetup(… new AuthController(…) …)` 手工控制器列表，
+  断言**全部 70 条契约路由**（本类 71 用例）。补 `new DeviceAuthController(deviceAuthService)` 后通过。
+  **教训**：把端点从一个控制器搬到另一个控制器时，**必须同时检索「显式列出控制器」的测试**——
+  它们不走组件扫描，条件注册与否都看不到，只会表现为路由 404。
+
+**79.3.3 一次构建命令误用（非本段缺陷，留档以免重现）**：本段排障首轮用
+`mvn -B -o -pl scds-api test`（**不带 `-am`**）→ surefire 报
+`TestEngine with ID 'junit-jupiter' failed to discover tests`，`.dump` 里真因是
+`NoClassDefFoundError: com/dualx/core/push/SituationEnvelope`。
+**根因**：不带 `-am` 时上游模块（`scds-domain` / `scds-core`）取自**本地仓库的快照 jar**，
+而该快照陈旧、不含较新的类；**编译期用的是 reactor 里的最新 `target/classes`**，
+于是「编译通过但测试发现期加载失败」。**正确用法**：加 `-am`（或跑全 reactor）。同轮出现的
+`Boot Manifest-JAR contains absolute paths in classpath …` / `'other' has different root`
+（`-Djdk.net.URLClassPath.disableClassPathURLCheck` 提示、`-Dsurefire.useManifestOnlyJar=false`）
+是本机盘符混排（`E:` 工程 + `C:` 仓库）触发的**表象**，随 `-am` 一并消失，**不是本段问题**。
+
+### 79.4 未验项 / 边界
+
+- **03b §5 的「安全层」固定 404 出口仍未实现**：本段只做到**一半**——**未携带令牌**的匿名请求在已关闭能力路径上
+  得到 404（放行没被收回，请求抵达 dispatcher）。带**无效 Bearer** 访问同一路径时，Spring Security 仍先以 401 拒绝，
+  **不会**走到 dispatcher 的 404。该目标矩阵（连无效 Bearer 也是 404）见
+  `03b-token-capabilities.md` §5 / §8 工作包 5，**仍未实现**，不得据本段结论当成已具备。
+- **测试库遗留行未清理**：本段未改动迁移与数据，`scds_next` / `scds_next_test` 形态与段 89 一致。
+- **Docker 环境**：本段门禁依赖 `scds-local-mysql`（13306）容器；本机 Docker Desktop 需**管理员**启动
+  （`com.docker.service` 无法非提权启动），容器随引擎重启会 `Exited (255)`，需 `docker start` 重新拉起后才可跑 IT。
+
 
