@@ -1,7 +1,61 @@
 # scds-next 交接快照
 
-> 更新：2026-11-12，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 75 遗留负例补测：WS `close 4000` `SITUATION_REVISION_TOO_OLD` / 导出未完成 `409` `REPLAY_EXPORT_FAILED`（本机黑盒脚本扩展，testing 第 76 节）**——
+> 更新：2026-11-14，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
+> 当前任务：**段 85 审查报告全表复核：`R01~R28` 逐条重新核验（纯文档：`review.md` 全表复核章节 + 各行就地复核批注）**——
+> 承段 84，并经用户就「本机还可继续完善哪些事项」作答后助理推荐的 **A-1（`review.md` 余项复核更正）**；用户回「继续」推进本段。
+> 2026-10-27 的现状注记当时只覆盖 R07/R08/R12/R13/R17 与 R21 的 COMMAND 部分，其余条目「未被重新核验」；本段对 **R01~R28 全表逐条**以 3 个并行检索任务核实当前代码。**只改文档、不改任何行为**。
+> **复核结论**：**已落地 14**（R01/R02/R03/R04/R05/R09/R10/R14/R15/R18/R19/R21/R22/R28）／**部分成立 7**（R06/R11/R16/R23/R24/R25/R27）／
+> **仍成立 1**（R20 登录时序未抹平）／**已被取代 5**（R07/R08/R12/R13/R17，2026-10-27 已记）／**已更正 1**（R26，段 84 误报）。
+> **仍成立待办 4 项**：R06（设备登录 × 禁用签发）、R20（登录时序 dummy hash）、R24（发布前运维项）、R27（容量 / 保留）；
+> **部分成立、其余落点未完成 4 项**：R11（同库单实例保护仍在部署层）、R16（离线声明）、R23（测试隔离仍共用同一本机容器）、R25（配置事实登记）。8 项**保留为待办、不重开**。
+> **落点（2 文件，未破「≤3 文件」）**：`docs/review.md`（新增「全表复核（2026-11-14，段 85）」章节 + R01~R28 逐行就地批注，格式 `| R0X | <原优先级> 〔复核 2026-11-14：<结论>〕 | ...`）＋ `docs/decision-register.md`（段 85 条目）。推送 `0014641`。
+> **门禁**：纯文档改动（未改 Java / 契约 / Dart）⇒ **未重跑** `mvn test`（基准 **1162 项**）与 `flutter test`（基准 **532 例**），复用段 84 证据。
+> **未验项**：R20 时序差为**推断**（未做时序测量）；R23/R24/R27 涉及环境 / 运维，本机不可闭环，留待环境授权后验证。
+> 下一项**（候选，按推荐序）**：① **A-2 本快照 `snapshot.md` 回写**（停滞在段 76，段 77~85 未回写，纯文档、本机可闭环）；
+> ② A-4 `docs/architecture.md:193` / `environments.md` 与现状对齐；③ B 档（需 `scds-local-mysql` 13306）：R27 配置校验单测 / R20 dummy hash / R18·R19 并发与大小写限流 IT。
+> 上一原子任务：**段 84 审查报告误报更正：单兵端 `RefreshingApiTransport` / 会话落盘 两处判误报 ＋ 订正 3 处陈旧注释**——
+> 承段 83 批 7「下一段（候选）」第二项，用户裁定「更正审查误报」＋落点「**留档 + review.md + 订正陈旧注释**」。**不改任何行为**。
+> **误报 1「未包装 `RefreshingApiTransport`」**＝**有意排除**（`lib/shared/auth/refreshing_api_transport.dart` 第 30 行注释明写：设备令牌无刷新端点，单兵端不使用该装饰器）；
+> **误报 2「会话不落盘」**＝**不成立**（`lib/main.dart` 段 71 起注入 `SecureSessionStore` + `DiskConnectionConfigStore`，两端共用、重启免登）。
+> **误报根因（新发现）**：段 71 换实现时漏改 3 处字段注释仍写「内存实现（不落盘）」⇒ 订正 `lib/app/device_app.dart` / `lib/app/console_app.dart`（各 2 处）＋ `lib/features/connection/connection_page.dart`（1 处），**只改注释、逻辑零改动**。
+> **落点（5 文件，破「≤3 文件」已显式声明例外）**：上述 3 个 `.dart`（改注释）＋ `docs/review.md` R26 就地更正批注 ＋ `docs/decision-register.md`；推送 `58fcd75`。
+> **门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **All tests passed!（532 例）**（**未新增测试**）；Dart 不进 reactor，未重跑 `mvn test`。
+> 上一原子任务：**段 83 审查报告余项：错误行组件抽取（批 1~7，全量完成）**——
+> 承段 82「下一段（候选）」首项，按用户裁定「**分批全量抽取**」推进；把各页重复的「顶部错误行」抽成共享组件
+> `lib/shared/widgets/console_error_line.dart`（**键仍落内层 `Text`**，暴露 `textKey` 参数，既有断言**零改动**）。**只改渲染结构，不改文案 / 键 / 交互语义**。
+> 批 1~7 共抽 **38 处 / 20 文件**，`spacing` 四档 **0/4/8/12**；`connection_page` 第 248 行**三元配色**为全量抽取的**唯一豁免**（属状态色、非错误行模式，按现状保留）。
+> 落**七笔**（批 1 `254d62e` … 批 7 `56aad57`），各笔**破「≤3 文件」已显式声明例外**。**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **532 例**（**未新增测试**，复用错误行断言作行为不变证据）；未重跑 `mvn test`。
+> **未验项**：未在真机上核对各页错误行**视觉一致性**；`spacing: 0`（`command_page`）与三元配色豁免未单独加断言。
+> 上一原子任务：**段 82 审查报告余项：长列表虚拟化（无界增长列表 `ListView.builder` 化）**——
+> 承段 81「下一段（候选）」首项。把「命中记录」页（`_hits`）与「演习控制」页「当前演习日志」面板（`_logs`）两处**无界增长**（上限均 500）列表
+> 由 `ListView(children:)` **全量构建**改 `ListView.builder` **惰性构建**（固定首部即时构建 + 行惰性构建 + 空态占一行）。**只改渲染方式；数据口径 / 契约 / 键 / 文案零变更**。
+> 落**一笔**（**4 文件全改，破「≤3 文件」已声明例外**）。**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **532 例**（+2）；未重跑 `mvn test`。
+> **未验项**：未在真机观测 500 条滚动帧率 / 内存；虚拟化用例只证「屏外末行不构建」，**未做性能基准对比**。
+> 上一原子任务：**段 81 审查报告优先级第 6 项：`listHits` 接入指挥端——「命中记录」页**——
+> 承段 80「下一段（候选）」首项，用户裁定切入点「**`listHits` 接入指挥端**」。把只读端点 `GET /api/v1/situation/hits`（`operationId: listHits`）接进指挥端：
+> 新增「命中记录」页（`lib/features/console/hit_records_page.dart`），由「全体态势」页 AppBar **可选入口**进入（`onOpenHits == null` 时不渲染，既有用例零回归）。
+> **只补 UI，未改 API / 模型 / 缓存 / 契约**（`SituationApi.listHits`、`HitEvent`/`HitEventPage`、`SituationCache.hits` 段 46 已就绪）；**游标增量续拉**（首拍不带游标，此后以 `latestSeq` 续拉，本地至多 500 条）；**不臆造缺省**（可选字段缺失显示破折号）。
+> 落**一笔**（**5 文件 1 新 4 改，破「≤3 文件」已声明例外**）。**门禁**：`flutter analyze` → `No issues found!`；`flutter test`（全量）→ **530 例**（+6）；未重跑 `mvn test`。
+> **未验项**：**未对着真实后端实例**跑过真实命中流水（真实游标推进 / `latestSeq` 边界 / 空场次均未验证）。
+> 上一原子任务：**段 80 审查报告优先级第 5 项：`scds-solver` 由「零测试」到有回归网**——
+> 承段 79「下一段（候选）」首项。**只加测试、不改任何生产代码**（`UwbSolver` / `UwbFilter` 一字不动，模块定位即「逐字照抄作对拍基准」）。
+> 新增 `UwbSolverTest`（**10 例**：四锚点解算到已知点 ±0.02、同 `frameId` 缓存复用、旧时间戳 / 坏 meta / 几何不足分支、`toImagePct` 映射）＋ `UwbFilterTest`（**8 例**：状态机迁移 `FIRST_VALID` / `DUPLICATE_OR_OUT_OF_ORDER` / `HELD` / `ENTRY_REJECT`→`REACQUIRED` / `LOST` / `reset`），
+> 断言集中在**契约与状态迁移**而非某次迭代数值。`scds-solver` 只声明 `junit-jupiter`（无 assertj/mockito）⇒ 一律用 JUnit 5 原生断言、**不为测试新增依赖**。
+> 落**一笔**（**3 文件 2 测 + 本册**）。**门禁**：`mvn -pl scds-solver test` → 10 + 8 例全绿；`mvn test`（全反应堆）→ **BUILD SUCCESS**。
+> 上一原子任务：**段 79 审查报告优先级第 3、4 项：一项判误报维持现状，一项补可观测计数**——
+> 承段 78「下一段（候选）」前两项，**均无行为语义变更**。① 第 3 项「开演/停演事务含硬件下行」→ **判误报、不动代码**（该口径 2026-10-28 已裁定：同事务尾段下发、只留痕不回滚，审查报告未反映）；
+> ② 第 4 项「`SituationStateService` 吞异常无计数」→ 写手线程 `loop()` 抽 `handleSafely(StateEvent)`，catch 内 `dispatchFailures.incrementAndGet()` + `log.error`，并公开 `dispatchFailures()`（与既有 `framesWithoutExercise()` 等同取向；本仓无 Micrometer）。
+> 落**一笔**（**3 文件：1 主 + 1 测 + 本册**）。**门禁**：`mvn -pl scds-core -Dtest=SituationStateServiceTest test` → **43 例**；`mvn test`（全反应堆）→ **BUILD SUCCESS**；本机 IT 依赖 `scds-local-mysql`（13306，healthy）。
+> 上一原子任务：**段 78 审查报告优先级第 2 项：审计日志接线（指令域 `t_audit_log` 由「空转」变「有生产写入」）**——
+> 承段 77 后（优先级第 1 项＝段 77 日志流水 `2e50cd2`）。`AuditLog` / `AuditLogRepository` / `t_audit_log`（V1）早已就绪但**生产零调用**，本段把 `AuditLogRepository.insert` 接进 `CommandService`。
+> **接线范围＝仅指令域**（全仓只有 `CommandController` 把操作员 `Jwt` 传到服务层；演习 / 设备域须改控制器↔服务签名，**本段不动、暂不落审计**，据此裁定并留档）；动作名 `action = "command." + command.toLowerCase()` 与 `t_exercise_command.command` 同源；
+> `targetType="VEST"`、广播 `targetId=null`、`clientIp` 恒 `null`（core 无请求上下文）；**尽力而为**（只 catch `RuntimeException` + WARN，**不改主结局**，与 D11 同口径）；**未受理不留痕**；**两表职责不合并**（`t_exercise_log` 记字节 / `t_audit_log` 记谁何时下命令）。
+> 落**一笔 `2f9d29d`**（**3 文件**：`CommandService.java` + `CommandConfig.java` + `CommandHttpIT.java`，含 5 用例审计断言）。**门禁**：`mvn test` → **BUILD SUCCESS**（含 `CommandHttpIT` 6 例）。
+> 上一原子任务：**段 77 审查报告优先级第 1 项：指挥端演习控制页接入当前演习日志流水（`2e50cd2`）**——
+> 把 `GET /exercise/current/logs` 接到演习控制页：新增**可选端口** `logs` / `logInterval`，**游标增量轮询**（`sinceSeq=latestSeq` 续拉、单飞、至多 500 条），停演清空停表；
+> 端口为 `null` 时**完全不渲染**日志面板（既有用例零回归）；`describeLogEntry` 在 `vestNum` 与 `operator` 同时存在时**并列展示、不互相遮蔽**。**不臆造缺省**。
+> 落**一笔**（**3 文件**：`console_app.dart` + `exercise_control_page.dart` + `console_widget_test.dart`，+5 条日志面板用例）。**门禁**：`flutter analyze` + `flutter test`（Dart 侧 519 → **524 例**）；Dart 不进 reactor。
+> 上一原子任务：**段 76：段 75 遗留负例补测：WS `close 4000` `SITUATION_REVISION_TOO_OLD` / 导出未完成 `409` `REPLAY_EXPORT_FAILED`（本机黑盒脚本扩展，testing 第 76 节）**——
 > 承段 75 §75.5「未覆盖项」中**纯本机可闭环**的两项；**只扩展黑盒脚本并重跑，无任何仓库代码改动**。
 > **构造依据（读码确认，非猜测）**：`SituationRevisionLog.tooOld = sinceRevision < lastEvictedRevision`（初始 0）⇒ **`sinceRevision=-1` 恒超窗**（无需制造 1024 条变更撑满窗口）；
 > 导出执行器 `@Scheduled(fixedDelay=2s)` ⇒ 受理后有约 **2s `PENDING` 窗口** ⇒「受理后立刻下载」稳定落「未完成」态（并加「跑完后同 URL → 200」对照）。
