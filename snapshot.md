@@ -1,7 +1,18 @@
 # scds-next 交接快照
 
 > 更新：2026-11-14，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 85 审查报告全表复核：`R01~R28` 逐条重新核验（纯文档：`review.md` 全表复核章节 + 各行就地复核批注）**——
+> 当前任务：**段 88 B 档本机可闭环收尾：R20 登录时序 dummy hash（代码笔）＋ 全量基线计数口径纠错（文档笔）**——
+> 承段 87「下一段（候选）① B 档」；用户裁定（经 AskUserQuestion）R20 方向「**实施 dummy hash（推荐）**」。
+> **问题（R20，review 表「仍成立」项）**：`AuthService.login` 原 `account==null || !enabled() || !matches(...)` 的 `||` 短路 ⇒「账号不存在/停用」**不做 BCrypt**，可**从响应时间枚举用户名**。
+> **修法**：新增常量 `DUMMY_PASSWORD_HASH`，登录事务内**先无条件算一次** `matches`（不存在用 dummy 摘要 / 存在含停用用真实摘要），两条失败路径 BCrypt 次数一致；开销由未登记账号共用限流桶（`unknown`，5 次锁 5 分钟）**封顶**。
+> **代码笔（2 文件，未破「≤3 文件」）**：`scds-core/src/main/java/com/dualx/core/auth/AuthService.java` ＋ `scds-core/src/test/java/com/dualx/core/auth/AuthServiceIT.java`（新增探针用例：`spy` 断言「账号不存在仍调用了 `matches`」，**不做耗时断言**）。`AuthServiceIT` **19 → 20**。
+> **门禁**：`mvn -B clean verify` → **BUILD SUCCESS / 1182 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 624 ＋ api 139 ＋ app 333）。
+> **计数口径纠错（重要）**：复核时一度以「汇总各模块 `surefire-reports/*.txt`」得 core 603 / 总计 **1161**，误判「用例静默未跑」；**根因**：`TrackSamplingTest` 是**纯 `@Nested`**（外层 `.txt` 报 `0`，少算 `$Sampler` 13 + `$Writer` 8 = **21**）。**正确口径**＝Surefire **模块小结行 / 控制台逐类输出**。基线对账：1162（`617aa0b`）＋ 18（solver）＋ 1（`0cd9ba3`）＋ 1（R20）＝ **1182**，**无用例丢失**。
+> **文档笔（4 文件，破「≤3 文件」已显式声明例外）**：`docs/testing.md`（§77）＋ `docs/review.md`（R20 行就地批注 / 待办 4 → 3）＋ `docs/decision-register.md`（段 88）＋ 本快照。
+> 下一项**（候选，按推荐序）**：① **R27 容量项**（`LoginThrottle` 键数硬上限 / refresh 清理期限 / 队列·客户端上限与 RPO·RTO；设计较重，**建议独立成段**）；② **R06 设计决策**（设备登录 × `signing=false`：独立设备能力 or 禁用端点）；③ 全库行尾 renormalize（大范围 diff，需显式授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）。
+> 上一原子任务：**段 87 A-3：新建 `.gitattributes` 统一行尾**（纯仓库元数据，2 文件，推送 `7aa6240`；口径：默认 `* text=auto eol=lf`、文本显式 LF、`*.bat`/`*.cmd` 保留 CRLF、约 30 项 `binary`；**未做全库 renormalize**）。
+> 上一原子任务：**段 86 A 档本机文档收尾：A-2 快照回写 ＋ A-4 架构 / 环境手册与现状对齐**（`architecture.md` / `environments.md` 顶部「现状更新（2026-11-14，段 86）」banner ＋ 点名行更正；2 文件，未破 ≤3）。
+> 上一原子任务：**段 85 审查报告全表复核：`R01~R28` 逐条重新核验（纯文档：`review.md` 全表复核章节 + 各行就地复核批注）**——
 > 承段 84，并经用户就「本机还可继续完善哪些事项」作答后助理推荐的 **A-1（`review.md` 余项复核更正）**；用户回「继续」推进本段。
 > 2026-10-27 的现状注记当时只覆盖 R07/R08/R12/R13/R17 与 R21 的 COMMAND 部分，其余条目「未被重新核验」；本段对 **R01~R28 全表逐条**以 3 个并行检索任务核实当前代码。**只改文档、不改任何行为**。
 > **复核结论**：**已落地 14**（R01/R02/R03/R04/R05/R09/R10/R14/R15/R18/R19/R21/R22/R28）／**部分成立 7**（R06/R11/R16/R23/R24/R25/R27）／
@@ -1500,13 +1511,13 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn -B clean verify`：2026-11-10，**1162项，失败/错误/跳过均0**：
-protocol19 + gateway49 + **core622**（611→622，+11 = 段 68 的 9 单测 + 2 IT）+ api139 + app333（solver/domain无测试）。
-（上一基线为 2026-10-28 的 **1151 项 / core611**；段 68/69 因本机 Docker 引擎未运行，其 **1162 项**预期一直**待补验**，
-本次（段 70）已在 Docker 恢复后**首次跑通**，详见 testing 第 70 节。）
-计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）取值；按 `target/surefire-reports/TEST-*.xml`
-累加会少 core 的 21 项（`@Nested` 内部类如 `TrackSamplingTest$Sampler`/`$Writer` 不落在外层类 XML 里），
-口径说明见 testing 第 20 节。
+**当前**全量`mvn -B clean verify`：2026-11-14（段 88），**1182项，失败/错误/跳过均0**：
+protocol19 + solver18 + gateway49 + **core624**（622→624，+2 = `0cd9ba3` 的 `SituationStateServiceTest` +1 ＋ 段 88 R20 `AuthServiceIT` +1）+ api139 + app333。
+（上一基线为 2026-11-10 的 **1162 项 / core622**〔§70，solver/domain 计 0〕；此后 `39d0b9b` 令 solver 由零测试到回归网 **+18**（UwbSolver 10 + UwbFilter 8），
+`0cd9ba3` 令 core **+1**，段 88 R20 再 **+1**——即 1162 → 1182，**无用例丢失**，详见 testing §70 / §77。）
+计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）或**控制台逐类输出**取值；按 `target/surefire-reports/*.txt`
+的 `Tests run` 累加会**少算 `@Nested` 外层类**——`TrackSamplingTest` 外层 `.txt` 报 `0`，其 `$Sampler` 13 + `$Writer` 8 = **21** 项不计入
+（段 88 曾据此误算 core 603 / 总计 1161）；口径说明见 testing §77.3（及 §20）。
 L6 单实例保护口径收口新增证据：**无测试增减**——本任务只改类 javadoc 与文档（`testing.md` §28.3/§29.3 订正 +
 新增第 30 节、`decision-register.md` 网关下行段订正 + 文末「L6 口径订正」节），全量仍 **1151 项**（0/0/0）不变；
 判据与现场验收清单详见 testing 第 30 节。

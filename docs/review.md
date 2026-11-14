@@ -36,7 +36,7 @@
 | R17 | 已被取代 | 2026-10-27 已记，见 testing.md |
 | R18 | 已落地 | 限流判定在校验口令**之前**，`LoginThrottle.lockout()` 实例级 `synchronized`；`AuthServiceIT` / `LoginThrottleTest` 覆盖并发绕过 |
 | R19 | 已落地 | 限流键改用**库内 `account.id()`**（未登记账号收敛到 `unknown`），大小写变体共享同桶；`AuthServiceIT` 覆盖 |
-| R20 | 仍成立 | 账号不存在 / 停用走 `\|\|` 短路，**不做** BCrypt；全库无 dummy hash；仅错误码相同，时序未抹平 |
+| R20 | **已落地** | 原「账号不存在 / 停用走 `\|\|` 短路、**不做** BCrypt、仅错误码相同、时序未抹平」→ 已引入固定 `DUMMY_PASSWORD_HASH`，账号不存在时也对固定摘要跑一次 `matches`，两条失败路径开销同量级（段 88 / `AuthService`）；`AuthServiceIT` 新增探针用例（19 → 20） |
 | R21 | 已落地 | 各控制器统一抛 `BusinessException(ApiErrorCode.*)` 交全局出口，不再默认 500（COMMAND 部分 2026-10-27 已记） |
 | R22 | 已落地 | 新增 `VestLedgerService.retire()` 实现**逻辑注销**（置 `enabled=false` + 清会话）；`DeviceController` 走服务层，不直调物理删除 |
 | R23 | **部分成立** | 已分离**独立测试库**（`scds_next_test` / `scds_test` 用户，不再与开发库共库）；仍与开发库**共用同一本机容器**（13306）；`AuthServiceIT` 真提交 + `@AfterEach` 清理为**有意**设计（验真实提交与行锁） |
@@ -46,7 +46,7 @@
 | R27 | **部分成立** | TTL 正值 / 顺序校验已落（`AuthJwtProperties.requirePositive` 等）；**限流桶无硬上限**、**refresh 记录无清理期限**、**队列 / 客户端上限与 RPO / RTO 未定** 仍成立 |
 | R28 | 已落地 | `AuthController.toUser` 只映射 `userId/username/displayName/roles`，**不含 `passwordHash`** |
 
-**复核后仍成立的待办（4 项）**：R06（设备登录 × 禁用签发）、R20（登录时序）、R24（发布前运维项）、R27（容量 / 保留）。
+**复核后仍成立的待办（3 项）**：R06（设备登录 × 禁用签发）、R24（发布前运维项）、R27（容量 / 保留）。（**R20 登录时序已于段 88 落地**，见 review 表 R20 行与 testing.md §77。）
 **部分成立、其余落点未完成（4 项）**：R11（单实例保护）、R16（离线声明）、R23（测试隔离）、R25（配置事实）。
 
 ## 1. 结论
@@ -107,7 +107,7 @@
 |---|---|---|
 | R18 | P1 **〔复核 2026-11-14：已落地〕** | AuthService限流检查在账号锁之前，多个并发请求可同时通过未锁定判定，再排队做BCrypt，绕过“第6次校验前拒绝”时序。重新核对原子预算/锁定检查位置，补并发IT |
 | R19 | P1 **〔复核 2026-11-14：已落地——限流键改用库内 account.id()〕** | DB使用utf8mb4_0900_ai_ci，账号查找忽略大小写/重音；LoginThrottle键使用原字符串。变体失败分散到不同账号桶，需与DB身份规则一致的归一化/账号ID限流，测试IP阈值不足以替代账号阈值 |
-| R20 | P2 **〔复核 2026-11-14：仍成立——无 dummy hash，短路时序差仍在〕** | 不存在账号/停用时短路不做BCrypt，存在错误口令时做；统一响应文案仍有时序差异。评估dummy hash及请求成本边界，密码长度约束也未完整定义 |
+| R20 | P2 **〔复核 2026-11-14：已落地（段 88）——引入固定 dummy 摘要，账号不存在时亦跑一次 BCrypt〕** | 不存在账号/停用时短路不做BCrypt，存在错误口令时做；统一响应文案仍有时序差异。评估dummy hash及请求成本边界，密码长度约束也未完整定义。〔段 88 已修时序：账号不存在时对固定摘要跑一次 `matches`；开销由账号限流桶（未登记账号共用 `unknown`，5 次即锁 5 分钟）封顶。**密码长度约束仍未定义**，保留〕 |
 | R21 | P1 接线前 **〔复核 2026-11-14：已落地——统一 BusinessException(ApiErrorCode.*) 交全局出口〕** | BusinessException仅映射AUTH等少数码，EXERCISE/COMMAND等默认500。相关服务落地时逐项映射契约404/409/400，不按前缀猜，增加表驱动用例 |
 | R22 | P1 接线前 **〔复核 2026-11-14：已落地——新增 VestLedgerService.retire() 逻辑注销〕** | 台账删除契约是逻辑删除，VestRepository.deleteByVestNum为物理删除；schema无外键，引用检查与演习期间禁止注销必须由服务负责，不能将仓储方法直接暴露 |
 | R23 | P2 测试隔离 **〔复核 2026-11-14：部分成立——已分离独立测试库，仍共用同一本机容器；真提交+清理为有意设计〕** | IT与开发共库；AuthServiceIT真实提交且AfterEach清理，异常杀进程可留残数据。建议专用测试库；测试连接默认无rewrite参数，不能作为性能基线 |

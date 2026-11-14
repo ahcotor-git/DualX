@@ -5041,3 +5041,68 @@ PC4「未完成导出即下载 → 409 `REPLAY_EXPORT_FAILED`」（需人工造�
 - **门禁无增减**：本段**无仓库代码改动**（脚本产在 `E:\ScdsConfig`，**不入库**）⇒ Dart 侧仍 **519 例**、Maven 侧仍 **1162 项**（**未重跑**）。
 - **仍未覆盖项**：上行帧驱动的态势变化（心跳 / 坐标 / 命中，仿真 `inject*` 仅进程内）；**真实串口时序 / UWB 12001 连续坐标 / 容量与长稳**（仿真档不可替代现场硬件验收）。
 
+## 77. B 档（本机可闭环收尾）：R20 登录时序 dummy hash ＋ 全量基线**计数口径纠错**（`1161` 系误算 → 权威 **1182**）
+
+承段 87「下一段（候选）① **B 档**」。本段先落 **R20**（审查表「仍成立」项）**代码笔**；
+在**复核全量基线**时**发现并纠正**了一处**计数口径错误**（§77.3）——此前的 `1161` 是**误算**，权威值为 **1182**。
+
+### 77.1 R20：登录失败路径时序未抹平（已修）
+
+- **原状**：`AuthService.login` 用 `account == null || !account.enabled() || !passwordEncoder.matches(password, account.passwordHash())`——
+  **`||` 短路**使「账号不存在 / 停用」**根本不做 BCrypt**，响应耗时远小于「口令错误」那次 BCrypt，攻击者可据此**从响应时间枚举用户名**。
+  统一文案只抹平了**错误码**，**未抹平时序**。
+- **修法**：引入固定 `DUMMY_PASSWORD_HASH`（`AuthService` 常量）。登录事务内**先无条件算一次** `matches`：
+  - 账号不存在 ⇒ 用 **dummy 摘要**陪跑一次 BCrypt；
+  - 账号存在（含**停用**，有真实摘要）⇒ 用**真实摘要**比对。
+  随后才做 `account == null || !account.enabled() || !passwordMatches` 的失败判定。两条失败路径 **BCrypt 次数一致 ⇒ 开销同量级**。
+- **开销有界（非放大攻击面）**：未登记用户名**共用同一个限流桶**（`UNKNOWN_ACCOUNT_KEY = "unknown"`），**5 次失败即锁 5 分钟**，
+  且**锁定判定在校验口令之前**（R18）⇒ 每桶每窗最多 5 次额外 BCrypt，**被限流封顶**。
+- **文件（2，未破「≤3 文件」上限）**：`scds-core/src/main/java/com/dualx/core/auth/AuthService.java`（改）＋
+  `scds-core/src/test/java/com/dualx/core/auth/AuthServiceIT.java`（改，新增探针用例）。
+- **回归门禁**：新增用例 `missingAccountStillPaysOnePasswordHashComparison` 用 **`spy` PasswordEncoder 断言「账号不存在时仍调用了 `matches`」**，
+  **不做耗时断言**（避免共享 CI 上 flaky）。`AuthServiceIT` **19 → 20**。
+
+### 77.2 全量门禁实测（2026-11-14，`scds-local-mysql` 13306 healthy，Java 21）
+
+命令：仓库根 `mvn -B clean verify` → **BUILD SUCCESS**。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| solver | 18 | 0/0/0 | 回归网（`39d0b9b` 引入，§70 基线**尚未含**） |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | **624** | 0/0/0 | **622 → 624（+2）**：`0cd9ba3` 的 `SituationStateServiceTest` +1 ＋ 本段 R20 `AuthServiceIT` +1 |
+| api | 139 | 0/0/0 | 未改动 |
+| app | 333 | 0/0/0 | 未改动 |
+| domain | 0 | 无测试 | |
+| 总计 | **1182** | **0/0/0** | 全 reactor SUCCESS |
+
+### 77.3 计数口径纠错：`1161` 系误算，权威为 `1182`（**重要**）
+
+本段复核中，曾用「**汇总各模块 `target/surefire-reports/*.txt` 的 `Tests run`**」得到 core 603 / 总计 1161，与 §70 基线 1162「相差 19」，一度误判为**用例静默未跑**。**根因是计数口径本身有缺陷**：
+
+- `TrackSamplingTest` 是**纯 `@Nested` 结构**（`TrackSamplingTest$Sampler` 13 ＋ `TrackSamplingTest$Writer` 8 ＝ **21**），
+  其**外层类**的 `.txt` 报告 `Tests run: 0` ⇒ **`.txt` 汇总少算 21**（603 vs 真实 624）。
+- **正确口径**：Surefire 的**模块小结行 / 控制台逐类输出**（`Tests run: 624, Failures: 0, ...`）**已含 `@Nested`**（逐类输出会列出 `…Test$Sampler` 等）；
+  **不得**以 `.txt` 文件数量或 `.txt` 内计数替代模块小结。
+- **附带澄清**：`scds-core/src/test/java/com/dualx/core/TestDatabaseGuardTest.java` **一个源文件含两个顶层类**
+  （`TestDatabaseGuardTest` ＋ `TestDatabaseIsolationIT`，后者 `@SpringBootTest`）——**合法 Java**（多个包级私有顶层类共文件），
+  两份报告均**真实执行**，**非**「陈旧残留报告」。
+
+**基线对账（无任何用例丢失，方向为「只增」）**：
+
+```
+§70 基线（617aa0b）            1162 = protocol 19 + gateway 49 + core 622 + api 139 + app 333（solver/domain 计 0）
+  ＋ 39d0b9b（solver 回归网）     +18（UwbSolver 10 + UwbFilter 8）
+  ＋ 0cd9ba3（state 可观测计数）   +1（SituationStateServiceTest 42 → 43）
+  ＋ 本段 R20                   +1（AuthServiceIT 19 → 20）
+本段权威值                    1182 = protocol 19 + solver 18 + gateway 49 + core 624 + api 139 + app 333
+```
+
+### 77.4 未验项 / 后续
+
+- **R27 容量项仍未落**（设计较重，建议**另开段**）：`LoginThrottle` **键数无硬上限**、**refresh 记录无清理期限**、**队列 / 客户端上限与 RPO / RTO 未定**。
+- **R20 遗留**：**密码长度约束仍未定义**（保留在 review 表 R20 行）。
+- **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式授权**）。
+- **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换。
+

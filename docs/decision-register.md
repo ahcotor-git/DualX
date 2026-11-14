@@ -3254,4 +3254,38 @@ R23（测试隔离仍共用同一本机容器）、R25（配置事实登记）�
 2. **全库行尾 renormalize**（承接本段「未验项」，大范围 diff，**需显式评估与授权**）；
 3. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换。
 
+**段 88 落地（2026-11-14，B 档本机可闭环收尾：R20 登录时序 dummy hash ＋ 全量基线**计数口径纠错**）**：
+承段 87「下一段（候选）① **B 档**」。勘察结论：B 档所列 **R18 / R19 并发与大小写限流、R27 配置校验（TTL 正值 / 顺序）**均已落地/已覆盖（见 review 表 R18/R19 行、`AuthJwtPropertiesTest`），
+**R20 为唯一未落地实质项**。用户裁定（经 AskUserQuestion）：R20 方向「**实施 dummy hash（推荐）**」，其口径逐字为「在 AuthService 登录失败分支引入固定 dummy BCrypt 摘要：账号不存在/停用时也对 dummy 做一次 BCrypt 比对，抹平时序差。
+改动 AuthService.java + AuthServiceIT.java（2 文件，未破 ≤3）。成本边界：未知账号共用一个桶、5 次即锁 5 分钟 ⇒ 额外 BCrypt 开销封顶。
+测试用 spy PasswordEncoder 断言「账号不存在时仍调用了 matches」（不做 flaky 的耗时断言）。」。**属行为变更（登录失败路径多做一次 BCrypt），已按裁定实施**。
+
+- **问题（R20，审查表「仍成立」项）**：`AuthService.login` 原用
+  `account == null || !account.enabled() || !passwordEncoder.matches(...)`，`||` 短路 ⇒「账号不存在 / 停用」**不做 BCrypt**，
+  响应耗时远小于「口令错误」⇒ 可**从响应时间枚举用户名**（统一文案只抹平错误码，未抹平时序）。
+- **修法**：新增常量 `DUMMY_PASSWORD_HASH`（明文随机、从不作为口令被接受）；登录事务内**先无条件算一次** `matches`——
+  账号不存在 ⇒ 用 **dummy 摘要**；账号存在（含**停用**，有真实摘要）⇒ 用**真实摘要**；随后才做失败判定。两条失败路径 **BCrypt 次数一致 ⇒ 开销同量级**。
+- **成本边界（非放大攻击面）**：未登记用户名共用限流桶 `UNKNOWN_ACCOUNT_KEY = "unknown"`，**5 次失败即锁 5 分钟**，
+  且**锁定判定在口令校验之前**（R18）⇒ 额外 BCrypt 次数**被限流封顶**。
+- **文件**：`scds-core/src/main/java/com/dualx/core/auth/AuthService.java`（改）＋
+  `scds-core/src/test/java/com/dualx/core/auth/AuthServiceIT.java`（改）——**2 文件：未破「≤3 文件」上限**。
+
+**门禁**：`mvn -B clean verify` → **BUILD SUCCESS / 1182 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 624 ＋ api 139 ＋ app 333）；
+`AuthServiceIT` **19 → 20**。
+
+**计数口径纠错（本段顺带，重要）**：复核全量基线时，一度以「汇总各模块 `target/surefire-reports/*.txt`」得 core 603 / 总计 **1161**，
+与 §70 基线 1162 差 19，**误判为用例静默未跑**。**根因**：`TrackSamplingTest` 是**纯 `@Nested`**（`$Sampler` 13 ＋ `$Writer` 8 ＝ 21），
+其**外层类 `.txt` 报 `Tests run: 0`** ⇒ `.txt` 汇总**少算 21**。**正确口径**是 **Surefire 模块小结行 / 控制台逐类输出**（已含 `@Nested`），
+**不得**以 `.txt` 计数替代。**基线对账**：1162（`617aa0b`）＋ 18（`39d0b9b` solver 回归网）＋ 1（`0cd9ba3` `SituationStateServiceTest`）＋ 1（本段 R20）＝ **1182**；
+**无任何用例丢失**（方向为「只增」）。另澄清：`TestDatabaseGuardTest.java` **一个源文件含两个顶层类**（`TestDatabaseGuardTest` ＋ `TestDatabaseIsolationIT`，后者 `@SpringBootTest`），
+两份报告均**真实执行**，**非**「陈旧残留报告」。
+
+**未验项**：R27 容量项（`LoginThrottle` 键数硬上限 / refresh 记录清理期限 / 队列·客户端上限与 RPO·RTO）；R20 的**密码长度约束**仍未定义；全库行尾 renormalize（承接段 87，需显式授权）；C 档（真机 / GUI / 现场硬件 / T-PROD）。
+
+**下一段（候选）**：
+1. **R27 容量项**（设计较重，建议**独立成段**）：`LoginThrottle` 键数硬上限 ＋ 淘汰策略、refresh 记录清理期限（`@Scheduled` 或按需）、队列 / 客户端上限与 RPO/RTO 定型；
+2. **R06 设计决策**（设备登录 × `signing=false`：独立设备能力 or 禁用该端点）；
+3. **全库行尾 renormalize**（大范围 diff，需显式评估与授权）；
+4. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换。
+
 
