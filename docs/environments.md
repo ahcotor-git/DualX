@@ -4,6 +4,9 @@
 > 源代码入口：`e:\DualX\scds-next`。当前状态见 [snapshot.md](../snapshot.md)。
 > 最新部署决定：本地承载全部业务，云端仅Nginx/FRPS入口，本地FRPC主动穿透。
 > 本文部署规范优先于旧云签/云端账号同步设计；历史环境事实不代表本次已部署远端。
+>
+> **现状更新（2026-11-14，段 86）**：§1 的若干「本次实测」行与 §4 的测试计数取自 **2026-10-21** 基线（§1 第 4~6 行已于段 72~74 刷新）；下列事实**已就地更正**：
+> **§1 UWB TCP / §1 Flyway / §4 测试计数 / §7 两行排障**。当前事实以 [snapshot.md](../snapshot.md)、[testing.md](testing.md)、[review.md](review.md) 为准。
 
 ## 1. 当前环境事实
 
@@ -20,8 +23,8 @@
 | 数据库 | scds_next，应用账号scds_app；监听127.0.0.1:13306 |
 | 应用产物 | `scds-app/target/scds-next.jar`，仅构建产物，不入库 |
 | HTTP | 本次两种签发配置均在127.0.0.1:11001成功启动；验证结束已停止本次进程 |
-| UWB TCP | 12001 未监听；gateway 尚无源码，不是防火墙故障 |
-| Flyway | 8份迁移已验证，当前schema版本9，原预留V8未创建 |
+| UWB TCP | gateway **已有源码**（含 `UwbSerialLink` 真实串口）；12001 **默认未监听**——由 `gateway.mode`（`real` / `simulator`）按需开，不是防火墙故障 |
+| Flyway | 迁移 **V1~V7、V9、V10、V11（10 份；V8 空缺、不补）**，当前 schema **v11**（本机 `scds_next`，13306）；见 testing §70 / §76 |
 
 本地已存在 `.env`，本次未改动秘密。只核验键名与非空：
 SCDS_MYSQL_ROOT_PASSWORD、SCDS_MYSQL_PASSWORD、JWT公私钥文件路径。
@@ -75,7 +78,7 @@ docker compose logs --tail 30 mysql
 mvn clean verify
 ```
 
-已实测309项测试通过、8个reactor项目成功。`verify`不安装构件到本机Maven仓库；
+已实测全反应堆通过、8个reactor项目成功（测试数已由基线 **309 项** 增至 **1162 项** 基线；`scds-solver` 段 80 再 +18，实际以当场 `mvn clean verify` 为准）。`verify`不安装构件到本机Maven仓库；
 后续若要在模块目录独立执行spring-boot:run，先按需跑 `mvn install`。
 正式验收禁止通过 `-DskipTests`伪装成通过。
 
@@ -267,7 +270,7 @@ Linux私钥建议0600、部署目录0700；Windows按服务账号配置ACL，不
 | DB Exited / unhealthy | 检查Docker Engine、现有容器和凭据，不删卷或重置其他项目 |
 | Flyway建议升级告警 | 当前Flyway声明的已测MySQL上界低于8.4；本机已成功，不等于正式支持保证 |
 | Mockito动态agent告警 | 当前Java21测试通过；后续升级JDK前配置测试agent，不按生产故障处理 |
-| auth仍501 | 控制器尚未接核心，不能通过重启“修复” |
-| signing=false下login401 | 已实测设计缺口，不是错误登录凭据 |
-| 12001不监听 | gateway尚无代码；参数存在不代表能力已实现 |
+| auth仍501 | **已过时**：auth 已接线（login / refresh / logout / me 已实现；段 70 真实例 `me` 200）。占位遗留只在未实现业务域 |
+| signing=false下账号login | **已更正**：不是 401——`AccountAuthController` 以 `@ConditionalOnProperty(signing-enabled)` 条件注册，`signing=false` 时路由**缺席 → 404**（review R05 已落地）；**设备 login 仍 500**（`requireSigning()` 抛 `IllegalStateException`，R06 设计决策待定） |
+| 12001不监听 | gateway **已有源码**；12001 为**按需监听**（`gateway.mode`），默认不监听；端口参数存在不代表链路已开 |
 | GitHub推送失败 | 保留本地提交和未提交文档，核验远端后再同步，不reset或force push |

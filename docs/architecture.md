@@ -6,6 +6,13 @@
 > 本地FRPC主动建立隧道。本文部署与鉴权边界取代旧云管、云签和双签发候选设计。
 > 旧基线计数是历史记录，不代表本次架构变更已完成生产验收。
 
+> **现状更新（2026-11-14，段 86）**：本文 §1~§9 中「当前 / 未实现」的表述是 **2026-10-21（基线 `da02622`）** 的时点事实，**已大幅过时**，仅作历史记录保留；
+> 当前事实以 [review.md](review.md)（含「全表复核（2026-11-14）」）、[testing.md](testing.md)、[snapshot.md](../snapshot.md) 为准。至 2026-11-14 的关键变化：
+> ① `scds-gateway` **已有源码**（`UwbSerialLink` 真实串口、链路状态与下行接线）；② `scds-solver` **已有回归网**（`UwbSolver` 10 + `UwbFilter` 8，见 testing §80）；
+> ③ `scds-core` 已有**演习生命周期 / 自愈、态势状态所有者、指令、复盘 / 导出**等业务；④ `scds-api` 已接线 auth / device / plan / map / life / command / situation / replay 各域；
+> ⑤ `scds-app` 已有**完整应用启动 IT**；⑥ 迁移已增至 **V1~V7、V9、V10、V11**（**V8 空缺、不补**，见 testing §70 / §76）；⑦ `ScdsUwbProperties` 已是 **Spring 绑定 bean**；
+> ⑧ `scds.deployment-mode` 仍**无业务消费者**（属**正交设计登记、非缺陷**，见 review R25）。
+
 ## 0. 本地部署拓扑（已确认）
 
 ```mermaid
@@ -191,6 +198,7 @@ Runner结束先于ApplicationReadyEvent，但不阻止端口提前收请求；�
 FRPC原生运行时转发本机回环11001；如需要LAN直连，应用绑定经批准的LAN地址或网卡，
 防火墙仅允许现场网段。容器FRPC的127.0.0.1不等于宿主机，不能盲抄ZAA容器localIP。
 当前 deployment-mode 无消费者、硬件能力开关未实现、UWB参数尚无Spring绑定bean。
+**〔复核 2026-11-14：其中「UWB参数尚无Spring绑定bean」**已过时**——`ScdsUwbProperties` 已是 Spring 绑定 bean（banner 仍含 `modeEn/uwbEn` 重复标识，见 review R25）；「deployment-mode 无消费者」仍成立，但属**正交设计登记、非缺陷**；「硬件能力开关」以 `gateway.mode`（`real` / `simulator`）落地。〕**
 本仓库只有开发MySQL compose；deploy目录提供FRPC/Nginx配置样例，
 不是已部署服务，尚无应用Dockerfile、生产Compose或服务管理安装脚本。
 HTTP graceful 不管理串口、WS与TCP资源；完整生命周期需显式实现。
