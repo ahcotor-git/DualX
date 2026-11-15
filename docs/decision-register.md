@@ -3499,3 +3499,27 @@ R27 原判「部分成立」，逐项拆开后**只有前两项能在本机闭�
 5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
 
 
+**段 92 裁定（2026-11-15 续）：§10.6 四项设计前置据用户裁定落定**——
+在**无人值守模式**下经 AskUserQuestion 就 §10.6 四项**逐项裁定**，结果写入 `03b-token-capabilities.md` §3 / §7 / §10.1 / §10.2 / §10.5 / §10.6：
+
+1. **配置键方案** —— 取「**统一重命名子键**」：账号 `scds.auth.jwt.account.*`、设备 `scds.auth.jwt.device.*`。
+   **取代**原 §3 拟议（账号保留 `scds.auth.jwt.*` ＋ 新增 `scds.auth.device-jwt.*`）。落地影响：`AuthJwtProperties` 前缀须改，
+   现有账号键与 `application.yml` 须同步迁移（见 §10.1 拆 2a）。
+2. **`TokenSigner` 设备方法去留** —— 取「**一次迁净**」：删除 `TokenSigner.signDeviceToken`，`DeviceAuthService` **同段**迁到 `DeviceTokenSigner`，
+   **不保留兼容入口**（取代 §3 原「暂留兼容入口」）。即 §10.2 拆 3b，**须破「≤3 文件」**（删方法与迁移其唯一调用方必须同段编译）。
+3. **`me` 身份策略（§7）** —— 取「**边缘预置/同步最小账号身份与角色快照、复用本地 `me`**」；**不**采纳「令牌携带签名身份快照」。
+   新增前置：相同 UUID 约定 / 初始化同步工具 / 陈旧容忍策略（留待包 6 前的独立方案）。
+4. **密钥供给方式** —— 取「**部署侧提供 PEM**」，本仓**不生成、不入库**；轮换策略另议（§4 末）。
+
+**性质**：本次**仅解除设计阻塞**——**纯文档裁定**（不改代码 / 配置 / 密钥 / 迁移），**不构成包 2 的开工授权**；
+逐段授权与逐次提交 / 推送授权仍适用。
+**文件**：`docs/design/03b-token-capabilities.md`（§3 / §7 / §10.1 / §10.2 / §10.5 / §10.6）＋ 本册 ＋ `snapshot.md`（合计 3 文件，未破上限）。
+
+**下一段（候选）**：
+1. **工作包 2a**（账号键重命名：`AuthJwtProperties` 前缀 → `scds.auth.jwt.account` ＋ `application.yml` 账号段 ＋ `AuthJwtPropertiesTest`，3 文件）——经逐段授权后开工；
+2. **工作包 2b / 2c**（`DeviceJwtProperties` ＋ `DeviceTokenSigner` 端口 ＋ 测试；yml 设备段接线）；
+3. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+4. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
+
+

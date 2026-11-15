@@ -43,27 +43,30 @@ refresh不得跨库兑换。保持原文SHA-256、token_hash查库、滚动刷�
 本方案未允许所有客户共用一把云端账号公钥或issuer。每客户独立实例约束不变，
 不引入tenant_id；账号信任配置只接受该客户被批准的签发者。
 
-## 3. 推荐配置与兼容原则
+## 3. 配置与兼容原则
 
-建议保留scds.auth.jwt.*作为账号能力/信任配置，避免重命名所有现有账号配置。
-新增scds.auth.device-jwt.*独立承载设备签发与信任，不再复用账号私钥或issuer。
+**（2026-11-15，段 92 裁定）** 配置键方案已裁定为**统一重命名子键**：账号能力/信任配置迁为
+`scds.auth.jwt.account.*`，设备签发与信任为 `scds.auth.jwt.device.*`，二者不再复用私钥或 issuer。
+原拟议「账号保留 `scds.auth.jwt.*`、另加 `scds.auth.device-jwt.*`」**已被本裁定取代**。
+重命名意味着现有账号键（`scds.auth.jwt.*`）与 `AuthJwtProperties` 前缀须一并迁移（见 §10.1）。
 以下是拟议键名和非秘密示例，不是当前可运行配置，也不写入实际.env。
 
 ```yaml
 scds:
   auth:
     jwt:
-      signing-enabled: false
-      issuer: customer-account-authority
-      public-key-file: /protected/account-public.pem
-      private-key-file: ""
-      jwks-uri: ""
-    device-jwt:
-      signing-enabled: true
-      issuer: customer-edge-device-authority
-      public-key-file: /protected/device-public.pem
-      private-key-file: /protected/device-private.pem
-      token-ttl: 12h
+      account:
+        signing-enabled: false
+        issuer: customer-account-authority
+        public-key-file: /protected/account-public.pem
+        private-key-file: ""
+        jwks-uri: ""
+      device:
+        signing-enabled: false
+        issuer: customer-edge-device-authority
+        public-key-file: /protected/device-public.pem
+        private-key-file: /protected/device-private.pem
+        token-ttl: 12h
 ```
 
 推荐规则：
@@ -77,15 +80,14 @@ scds:
   如需要只验证设备令牌而不签发，仍须显式配置设备issuer/公钥。
 - 设备信任未配置时不接受设备JWT；不能从令牌的iss/jku/x5u自动发现或下载密钥。
 - 本轮云边离线方案只用本地PEM。账号jwks-uri必须为空，不宣称现有远端JWKS有离线兜底。
-- 原账号配置键保留，不代表旧设备签发行为自动保留。升级必须显式迁移设备配置，
+- 账号键重命名为 `scds.auth.jwt.account.*` 后，旧键名不再生效；升级须同步迁移账号配置，
   改实际凭据仍需单独授权，不自动复制私钥、不把公开dev-keys部署到现场。
 
-当前TokenSigner的enabled()仍被AuthService用作账号能力判断。
-推荐新增domain端口DeviceTokenSigner，独立暴露enabled、设备TTL与signDeviceToken，
-设备业务仅依赖该端口。账号业务继续依赖TokenSigner，不重写已完成AuthService。
-为维持逐段编译，可先新增独立端口/适配器，再迁移旧设备调用；
-旧TokenSigner设备方法若暂留作兼容入口，必须委托独立设备适配器且检查设备能力，
-不得保留账号密钥回退。最终清理兼容入口另按引用清单分段实施。
+当前 `TokenSigner.enabled()` 仍被 `AuthService` 用作账号能力判断。
+**（段 92 裁定）** 新增 domain 端口 `DeviceTokenSigner`，独立暴露 `enabled`、设备 TTL 与 `signDeviceToken`，
+设备业务仅依赖该端口；**一次迁净**——直接删除 `TokenSigner.signDeviceToken`，**不保留兼容入口**
+（`DeviceAuthService` 在同段迁到 `DeviceTokenSigner`）。账号业务继续依赖 `TokenSigner`，
+不重写已完成 `AuthService`。
 
 ## 4. 双用途验签与权限隔离
 
@@ -184,6 +186,10 @@ displayName、roles、permissions和lastLoginAt。当前JWT只稳定提供sub/ro
 | 边缘预置/同步最小账号身份与角色快照 | 复用现有本地me；须定义相同UUID、初始化工具、签名/同步来源、失效及陈旧容忍策略 |
 | 云端令牌携带签名身份快照，由边缘映射User | 新增JWT字段、签发端兼容和字段校验；角色/姓名更新到令牌刷新才生效，me不再复用原本地查库语义 |
 
+**（2026-11-15，段 92 裁定）** 身份策略取**第一行**：边缘**预置/同步相同 UUID 的最小账号身份与角色快照**，
+`/auth/me` **复用现有本地查库语义**。由此新增前置：相同 UUID 约定、初始化/同步工具、失效与陈旧容忍策略
+（均留待包 6 前的独立方案）。**不**采纳「令牌携带签名身份快照」路线。
+
 两者都不能自动声称解决云端账号禁用的即时传播：accessToken仍按既有不可撤销语义，
 本地身份检查如何影响其他业务端点需和D04权限规则对齐。
 客户端另配云端认证baseUrl和边缘业务baseUrl，避免向边缘的404刷新入口反复请求；
@@ -251,39 +257,51 @@ displayName、roles、permissions和lastLoginAt。当前JWT只稳定提供sub/ro
 | 配置样例 | `scds-app/src/main/resources/application.yml` | `scds.auth.jwt.*`（第 88~108 行） |
 | 相关测试 | `scds-api/src/test/java/com/dualx/api/security/{AuthJwtPropertiesTest,RsaTokenSignerTest,DisabledCapabilityRouteFilterTest}.java`、`scds-app/src/test/java/com/dualx/api/security/SecurityJwtValidationIT.java`、`scds-app/src/test/java/com/dualx/{AuthHttpIT,ApplicationStartupIT}.java`、`scds-app/src/test/java/com/dualx/security/SecurityMetricsIT.java`、`scds-core/src/test/java/com/dualx/core/auth/{AuthServiceIT,DeviceAuthServiceIT}.java` | 单密钥装配 |
 
-### 10.1 工作包 2 — 新设备配置与 domain 签发端口
+### 10.1 工作包 2 — 账号键重命名 + 设备配置与 domain 签发端口
 
-**目标**：显式设备开关、独立 issuer/TTL、配置负向校验（§3）。**前置**：无（可先做）。
+**目标**：按 **§3 段 92 裁定**落地配置键——账号键迁 `scds.auth.jwt.account.*`、新增 `scds.auth.jwt.device.*`；
+并新增 domain 设备签发端口。**前置**：无（可先做）。
 
-- **新增** ① `scds-api/src/main/java/com/dualx/api/security/DeviceJwtProperties.java`（拟）
-  —— `@ConfigurationProperties(prefix = "scds.auth.device-jwt")`：`issuer` / `signingEnabled`（**默认 false**）/
-  `publicKey` / `publicKeyFile` / `privateKey` / `privateKeyFile` / `deviceTokenTtl`（默认 `12h`）。
-  紧凑构造器负向校验：启用而 issuer / 私钥缺失 → 失败；公私钥不配对 / RSA 强度不足 → 失败；
-  **issuer 或公钥与账号相同** → 失败（§3「两用途 issuer 与公钥必须不同」）；TTL 非正 → 失败。
-  ② `scds-domain/src/main/java/com/dualx/core/port/DeviceTokenSigner.java`（拟）——
-  `boolean enabled()` / `Duration deviceTokenTtl()` / `String signDeviceToken(DeviceTokenClaims)`（§3）。
-- **修改** `scds-app/src/main/resources/application.yml` —— 新增 `scds.auth.device-jwt.*` 段（默认 `signing-enabled: false`），
-  **不写任何默认私钥**；账号段保持 `scds.auth.jwt.*` 不重命名。
-- **测试** `scds-api/src/test/java/com/dualx/api/security/DeviceJwtPropertiesTest.java`（拟，新增）：
-  默认关闭；启用缺 issuer / 缺私钥 → 抛；公私钥错配 → 抛；与账号 issuer / 公钥相同 → 抛；TTL 非正 → 抛。
-- **验收**：属性绑定与负向校验可单测；启动期行为留待工作包 7。
-- **文件数**：3 主 + 1 测 = 4 ⇒ **建议再拆**：2a（端口 + 属性 + 测试，3 文件）／2b（`application.yml` 接线，1 文件）。
-- **边界**：不删 `TokenSigner` 的设备方法（兼容入口，§3 末）；不改迁移。
+- **拆 2a — 账号键重命名**（3 文件）：
+  - 改 `scds-api/src/main/java/com/dualx/api/security/AuthJwtProperties.java` —— `@ConfigurationProperties` 前缀
+    `scds.auth.jwt` → `scds.auth.jwt.account`（字段 / 校验不变）。
+  - 改 `scds-app/src/main/resources/application.yml` —— 现有 `scds.auth.jwt.*` 账号段下移为 `scds.auth.jwt.account.*`
+    （**仅键名变更、值语义不变**）。
+  - 改 `scds-api/src/test/java/com/dualx/api/security/AuthJwtPropertiesTest.java`（如硬编码键名则同步）。
+  - **验收**：账号签发 / 验签行为与现状**等价**（回归；含 `ApplicationStartupIT` / `AuthHttpIT`）。
+- **拆 2b — 设备配置与端口**（3 文件）：
+  - **新增** `scds-api/src/main/java/com/dualx/api/security/DeviceJwtProperties.java` ——
+    `@ConfigurationProperties(prefix = "scds.auth.jwt.device")`：`issuer` / `signingEnabled`（**默认 false**）/
+    `publicKey` / `publicKeyFile` / `privateKey` / `privateKeyFile` / `deviceTokenTtl`（默认 `12h`）。
+    紧凑构造器负向校验：启用而 issuer / 私钥缺失 → 失败；公私钥不配对 / RSA 强度不足 → 失败；
+    **issuer 或公钥与账号相同** → 失败（§3）；TTL 非正 → 失败。
+  - **新增** `scds-domain/src/main/java/com/dualx/core/port/DeviceTokenSigner.java` ——
+    `boolean enabled()` / `Duration deviceTokenTtl()` / `String signDeviceToken(DeviceTokenClaims)`（§3）。
+  - **新增** `scds-api/src/test/java/com/dualx/api/security/DeviceJwtPropertiesTest.java` ——
+    默认关闭；启用缺 issuer / 缺私钥 → 抛；公私钥错配 → 抛；与账号 issuer / 公钥相同 → 抛；TTL 非正 → 抛。
+- **拆 2c — yml 接线**（1 文件，可与 2a 的 yml 编辑合并到同一笔）：改 `application.yml` 增 `scds.auth.jwt.device` 段
+  （默认 `signing-enabled: false`），**不写任何默认私钥**。
+- **边界**：本包**不动** `TokenSigner` 的设备方法（删除在包 3b，与 `DeviceAuthService` 迁移同段，以保证编译）；不改迁移。
 
-### 10.2 工作包 3 — 独立设备 RSA 适配器
+### 10.2 工作包 3 — 独立设备 RSA 适配器 + 一次迁净
 
-**目标**：设备签发用**独立私钥/issuer**，禁用不读私钥（§3/§4）。**前置**：包 2。
+**目标**：设备签发用**独立私钥/issuer**，禁用不读私钥（§3/§4）；**按段 92 裁定一次迁净**——删除旧
+`TokenSigner.signDeviceToken`、迁移 `DeviceAuthService`，**不保留兼容入口**。**前置**：包 2。
 
-- **新增** `scds-api/src/main/java/com/dualx/api/security/DeviceRsaTokenSigner.java`（拟，`implements DeviceTokenSigner`）：
-  仅 `signingEnabled=true` 时读**设备**私钥；签 `aud=scds-device`、带 `sid`、TTL 取设备 TTL。
-- **修改** ① `PemKeys.java` —— 密钥读取**参数化到「键来源」**（账号 / 设备各读各的，两套不互借）；
-  ② `scds-core/src/main/java/com/dualx/core/auth/DeviceAuthService.java` —— 依赖 `DeviceTokenSigner`，不再经 `TokenSigner` 签设备。
-- **测试** `scds-api/src/test/java/com/dualx/api/security/DeviceRsaTokenSignerTest.java`（拟，新增）：
-  禁用时构造**不读私钥**（无设备私钥也能装配）；签发载荷 `aud`/`sid`/`exp` 正确；TTL 取设备 TTL。
-  `scds-core/src/test/java/com/dualx/core/auth/DeviceAuthServiceIT.java`（改）迁到 `DeviceTokenSigner` 假件。
-- **验收**：设备令牌由设备私钥签出；账号私钥**不**参与设备签发。
-- **文件数**：3（2 改 + 1 新）+ 1 测 ⇒ 视情再拆。
-- **边界**：不动 `signDeviceToken` 的载荷字段（契约冻结）；不快照设备业务规则。
+- **拆 3a — 设备适配器与键来源参数化**（3 文件）：
+  - **新增** `scds-api/src/main/java/com/dualx/api/security/DeviceRsaTokenSigner.java`（`implements DeviceTokenSigner`）：
+    仅 `signingEnabled=true` 时读**设备**私钥；签 `aud=scds-device`、带 `sid`、TTL 取设备 TTL。
+  - 改 `PemKeys.java` —— 密钥读取**参数化到「键来源」**（账号 / 设备各读各的，两套不互借）。
+  - **新增** `scds-api/src/test/java/com/dualx/api/security/DeviceRsaTokenSignerTest.java`：禁用时构造**不读私钥**；
+    签发载荷 `aud`/`sid`/`exp` 正确；TTL 取设备 TTL。
+- **拆 3b — 迁依赖并删旧方法**（**须同段**，否则编译不过；4 文件 ⇒ **声明破「≤3 文件」例外**）：
+  - 改 `scds-domain/src/main/java/com/dualx/core/port/TokenSigner.java` —— **删除** `signDeviceToken`（及仅设备用的 `deviceTokenTtl`，如无其他引用）。
+  - 改 `scds-api/src/main/java/com/dualx/api/security/RsaTokenSigner.java` —— 删除对应实现与 import。
+  - 改 `scds-core/src/main/java/com/dualx/core/auth/DeviceAuthService.java` —— 依赖 `DeviceTokenSigner`。
+  - 改 `scds-core/src/test/java/com/dualx/core/auth/DeviceAuthServiceIT.java` —— 迁到 `DeviceTokenSigner` 假件。
+  - （如 `RsaTokenSignerTest` 断言了设备签发，同段一并去掉该用例 → 可能 5 文件，**破限例外**。）
+- **验收**：设备令牌由设备私钥签出；账号私钥**不**参与设备签发；编译保证**无遗留旧方法引用**。
+- **边界**：不动 `signDeviceToken` 的**载荷字段**（契约冻结）；不快照设备业务规则。
 
 ### 10.3 工作包 4 — 双用途 decoder（按 aud 分派固定信任）
 
@@ -312,25 +330,29 @@ displayName、roles、permissions和lastLoginAt。当前JWT只稳定提供sub/ro
   **测试** `.../DisabledCapabilityRouteFilterTest.java`（改）、`scds-app/src/test/java/com/dualx/ApplicationStartupIT.java`（改，四组合）。
 - **文件数**：4 ⇒ 拆为「过滤器匹配表」与「白名单条件化」两小段。
 
-### 10.5 工作包 6 / 7 / 8 — 依赖项（**先裁 §7 身份策略**）
+### 10.5 工作包 6 / 7 / 8 — 依赖项（§7 身份策略**已裁定**）
 
 - **包 6（AUTH-HTTP）**：`scds-api/src/main/java/com/dualx/api/auth/AuthController.java`（`me` 映射）＋
-  `scds-core/src/main/java/com/dualx/core/auth/AuthService.java`（如需），**须先裁 §7**（边缘身份来源）。
+  `scds-core/src/main/java/com/dualx/core/auth/AuthService.java`（如需）。**§7 已裁定取「边缘预置/同步最小身份快照、复用本地 `me`」**；
+  开工前须先出「相同 UUID 约定 / 初始化同步工具 / 陈旧容忍」独立方案。
   未知本地 `sub` 返回 401 是现有语义，**不得**据其宣称云边身份闭环完成（§7 末）。
 - **包 7（启动 IT 扩双密钥与全组合）**：`scds-app/src/test/java/com/dualx/ApplicationStartupIT.java` ＋
   `scds-app/src/test/java/com/dualx/security/SecurityMetricsIT.java`（＋内存双密钥夹具），
   覆盖 §9 四个开关组合；**不读开发 / 生产秘密**。
 - **包 8（DEVICE-AUTH / SID / 断网）**：**D03 确认后**再推进，不在本表展开。
 
-### 10.6 开工前待裁定的设计前置（阻塞项）
+### 10.6 开工前设计前置（**已于 2026-11-15 段 92 裁定**）
 
-1. **配置键方案**：是否采纳 §3「账号保留 `scds.auth.jwt.*`、新增 `scds.auth.device-jwt.*`」（不重命名现有账号键）。
-2. **`TokenSigner` 设备方法去留**：是否按 §3 把设备签发迁到 `DeviceTokenSigner`，旧方法暂留作**兼容入口**（委托新适配器且查设备能力）。
-3. **`me` 身份策略（§7）**：边缘预置身份快照 vs 云端令牌携带签名身份快照——**包 6 的前置**。
-4. **密钥供给方式**：现场设备私钥由部署侧提供（本表**不生成、不入库**密钥）；轮换策略另议（§4 末）。
+1. **配置键方案** —— 裁定：**统一重命名子键** `scds.auth.jwt.account.*` / `scds.auth.jwt.device.*`（§3）。
+2. **`TokenSigner` 设备方法去留** —— 裁定：**一次迁净**，删除 `TokenSigner.signDeviceToken` 并迁移 `DeviceAuthService`，不保留兼容入口（§3 / §10.2）。
+3. **`me` 身份策略（§7）** —— 裁定：**边缘预置/同步最小身份快照，复用本地 `me`**（§7）。
+4. **密钥供给方式** —— 裁定：**部署侧提供 PEM**（本表**不生成、不入库**密钥）；轮换策略另议（§4 末）。
+
+> 四项裁定**仅解除设计阻塞**，**不构成包 2 的开工授权**；逐段授权与逐次提交 / 推送授权仍适用。
 
 ### 10.7 本表不构成授权（复述）
 
 - 不改 `.env` / 不生成密钥 / 不重置数据库 / 不清库删卷 / 不改已应用 V1~V11 / 不新增迁移（§8 末）。
-- 迁移原则：**先增新实现再迁引用，不提前删旧方法**；每段编译 + 专项 + 全量均须通过。
+- 迁移原则：**优先先增新实现再迁引用**；**唯一例外**是包 3b 按段 92 裁定**一次迁净**删除 `TokenSigner.signDeviceToken`
+  （删方法与迁移其唯一调用方 `DeviceAuthService` 必须同段，否则编译不过）。每段编译 + 专项 + 全量均须通过。
 - 每包开工前**逐段授权**；提交与推送**另需逐次授权**。
