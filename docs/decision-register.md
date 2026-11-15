@@ -3457,3 +3457,45 @@ R27 原判「部分成立」，逐项拆开后**只有前两项能在本机闭�
 4. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
 
 
+**段 92 落地（2026-11-15，03b 双能力分段实施白名单：为工作包 2/3/4 逐包列文件白名单与测试计划，**纯文档、不改代码**）**：
+承段 91「下一段（候选）① **03b §5 账号与设备「独立」开关 + 两套独立白名单**（需先定设计）」。用户在**无人值守模式**下经 AskUserQuestion
+裁定下一段方向：**「03b 双能力：先出分段白名单（推荐）」**——即先按 03b §8「**每包开工前列具体文件白名单及测试**」的要求，
+把双能力拆分的**实施计划**写清，落成文档，**批准后再逐段开工**。
+
+- **依据**：`docs/design/03b-token-capabilities.md` §8 明写「每包开工前列具体文件白名单及测试，**不能用此表绕过后续确认**」。
+  本段即把 §8 的八个工作包落成「逐包**文件白名单 + 测试计划 + 验收判据 + 边界**」，写入该文件**新增 §10**。
+- **本段性质**：**纯文档**——**不改 Java / 契约 / Dart**、**不改 `.env` / 不生成密钥 / 不改迁移 / 不重置数据库**。
+  故**未重跑** `mvn test`（复用段 91 门禁证据 **1199 项 / 0/0/0**）与 `flutter test`。
+- **§10 内容要点**：
+  - **§10.0 现状锚点表**（11 行，2026-11-15 实测）：`TokenSigner` / `RsaTokenSigner` / `AuthJwtProperties` / `JwtDecoderConfig` /
+    `PemKeys` / `SecurityConfig` / `DisabledCapabilityRouteFilter` / 三控制器 / `AuthService`·`DeviceAuthService` / `application.yml` / 相关测试清单。
+  - **§10.1 包 2**：新增 `DeviceJwtProperties`（`scds.auth.device-jwt.*`，`signingEnabled` **默认 false**，负向校验含
+    「issuer / 公钥与账号相同即失败」）＋ domain 新增 `DeviceTokenSigner` 端口；改 `application.yml`；测 `DeviceJwtPropertiesTest`。
+    **文件数 4 ⇒ 建议再拆** 2a（端口 + 属性 + 测试）/ 2b（yml 接线）。
+  - **§10.2 包 3**：新增 `DeviceRsaTokenSigner`（`implements DeviceTokenSigner`，禁用不读私钥）；改 `PemKeys`（键来源**参数化**，账号 / 设备两套不互借）
+    ＋ `DeviceAuthService`（改依赖 `DeviceTokenSigner`）；测 `DeviceRsaTokenSignerTest` ＋ 改 `DeviceAuthServiceIT`。
+  - **§10.3 包 4**：改 `JwtDecoderConfig` 为**门面**（按未验签 `aud` 分派账号 / 设备 decoder，不试遍公钥、不跨用途）；改 `SecurityJwtValidationIT`（扩交叉签发用例）。
+  - **§10.4 包 5**：**已完成**（段 90 / 91）；仅余「`DisabledCapabilityRouteFilter` 单开关匹配表 → 按**实际关闭能力**分别构建」
+    ＋ 「`SecurityConfig` 白名单**条件化**」（**依赖包 2 的独立开关**）。
+  - **§10.5-10.7**：包 6/7/8 依赖项（**包 6 须先裁 §7 身份策略**；包 8 **D03 后**）；
+    **开工前四项待裁定**（① 配置键方案 ② `TokenSigner` 设备方法去留 ③ `me` 身份策略 ④ 密钥供给方式）；
+    复述「**本表不构成授权**」。
+- **口径**：本段只**列白名单**，**不构成开工授权**；每包开工**逐段授权**，提交 / 推送**逐次授权**（§8 末 / §10.7）。
+
+**文件（文档笔，1 文件；未破「≤3 文件」上限）**：`docs/design/03b-token-capabilities.md`（新增 §10）。
+另本册追加本条目、`snapshot.md` 顶部 banner 回写段 92（同属文档笔，合计 3 文件，**恰在上限内、未破限**）。
+
+**门禁**：**纯文档改动** ⇒ **未重跑** `mvn` / `flutter test`，复用段 91 证据（**1199 项 / 0/0/0**）。
+
+**未验项**：① §10 是**拟议计划**，四个设计前置（§10.6）**均未裁定** ⇒ 任何工作包**尚不可开工**；
+② §10.4 剩余项**依赖包 2**（独立开关）⇒ 未落地前 `DisabledCapabilityRouteFilter` 仍为单开关；
+③ 03b §5 矩阵「**账号开、设备关**」列在本仓仍**不可达**（段 91 已纠偏）。
+
+**下一段（候选）**：
+1. **03b §10.6 四项设计前置裁定**（配置键方案 / `TokenSigner` 设备方法去留 / `me` 身份策略 / 密钥供给方式）——**包 2 开工前提**；
+2. **工作包 2a**（`DeviceJwtProperties` ＋ `DeviceTokenSigner` 端口 ＋ 测试，3 文件）——经裁定与逐段授权后开工；
+3. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+4. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
+
+

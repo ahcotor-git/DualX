@@ -1,7 +1,14 @@
 # scds-next 交接快照
 
-> 更新：2026-11-14，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 91 03b §5 安全层 404 出口：`DisabledCapabilityRouteFilter`（连无效 Bearer 也是 404）**——
+> 更新：2026-11-15，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
+> 当前任务：**段 92 03b 双能力分段实施白名单（为工作包 2/3/4 逐包列文件白名单与测试计划，纯文档）**——
+> 承段 91「下一段（候选）① 03b §5 账号与设备「独立」开关 + 两套独立白名单（需先定设计）」。用户在**无人值守模式**下经 AskUserQuestion 裁定下一段方向「**03b 双能力：先出分段白名单（推荐）**」：先按 03b §8「每包开工前列具体文件白名单及测试」把双能力拆分的**实施计划**写清，落成文档，**批准后再逐段开工**。
+> **本段性质**：**纯文档**——不改 Java / 契约 / Dart、不改 `.env` / 不生成密钥 / 不改迁移 / 不重置数据库；故**未重跑** `mvn` / `flutter test`，复用段 91 证据（**1199 项 / 0/0/0**）。
+> **落点**：`docs/design/03b-token-capabilities.md` **新增 §10**「分段实施白名单与测试计划」——§10.0 现状锚点表（11 行）；§10.1 包 2（新 `DeviceJwtProperties`（`scds.auth.device-jwt.*`，默认 false，负向校验含「issuer / 公钥与账号相同即失败」）＋ domain 新 `DeviceTokenSigner` 端口 ＋ yml ＋ 测试，**文件数 4 ⇒ 再拆 2a/2b**）；§10.2 包 3（新 `DeviceRsaTokenSigner`，改 `PemKeys`（键来源**参数化**）＋ `DeviceAuthService`）；§10.3 包 4（`JwtDecoderConfig` 改**门面**，按未验签 `aud` 分派账号 / 设备 decoder，不试遍公钥、不跨用途）；§10.4 包 5 **已完成**（段 90/91），仅余「单开关匹配表 → 按实际关闭能力分别构建」＋「`SecurityConfig` 白名单条件化」（**依赖包 2**）；§10.5-10.7 包 6/7/8 依赖（包 6 须先裁 §7 身份策略、包 8 待 D03）＋ **开工前四项待裁定**（配置键方案 / `TokenSigner` 设备方法去留 / `me` 身份策略 / 密钥供给方式）＋ 复述「本表不构成授权」。
+> **文档笔（3 文件，恰在上限内、未破「≤3 文件」）**：`docs/design/03b-token-capabilities.md`（§10）＋ `docs/decision-register.md`（段 92）＋ 本快照。
+> **口径**：本段只**列白名单**，**不构成开工授权**；每包开工**逐段授权**，提交 / 推送**逐次授权**。
+> 下一项**（候选，按推荐序）**：① **03b §10.6 四项设计前置裁定**（**包 2 开工前提**）；② 工作包 2a（3 文件，经裁定 ＋ 逐段授权后开工）；③ 全库行尾 renormalize（大范围 diff，需显式授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑤ R27 剩余项定型（队列 / 客户端上限与 RPO · RTO，**需产品 / 运维口径**）。
+> 上一原子任务：**段 91 03b §5 安全层 404 出口：`DisabledCapabilityRouteFilter`（连无效 Bearer 也是 404）**——
 > 承段 90「下一段（候选）① 03b §5 / §8 工作包 5」。用户在**无人值守模式**下经 AskUserQuestion 裁定下一段方向「**03b §5 安全层 404 出口（推荐）**」。**本段属行为变更**：`signing=false` 时，**带无效 Bearer** 访问四个签发路径由 **401 改 404**（无令牌的匿名请求段 90 已为 404，本段不变）。
 > **问题（段 90 只做到一半）**：段 90 已让**未携带令牌**的匿名请求在已关闭能力路径上得到 404（放行没随能力收回，请求抵达 dispatcher）。但带**无效 Bearer** 时 `BearerTokenAuthenticationFilter`（Security 链 order = -100）**先验签失败**写成 401 `AUTH_TOKEN_INVALID`，请求到不了 dispatcher 的 404。**根因**：`permitAll` 只作用于更靠后的 `AuthorizationFilter`，**管不住**更靠前的 `BearerTokenAuthenticationFilter`。
 > **洞察 / 落点依据**：要在「能力缺席」与「令牌不成立」之间做区分，404 出口必须**排在 Bearer 验证之前**。
