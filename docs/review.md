@@ -23,8 +23,8 @@
 | R02 | 已落地 | `JwtDecoderConfig` 统一时间校验，纯过期 → `AUTH_TOKEN_EXPIRED`；`SecurityJwtValidationIT` 覆盖纯过期 / 混合错误 / 时钟偏移 |
 | R03 | 已落地 | `JwtDecoderConfig.validateRawClaims` 强制 `exp/sub/aud/iss`（设备另需 `sid`）；缺 `exp` 返回 401 `AUTH_TOKEN_INVALID` |
 | R04 | 已落地 | 自定义 `ApiExceptionHandler`（`@Order(-1)`）捕获 `MethodArgumentNotValidException` → `VALIDATION_FAILED` + `traceId`；`MvcProblemIT` 覆盖 |
-| R05 | 已落地 | 账号签发端点拆出 `AccountAuthController` 并以 `@ConditionalOnProperty(signing-enabled)` 条件注册；`signing=false` 时路由缺席 → 404 |
-| R06 | 已落地（段 90） | 设备登录拆出 `DeviceAuthController`，与账号签发共用 `signing-enabled` 条件注册；`signing=false` 时路由缺席 → 404，不再是 `requireSigning()` 的 500。同段一并纠正 R05 遗留偏差：三条「匿名换取令牌」的 `permitAll` 不随能力收回，匿名请求也能抵达 dispatcher 看到这条 404（此前先撞末条兜底得 401）。03b §5 的**安全层**固定 404 出口（连无效 Bearer 也是 404）仍未实现，见 03-auth.md §4.4 |
+| R05 | 已落地 | 账号签发端点拆出 `AccountAuthController` 并以 `@ConditionalOnProperty(signing-enabled)` 条件注册；`signing=false` 时路由缺席 → 404。（段 90 纠正「放行随能力收回」偏差；段 91 补齐**安全层**固定 404 出口：无效 Bearer 也是 404，见 03-auth.md §4.4 / testing.md §80） |
+| R06 | 已落地（段 90＋91） | 设备登录拆出 `DeviceAuthController`，与账号签发共用 `signing-enabled` 条件注册；`signing=false` 时路由缺席 → 404，不再是 `requireSigning()` 的 500。段 90 一并纠正 R05 遗留偏差：三条「匿名换取令牌」的 `permitAll` 不随能力收回，匿名请求也能抵达 dispatcher 看到这条 404（此前先撞末条兜底得 401）。**段 91 补齐** 03b §5 的**安全层**固定 404 出口（连无效 Bearer 也是 404）：`DisabledCapabilityRouteFilter` 排在 Bearer 验证之前，见 03-auth.md §4.4 / testing.md §80 |
 | R07 / R08 | 已被取代 | 2026-10-27 已记，见 testing.md 第 7~15 节 |
 | R09 | 已落地 | 迁移按递增落地：V1~V7、V9、V10、V11（V8 空缺、不补，见 testing.md:1029） |
 | R10 | 已落地 | 自愈已实现：`V10` 增 `owner_instance/heartbeat_at/end_reason`；`ExerciseLivenessRecover` Runner 启动收尾；`ExerciseLogType.SYSTEM`；各仓储 `deleteByExerciseId` |

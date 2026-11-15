@@ -1,7 +1,17 @@
 # scds-next 交接快照
 
 > 更新：2026-11-14，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 90 R06 设备登录 × 禁用签发（＋R05 遗留偏差一并纠正）：条件注册控制器 ＋「免鉴权清单不回答端点是否存在」**——
+> 当前任务：**段 91 03b §5 安全层 404 出口：`DisabledCapabilityRouteFilter`（连无效 Bearer 也是 404）**——
+> 承段 90「下一段（候选）① 03b §5 / §8 工作包 5」。用户在**无人值守模式**下经 AskUserQuestion 裁定下一段方向「**03b §5 安全层 404 出口（推荐）**」。**本段属行为变更**：`signing=false` 时，**带无效 Bearer** 访问四个签发路径由 **401 改 404**（无令牌的匿名请求段 90 已为 404，本段不变）。
+> **问题（段 90 只做到一半）**：段 90 已让**未携带令牌**的匿名请求在已关闭能力路径上得到 404（放行没随能力收回，请求抵达 dispatcher）。但带**无效 Bearer** 时 `BearerTokenAuthenticationFilter`（Security 链 order = -100）**先验签失败**写成 401 `AUTH_TOKEN_INVALID`，请求到不了 dispatcher 的 404。**根因**：`permitAll` 只作用于更靠后的 `AuthorizationFilter`，**管不住**更靠前的 `BearerTokenAuthenticationFilter`。
+> **洞察 / 落点依据**：要在「能力缺席」与「令牌不成立」之间做区分，404 出口必须**排在 Bearer 验证之前**。
+> **落点**：① `DisabledCapabilityRouteFilter`（**新**，scds-api）`@Order(Ordered.HIGHEST_PRECEDENCE + 1)`——仍在 `TraceIdFilter`（HIGHEST_PRECEDENCE）之后（故 404 也带 traceId），**排在 Security 链 order = -100 之前**；对 `signing-enabled=false` 时缺席的**精确 operation**（`POST /api/v1/auth/{login,refresh,logout,device/login}`）经 `ApiProblemWriter` 直写契约 `Problem`（`ROUTE_NOT_FOUND`，404）并短路。② **精确匹配（method + path，含 `contextPath` 剥离）**：不注册占位 controller、不放行整个 `/api/v1/auth/**`；其余路径与该路径其他方法不受影响。③ **未新增 `permitAll`** ⇒ `03-auth.md` §4.4 白名单无需登记。④ **方向纠偏**：本仓账号与设备**合并为同一 `signing-enabled`**（段 90 决策），故 03b §5 矩阵「**账号开、设备关**」列**不可达**，不得据其宣称可只关其一（已就地加注记）。
+> **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1199 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 150**（139 → 150，+11 新增单测）＋ app 333）。较段 90 基线 **1188 → 1199**（+11，全部来自新增 `DisabledCapabilityRouteFilterTest`）。`ApplicationStartupIT` 只在既有用例内加断言，用例数不变（37）。
+> **代码笔（3 文件：2 新 1 改，破「≤3 文件」已显式声明例外）**：`DisabledCapabilityRouteFilter.java`（新）＋ `DisabledCapabilityRouteFilterTest.java`（新）＋ `ApplicationStartupIT.java`（改，+无效 Bearer 断言）。
+> **文档笔（6 文件，破「≤3 文件」已显式声明例外）**：`docs/design/03b-token-capabilities.md`（§5 实现进展）＋ `docs/design/03-auth.md`（§4.4 注记）＋ `docs/review.md`（R05 / R06 行）＋ `docs/testing.md`（§80）＋ `docs/decision-register.md`（段 91）＋ 本快照。
+> **环境**：门禁需 `scds-local-mysql`（13306）在跑；本机 Docker Desktop 需**管理员**启动（`com.docker.service` 非提权启动被拒），容器随引擎重启 `Exited (255)`，须 `docker start` 重新拉起。**本窗再次踩坑**：引擎曾 `Stopped`、`Start-Process -Verb RunAs` 反复被 UAC 取消，最终经提权轮询确认 `UP 29.8.2`。
+> 下一项**（候选，按推荐序）**：① **03b §5 账号与设备「独立」开关 + 两套独立白名单**（承接本段「方向纠偏」，**需先定设计**）；② 全库行尾 renormalize（大范围 diff，需显式授权）；③ C 档（真机 / GUI / 现场硬件 / T-PROD）；④ R27 剩余项定型（队列 / 客户端上限与 RPO · RTO，**需产品 / 运维口径**）。
+> 上一原子任务：**段 90 R06 设备登录 × 禁用签发（＋R05 遗留偏差一并纠正）：条件注册控制器 ＋「免鉴权清单不回答端点是否存在」**——
 > 承段 89「下一段（候选）① R06 设计决策」。用户在**无人值守模式**下经 AskUserQuestion 裁定口径「**保留放行 → 匿名也 404（推荐）**」＋「**一并纠正账号侧（推荐）**」。**本段属行为变更**：`signing=false` 时 `device/login` 由 **500 改 404**；三条签发端点的匿名响应由 **401 改 404**。
 > **设计决策**：设备登录**不另立独立设备能力**，与账号签发**共用同一能力开关**（两者都必需私钥；拆成两个开关只会多出「设备能签、账号不能签」的无意义状态）。能力关闭 ⇒ 端点**整体缺席（404）**，而不是注册后抛 500。
 > **关键洞察（本段核心，也是 R05 当初没做完的一半）**：条件注册只让**路由缺席**，但 **404 只有请求抵达 dispatcher 才看得见**。R05 当初把 `login` / `refresh` 的 `permitAll` 随能力一并收回 ⇒ 匿名请求先撞末条兜底 `anyRequest().hasAuthority(AUD_EDGE)` → **401**（testing §2 RT-DISABLED 的历史实测，本段取代）。**纠正口径**：`SecurityConfig` **不读能力开关**——「哪些端点存在」交给 controller 条件注册，过滤链只管「哪些端点免鉴权」；三条「匿名换取令牌」入口**无条件 `permitAll`**。
@@ -1532,12 +1542,14 @@ Flyway文件V1-V7、V9-V11，共10份；18张业务表，另有Flyway历史表�
 
 ## 4. 验证证据与局限
 
-**当前**全量`mvn -B clean verify`：2026-11-14（段 90），**1188项，失败/错误/跳过均0**：
-protocol19 + solver18 + gateway49 + core630 + api139 + app333——**段 90 不新增用例**（R06 设备登录×禁用签发属行为变更：`device/login` 500→404、
-三条签发端点匿名响应 401→404），只在既有用例内加断言，故与段 89 基线同数。
+**当前**全量`mvn -B -o clean verify`：2026-11-15（段 91），**1199项，失败/错误/跳过均0**：
+protocol19 + solver18 + gateway49 + core630 + **api150**（139→150，+11＝新增 `DisabledCapabilityRouteFilterTest`，11 用例）+ app333——**段 91 新增 11 个用例**（03b §5 安全层 404 出口）；
+`ApplicationStartupIT` 只在既有用例内加断言（无效 Bearer：`signing=true`→401 / `signing=false`→404），用例数不变（37）。
+（上一基线为 2026-11-14 段 90 的 **1188 项**：protocol19 + solver18 + gateway49 + core630 + api139 + app333——**段 90 不新增用例**（R06 设备登录×禁用签发属行为变更：`device/login` 500→404、
+三条签发端点匿名响应 401→404），只在既有用例内加断言，故与段 89 基线同数。）
 （段 89 同命令亦为 **1188 项**：protocol19 + solver18 + gateway49 + **core630**（624→630，+6 = `LoginThrottleTest` 12→15〔+3〕＋ 新增 `RefreshTokenCleanupTaskIT`〔+3〕）+ api139 + app333。）
 （上一基线为 2026-11-14 段 88 的 **1182 项 / core624**；此前 2026-11-10 §70 为 **1162 项 / core622**〔solver/domain 计 0〕——`39d0b9b` 令 solver 由零测试到回归网 **+18**（UwbSolver 10 + UwbFilter 8），
-`0cd9ba3` 令 core **+1**，段 88 R20 **+1**，段 89 R27 **+6**——即 1162 → 1182 → 1188，**无用例丢失**，详见 testing §70 / §77 / §78。）
+`0cd9ba3` 令 core **+1**，段 88 R20 **+1**，段 89 R27 **+6**，段 91 安全层 404 出口 **+11**——即 1162 → 1182 → 1188 → 1199，**无用例丢失**，详见 testing §70 / §77 / §78 / §80。）
 计数须按 Maven **模块级汇总**（`[INFO] Tests run:`）或**控制台逐类输出**取值；按 `target/surefire-reports/*.txt`
 的 `Tests run` 累加会**少算 `@Nested` 外层类**——`TrackSamplingTest` 外层 `.txt` 报 `0`，其 `$Sampler` 13 + `$Writer` 8 = **21** 项不计入
 （段 88 曾据此误算 core 603 / 总计 1161）；**`surefire-reports/*.xml` 的 `tests` 属性对纯 `@Nested` 外层类同样报 `0`**

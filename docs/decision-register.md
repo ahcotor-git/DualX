@@ -3411,3 +3411,49 @@ R27 原判「部分成立」，逐项拆开后**只有前两项能在本机闭�
 4. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
 
 
+**段 91 落地（2026-11-15，03b §5 安全层 404 出口：`DisabledCapabilityRouteFilter`，连无效 Bearer 也是 404）**：
+承段 90「下一段（候选）① **03b §5 / §8 工作包 5**」。用户在**无人值守模式**下经 AskUserQuestion 裁定下一段方向：
+**「03b §5 安全层 404 出口（推荐）」**。**本段属行为变更**：`signing=false` 时，**带无效 Bearer**
+访问四个签发路径由 **401 改 404**（无令牌的匿名请求段 90 已为 404，本段不变）。
+
+- **问题（段 90 只做到一半）**：段 90 已让**未携带令牌**的匿名请求在已关闭能力路径上得到 404（放行没随能力收回，
+  请求抵达 dispatcher 看到路由缺席）。但带**无效 Bearer** 时，`BearerTokenAuthenticationFilter`
+  （Spring Security 链 order = -100）**先验签失败**写成 401 `AUTH_TOKEN_INVALID`，请求到不了 dispatcher 的 404。
+- **根因**：`permitAll` 只作用于过滤链中更靠后的 `AuthorizationFilter`，**管不住**更靠前的 `BearerTokenAuthenticationFilter`
+  ⇒「本实例没有这个能力」在**带无效令牌**这一形态下退化成「令牌不成立」，与 03b §5 目标矩阵「连无效 Bearer 也是 404」冲突。
+- **洞察 / 落点依据**：要在「**能力缺席**」与「**令牌不成立**」之间做区分，404 出口必须**排在 Bearer 验证之前**。
+- **落点**：`DisabledCapabilityRouteFilter`（**新**，scds-api）——`@Order(Ordered.HIGHEST_PRECEDENCE + 1)`：
+  仍在 `TraceIdFilter`（`HIGHEST_PRECEDENCE`）之后（故该 404 也带 traceId），且**排在 Spring Security 链 order = -100 之前**；
+  对 `signing-enabled=false` 时缺席的**精确 operation**（`POST /api/v1/auth/login`、`/refresh`、`/logout`、`/device/login`）
+  经 `ApiProblemWriter` 直写契约 `Problem`（`ROUTE_NOT_FOUND`，404）并短路。
+  **精确匹配（method + path，含 `contextPath` 剥离）**：不注册占位 controller、**不放行整个 `/api/v1/auth/**`**；
+  其余路径，以及这些路径上的**其他 HTTP 方法**，仍走正常安全流程。
+- **口径**：本仓账号签发与设备签发**合并为同一 `signing-enabled`**（段 90 决策），故匹配表按**单一开关**构建
+  （javadoc 记录：若将来拆两开关需按「实际关闭的能力」分别构建）。**未新增 `permitAll`** ⇒ `03-auth.md` §4.4 白名单无需登记。
+  **方向纠偏**：03b §5 矩阵的「**账号开、设备关**」列在本仓**不可达**，不得据其宣称可只关其一（已就地加注记）。
+- **环境依赖**：门禁需 `scds-local-mysql`（127.0.0.1:13306，`mysql:8.4`）在跑；本机 Docker Desktop 需**管理员**启动，
+  容器随引擎重启会 `Exited (255)`，须 `docker start scds-local-mysql` 重新拉起。**本窗再次踩坑**：引擎曾 `Stopped`、
+  `Start-Process -Verb RunAs` 反复报 `The operation was canceled by the user`（UAC 取消），最终经提权轮询确认引擎 `UP 29.8.2`。
+
+**文件（代码笔 3 文件：2 新 1 改；文档笔 3 文件；两笔均破「≤3 文件」上限，已显式声明例外）**：
+代码笔——`scds-api/src/main/java/com/dualx/api/security/DisabledCapabilityRouteFilter.java`（**新**）、
+`scds-api/src/test/java/com/dualx/api/security/DisabledCapabilityRouteFilterTest.java`（**新**，11 用例）、
+`scds-app/src/test/java/com/dualx/ApplicationStartupIT.java`（改，+无效 Bearer 断言）。
+文档笔——`docs/design/03b-token-capabilities.md`（§5「实现进展」）、`docs/design/03-auth.md`（§4.4 注记）、
+`docs/review.md`（R05 / R06 行）、`docs/testing.md`（§80）、本册、`snapshot.md`。
+
+**门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1199 项 / 0/0/0**
+（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 150**（139 → 150，+11 新增单测）＋ app 333）。
+计数按各模块 `surefire-reports/TEST-*.xml` 的 `<testcase>` 计数之和复算（口径见 testing §77.3 / §78.3.1 / §79.3.3）。
+
+**未验项**：① **账号与设备「独立」开关仍未落地**（03b §5 要求的两套独立白名单 / 会话与验签信任**未实现**），
+本段只把「**合并单开关下**的能力缺席 404」补完整；② **端到端演练未做**——只验 HTTP 状态 / 错误码 / bean 数量，
+未做「客户端据 404 换 `baseUrl`」的真实链路演练；③ `me` 身份策略（03b §7）未定，本段不涉及。
+
+**下一段（候选）**：
+1. **03b §5 账号与设备「独立」开关 + 两套独立白名单**（承接本段「方向纠偏」，**需先定设计**）；
+2. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+3. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+4. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
+
+

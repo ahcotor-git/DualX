@@ -5277,3 +5277,71 @@ expected: {"t_account"=2L, …, "t_refresh_token"=2L}
   （`com.docker.service` 无法非提权启动），容器随引擎重启会 `Exited (255)`，需 `docker start` 重新拉起后才可跑 IT。
 
 
+## 80. 03b §5 安全层 404 出口：`DisabledCapabilityRouteFilter`（连无效 Bearer 也是 404）
+
+承段 90「下一段（候选）① **03b §5 / §8 工作包 5**」。用户在**无人值守模式**下经 AskUserQuestion 裁定下一段方向：
+**「03b §5 安全层 404 出口（推荐）」**。**本段属行为变更**（`signing=false` 时，**带无效 Bearer**
+访问四个签发路径由 **401 改 404**；无令牌的匿名请求段 90 已为 404，本段不变）。
+
+### 80.1 问题与关键洞察
+
+- **段 90 只做到一半**：段 90 已让**未携带令牌**的匿名请求在已关闭能力路径上得到 404（放行没随能力收回，请求抵达
+  dispatcher 看到路由缺席）。但带**无效 Bearer** 访问同一路径时，`BearerTokenAuthenticationFilter`
+  （Spring Security 链 order = -100）会**先验签失败**写成 401 `AUTH_TOKEN_INVALID`，请求根本到不了 dispatcher 的 404。
+- **根因**：`permitAll` 只作用于过滤链中更靠后的 `AuthorizationFilter`，**管不住**更靠前的 `BearerTokenAuthenticationFilter`。
+  于是「本实例没有这个能力」在**带无效令牌**这一种请求形态下退化成「令牌不成立」——与 03b §5 目标矩阵「连无效 Bearer 也是 404」冲突。
+- **洞察（落点依据）**：要在「**能力缺席**」与「**令牌不成立**」之间做区分，404 出口必须**排在 Bearer 验证之前**。
+
+### 80.2 落点
+
+- **`DisabledCapabilityRouteFilter`（新，scds-api）**：`@Order(Ordered.HIGHEST_PRECEDENCE + 1)`——
+  仍在 `TraceIdFilter`（`HIGHEST_PRECEDENCE`）**之后**（故该 404 也带 traceId），且**排在 Spring Security 链 order = -100 之前**。
+  对 `signing-enabled=false` 时缺席的**精确 operation**（`POST /api/v1/auth/login`、`/refresh`、`/logout`、`/device/login`）
+  经 `ApiProblemWriter` 直写契约 `Problem`（`ROUTE_NOT_FOUND`，404）并短路，不再进入 Security 链。
+- **精确匹配（method + path，含 `contextPath` 剥离）**：不注册占位 controller、**不放行整个 `/api/v1/auth/**`**；
+  其余路径，以及这些路径上的**其他 HTTP 方法**，都不受影响、仍走正常安全流程。
+- **与能力开关的关系**：本仓账号签发与设备签发**合并为同一 `signing-enabled`**（段 90 决策），故匹配表按**单一开关**构建；
+  若将来拆两开关，需按「实际关闭的能力」分别构建匹配表（javadoc 已记录）。
+- **未新增 `permitAll`**：因此 `03-auth.md` §4.4 的免鉴权白名单**无需登记**（白名单只回答「哪些路径免鉴权」，不回答「哪些端点存在」）。
+
+### 80.3 门禁实测（2026-11-15，`scds-local-mysql` 13306 healthy，Java 21）
+
+命令：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS**。
+
+| 模块 | 测试数 | 失败/错误/跳过 | 说明 |
+|---|---:|---|---|
+| protocol | 19 | 0/0/0 | 未改动 |
+| solver | 18 | 0/0/0 | 未改动 |
+| gateway | 49 | 0/0/0 | 未改动 |
+| core | 630 | 0/0/0 | 未改动 |
+| api | **150** | 0/0/0 | **139 → 150**（新增 `DisabledCapabilityRouteFilterTest`，**11 用例**） |
+| app | 333 | 0/0/0 | 未改动（`ApplicationStartupIT` 新增断言，见 80.3.1；用例数不变） |
+| domain | 0 | 无测试 | |
+| 总计 | **1199** | **0/0/0** | 较段 90 基线 **1188 → 1199**（+11，全部来自新增单测） |
+
+**80.3.1 `ApplicationStartupIT` 新增断言（`signing=true` / `signing=false` 两个子类各跑一遍，本类 37 用例）**：
+对四个签发路径 `POST /api/v1/auth/{login,refresh,logout,device/login}` 带**用另一密钥对签出的无效 Bearer**：
+`signing=true` → **401 `AUTH_TOKEN_INVALID`**（无该出口，Bearer 常规拒绝）；
+`signing=false` → **404 `ROUTE_NOT_FOUND`**（安全层出口先于 Bearer 验证命中）。**这是本段的核心证据**——
+若过滤器排序稍晚于 Bearer 验证，`signing=false` 那支会退回 401。`logout` 随账号能力缺席一并覆盖。
+
+**80.3.2 `DisabledCapabilityRouteFilterTest`（新，scds-api，11 用例）**：`signing=false` 下四条精确路径参数化 → 404 /
+`ROUTE_NOT_FOUND` / 带 instance 与 traceId / 请求**未继续**；**无效 Bearer 头不逃逸该出口**；
+`signing=true` 时四条路径**照常放行**到过滤链；同路径**非 POST 方法**（GET/PUT/DELETE/OPTIONS）**不被吞**；
+**其他路径**（`/api/v1/devices/vests`、`/api/v1/auth/me`、`/api/v1/auth/loginX`）保持正常安全流程。
+辅助：`MockFilterChain.getRequest() != null` 判是否放行。
+
+**80.3.3 方向纠偏（口径）**：基于本段实现，03b §5 目标矩阵的「**账号开、设备关**」列在本仓**不可达**——
+账号签发与设备签发合并为同一 `signing-enabled`（段 90 决策），不存在只关其一的配置状态。
+03-auth.md §4.4 / 03b §5 已就地加注记，**不得据 03b §5 矩阵宣称本仓可只关其一**。
+
+### 80.4 未验项 / 边界
+
+- **账号与设备「独立」开关仍未落地**：03b §5 要求的两套独立白名单 / 两套独立会话与验签信任**未实现**；
+  本段只把「**合并单开关下**的能力缺席 404」补完整。若将来现场要求「设备可签、账号不可签」，需重开设计。
+- **`me` 身份策略（03b §7）** 未定，本段不涉及。
+- **端到端演练未做**：只验了 HTTP 状态 / 错误码 / bean 数量，**未做**「客户端据 404 换 `baseUrl`」的真实链路演练。
+- **Docker 环境**：本段门禁依赖 `scds-local-mysql`（13306）容器；本机 Docker Desktop 需**管理员**启动
+  （`com.docker.service` 无法非提权启动），容器随引擎重启会 `Exited (255)`，需 `docker start` 重新拉起后才可跑 IT。
+
+
