@@ -218,6 +218,16 @@ class ApplicationStartupIT {
                     expectProblem(mapper, post(client, base, path, "{}", null),
                             issuanceStatus, issuanceCode, path);
                 }
+                // 能力关闭的精确路径还有一条安全层 404 出口，排在 Bearer 验证**之前**
+                // （DisabledCapabilityRouteFilter，03b §5）。所以带**无效 Bearer** 也必须是 404：
+                // 否则 BearerTokenAuthenticationFilter 会先验签失败写成 401，「本实例没有这个能力」
+                // 就在这一种请求形态下退化成「令牌不成立」。logout 同样随账号能力缺席，一并覆盖。
+                // signing=true 时不设该出口，无效 Bearer 仍按常规得 401，顺序与语义都不变。
+                for (String path : List.of("/api/v1/auth/login", "/api/v1/auth/refresh",
+                        "/api/v1/auth/logout", "/api/v1/auth/device/login")) {
+                    expectProblem(mapper, post(client, base, path, "{}", wrong),
+                            signing ? 401 : 404, signing ? "AUTH_TOKEN_INVALID" : "ROUTE_NOT_FOUND", path);
+                }
             }
             assertThat(rowCounts(environment)).isEqualTo(before);
         } finally {
