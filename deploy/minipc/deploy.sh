@@ -87,11 +87,11 @@ spring.datasource.hikari.data-source-properties.forceConnectionTimeZoneToSession
 spring.flyway.clean-disabled=true
 spring.flyway.out-of-order=false
 scds.deployment-mode=PRIVATE
-scds.auth.jwt.signing-enabled=true
-scds.auth.jwt.issuer=scds-minipc-validation
-scds.auth.jwt.jwks-uri=
-scds.auth.jwt.public-key-file=/run/scds/jwt-public.pem
-scds.auth.jwt.private-key-file=/run/scds/jwt-private.pem
+scds.auth.jwt.account.signing-enabled=true
+scds.auth.jwt.account.issuer=scds-minipc-validation
+scds.auth.jwt.account.jwks-uri=
+scds.auth.jwt.account.public-key-file=/run/scds/jwt-public.pem
+scds.auth.jwt.account.private-key-file=/run/scds/jwt-private.pem
 CONFIG
     printf 'spring.datasource.password=%s\n' "$SCDS_MYSQL_PASSWORD"
     if [[ "$FIRST_BOOT" == true ]]; then

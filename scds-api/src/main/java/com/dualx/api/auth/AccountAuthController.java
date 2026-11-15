@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 账号签发端点：{@code login} / {@code refresh} / {@code logout}（设计 03 §4.3.2、§4.4、Q1）。
  *
- * <p><b>整类条件注册。</b>{@code scds.auth.jwt.signing-enabled=false} 的实例只验签不签发，
+ * <p><b>整类条件注册。</b>{@code scds.auth.jwt.account.signing-enabled=false} 的实例只验签不签发，
  * 这三个端点**不注册**（客户端得到 404），而不是注册后返回 501——后者会让「本实例没有这个能力」
  * 与「接口尚未实现」这两种完全不同的情况在响应上长得一样，客户端无法据此决定是否该换，
  * baseUrl。{@code matchIfMissing=true} 让配置缺省时按可签发处理，与
@@ -31,7 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 「HTTP 请求 → 服务调用 → 契约 DTO」的翻译。</p>
  */
 @RestController
-@ConditionalOnProperty(prefix = "scds.auth.jwt", name = "signing-enabled",
+@ConditionalOnProperty(prefix = "scds.auth.jwt.account", name = "signing-enabled",
         havingValue = "true", matchIfMissing = true)
 public class AccountAuthController {
 

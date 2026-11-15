@@ -13,7 +13,7 @@ import java.util.Base64;
  * 文件存储与签名 URL 配置（{@code scds.files.*}），口径见 decision-register 的
  * 「D09 / D15 执行边界」（D09-①③⑤⑥）。
  *
- * <p>与 {@code scds.auth.jwt.*} 同一套默认值哲学：漏配得到明确默认值，
+ * <p>与 {@code scds.auth.jwt.account.*} 同一套默认值哲学：漏配得到明确默认值，
  * <b>显式配错才是配置错误</b>——静默回落会把现场故障推到运行期才暴露。</p>
  *
  * <p><b>签名密钥未配置是唯一例外</b>：它不像 TTL 那样有「正确的默认值」可回落。

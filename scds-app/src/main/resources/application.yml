@@ -87,25 +87,27 @@ scds:
   #   2. 现场实例显式启用本地签发；false仅保留受控测试/工具用途。
   auth:
     jwt:
-      issuer: ${SCDS_JWT_ISSUER:scds-edge}
-      # 本地统一签发账号access/refresh和deviceToken。现场业务应为true。
-      # false保留测试/工具用途；当前控制器尚未接线，不宣称已实现关闭能力的404。
-      signing-enabled: ${SCDS_JWT_SIGNING:true}
-      # 验签公钥：内联 PEM 或文件二选一。内联形态在 .env/.properties 里要把换行写成 \n，
-      # 现场更推荐用 public-key-file，省掉转义与「换行被吃掉」这类难查问题。
-      public-key: ${SCDS_JWT_PUBLIC_KEY:}
-      public-key-file: ${SCDS_JWT_PUBLIC_KEY_FILE:}
-      # 签名私钥：仅 signing-enabled=true 时需要。**绝不内置默认私钥**——那等于所有客户共用一把钥匙。
-      private-key: ${SCDS_JWT_PRIVATE_KEY:}
-      private-key-file: ${SCDS_JWT_PRIVATE_KEY_FILE:}
-      # 历史配置键，必须为空；非空在AuthJwtProperties绑定时失败，不访问远端。
-      jwks-uri: ${SCDS_JWKS_URI:}
-      jwks-refresh-ms: 3600000
-      # 有效期三档：access 覆盖一次指挥台作业，refresh 覆盖一次集训周期，
-      # device从签发起有效12小时，不按日历午夜截断；会话SID另行校验。
-      access-token-ttl: 30m
-      refresh-token-ttl: 14d
-      device-token-ttl: 12h
+      # 账号用途令牌（云签发/边缘验签）；设备用途另有 scds.auth.jwt.device.*（后续工作包）。
+      account:
+        issuer: ${SCDS_JWT_ISSUER:scds-edge}
+        # 本地统一签发账号access/refresh和deviceToken。现场业务应为true。
+        # false保留测试/工具用途；当前控制器尚未接线，不宣称已实现关闭能力的404。
+        signing-enabled: ${SCDS_JWT_SIGNING:true}
+        # 验签公钥：内联 PEM 或文件二选一。内联形态在 .env/.properties 里要把换行写成 \n，
+        # 现场更推荐用 public-key-file，省掉转义与「换行被吃掉」这类难查问题。
+        public-key: ${SCDS_JWT_PUBLIC_KEY:}
+        public-key-file: ${SCDS_JWT_PUBLIC_KEY_FILE:}
+        # 签名私钥：仅 signing-enabled=true 时需要。**绝不内置默认私钥**——那等于所有客户共用一把钥匙。
+        private-key: ${SCDS_JWT_PRIVATE_KEY:}
+        private-key-file: ${SCDS_JWT_PRIVATE_KEY_FILE:}
+        # 历史配置键，必须为空；非空在AuthJwtProperties绑定时失败，不访问远端。
+        jwks-uri: ${SCDS_JWKS_URI:}
+        jwks-refresh-ms: 3600000
+        # 有效期三档：access 覆盖一次指挥台作业，refresh 覆盖一次集训周期，
+        # device从签发起有效12小时，不按日历午夜截断；会话SID另行校验。
+        access-token-ttl: 30m
+        refresh-token-ttl: 14d
+        device-token-ttl: 12h
 
   # ===== 初始管理员（仅首次启动建号）=====
   # 迁移文件刻意不种任何账号：写死口令等于所有客户共用一把钥匙，写死散列则无法换口令。

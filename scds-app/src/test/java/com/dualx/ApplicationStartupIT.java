@@ -73,9 +73,9 @@ class ApplicationStartupIT {
         unsafe.put("scds.admin.username", "unwanted-admin");
         unsafe.put("scds.admin.password", "unwanted-secret");
         unsafe.put("scds.admin.display-name", "unwanted-admin");
-        unsafe.put("scds.auth.jwt.public-key-file", "deployment-public.pem");
-        unsafe.put("scds.auth.jwt.private-key-file", "deployment-private.pem");
-        unsafe.put("scds.auth.jwt.jwks-uri", "https://must-not-contact.invalid/jwks");
+        unsafe.put("scds.auth.jwt.account.public-key-file", "deployment-public.pem");
+        unsafe.put("scds.auth.jwt.account.private-key-file", "deployment-private.pem");
+        unsafe.put("scds.auth.jwt.account.jwks-uri", "https://must-not-contact.invalid/jwks");
         unsafe.put("spring.flyway.url", "jdbc:mysql://must-not-contact.invalid/scds_next");
         unsafe.put("spring.flyway.user", "root");
         unsafe.put("spring.flyway.password", "unwanted-secret");

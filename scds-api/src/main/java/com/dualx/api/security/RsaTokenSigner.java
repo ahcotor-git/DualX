@@ -69,7 +69,7 @@ public class RsaTokenSigner implements TokenSigner {
                     properties.accessTokenTtl(), properties.refreshTokenTtl(), properties.deviceTokenTtl());
         } else {
             this.jwsSigner = null;
-            log.info("账号令牌签发已禁用（scds.auth.jwt.signing-enabled=false）：本进程只验签，"
+            log.info("账号令牌签发已禁用（scds.auth.jwt.account.signing-enabled=false）：本进程只验签，"
                     + "login/refresh/logout 不注册（404）");
         }
     }
@@ -139,7 +139,7 @@ public class RsaTokenSigner implements TokenSigner {
         if (jwsSigner == null) {
             // 装配期就该被拦住：signing-enabled=false 时三个签发端点不注册，正常走不到这里。
             throw new IllegalStateException(
-                    "本进程不具备签发能力（scds.auth.jwt.signing-enabled=false），不应调用签发");
+                    "本进程不具备签发能力（scds.auth.jwt.account.signing-enabled=false），不应调用签发");
         }
         SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.RS256), claims);
         try {

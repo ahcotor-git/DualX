@@ -3523,3 +3523,17 @@ R27 原判「部分成立」，逐项拆开后**只有前两项能在本机闭�
 5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
 
 
+**段 92 工作包 2a 执行（2026-11-15）：账号键重命名 `scds.auth.jwt.*` → `scds.auth.jwt.account.*`**——
+用户裁定「**一笔全改**」（不拆 3 笔）。§10.1 原列 2a 为 3 文件，实际一次改净 **18 文件**（12 Java ＋ 4 文档 ＋ `application.yml` ＋ `deploy.sh`），
+**已显式声明破「≤3 文件」例外**。**性质**：配置键重命名，**行为等价**——仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS / 1199 项 / 0/0/0**
+（与段 91 基线一致，无新增 / 无删减用例）。环境变量名（`SCDS_JWT_*` / `SCDS_JWKS_URI`）**不变**；历史存档（本册段 90 行）保留原键名。
+**落点 / 证据**：见 `docs/testing.md` §81。
+
+**下一段（候选）**：
+1. **工作包 2b / 2c**（`DeviceJwtProperties`（prefix `scds.auth.jwt.device`，默认 false ＋ 负向校验）＋ `DeviceTokenSigner` 域端口 ＋ 测试；yml 设备段接线）；
+2. **工作包 3a / 3b**（新 `DeviceRsaTokenSigner` ＋ `PemKeys` 参数化；删 `TokenSigner.signDeviceToken` 与 `DeviceAuthService` 迁移**同段一次迁净**，3b 破限）；
+3. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+4. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
+
+

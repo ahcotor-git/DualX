@@ -86,13 +86,13 @@ final class ApplicationStartupSupport {
         settings.put("scds.admin.username", "");
         settings.put("scds.admin.password", "");
         settings.put("scds.admin.display-name", "");
-        settings.put("scds.auth.jwt.issuer", ISSUER);
-        settings.put("scds.auth.jwt.signing-enabled", Boolean.toString(signing));
-        settings.put("scds.auth.jwt.public-key", pem("PUBLIC KEY", key.getPublic().getEncoded()));
-        settings.put("scds.auth.jwt.public-key-file", "");
-        settings.put("scds.auth.jwt.private-key", signing ? pem("PRIVATE KEY", key.getPrivate().getEncoded()) : "");
-        settings.put("scds.auth.jwt.private-key-file", "");
-        settings.put("scds.auth.jwt.jwks-uri", "");
+        settings.put("scds.auth.jwt.account.issuer", ISSUER);
+        settings.put("scds.auth.jwt.account.signing-enabled", Boolean.toString(signing));
+        settings.put("scds.auth.jwt.account.public-key", pem("PUBLIC KEY", key.getPublic().getEncoded()));
+        settings.put("scds.auth.jwt.account.public-key-file", "");
+        settings.put("scds.auth.jwt.account.private-key", signing ? pem("PRIVATE KEY", key.getPrivate().getEncoded()) : "");
+        settings.put("scds.auth.jwt.account.private-key-file", "");
+        settings.put("scds.auth.jwt.account.jwks-uri", "");
 
         var environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("full-startup-test", settings));
@@ -144,7 +144,7 @@ final class ApplicationStartupSupport {
         }
         for (String property : Set.of("spring.config.import", "spring.config.additional-location",
                 "spring.profiles.include", "scds.admin.username", "scds.admin.password", "scds.admin.display-name",
-                "scds.auth.jwt.public-key-file", "scds.auth.jwt.private-key-file", "scds.auth.jwt.jwks-uri")) {
+                "scds.auth.jwt.account.public-key-file", "scds.auth.jwt.account.private-key-file", "scds.auth.jwt.account.jwks-uri")) {
             if (!environment.getProperty(property, "").isEmpty()) {
                 throw new IllegalStateException(GUARD_MESSAGE);
             }

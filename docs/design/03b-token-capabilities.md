@@ -145,7 +145,7 @@ scds:
   本地证据：`DisabledCapabilityRouteFilterTest`（过滤器判定）＋ `ApplicationStartupIT`
   （真 Tomcat + 真安全链，`signing=false` 带无效 Bearer 得 404 / `signing=true` 得 401）；见 testing.md §80。
 - **「账号 / 设备两个独立开关」未落地**：本仓库把两者合并为**同一个**
-  `scds.auth.jwt.signing-enabled`（账号签发与设备登录都必需私钥；review R06 段 90 裁定）。
+  `scds.auth.jwt.account.signing-enabled`（账号签发与设备登录都必需私钥；review R06 段 90 裁定）。
   因此上表「云端账号签发实例：账号开、设备关」这一列在本仓库**不可达**——只能整开或整关。
   段 91 的精确匹配表据此构建为「关闭时缺席的四个路径」；若将来拆成两个开关，
   应改为**按实际关闭的能力分别**构建匹配表（过滤器已就此留注）。
@@ -247,14 +247,14 @@ displayName、roles、permissions和lastLoginAt。当前JWT只稳定提供sub/ro
 |---|---|---|
 | 账号签发/验签端口 | `scds-domain/src/main/java/com/dualx/core/port/TokenSigner.java` | 单端口，`enabled`/三个 TTL/`signAccessToken`/`signRefreshToken`/`signDeviceToken` 全在此 |
 | 签发实现 | `scds-api/src/main/java/com/dualx/api/security/RsaTokenSigner.java` | 单私钥，账号三用途共签（含设备） |
-| 账号配置 | `scds-api/src/main/java/com/dualx/api/security/AuthJwtProperties.java` | `scds.auth.jwt.*`，单 issuer / 单公私钥 / 三 TTL |
+| 账号配置 | `scds-api/src/main/java/com/dualx/api/security/AuthJwtProperties.java` | `scds.auth.jwt.account.*`，单 issuer / 单公私钥 / 三 TTL |
 | 验签装配 | `scds-api/src/main/java/com/dualx/api/security/JwtDecoderConfig.java` | 单 decoder（本地 PEM 或远端 JWKS 死分支），`KNOWN_AUDIENCES` 已含三用途 |
 | 密钥读取 | `scds-api/src/main/java/com/dualx/api/security/PemKeys.java` | 按 `AuthJwtProperties` 读账号私钥/公钥 |
 | 授权/白名单 | `scds-api/src/main/java/com/dualx/api/security/SecurityConfig.java` | 三条签发入口无条件 `permitAll`；`logout` 要求账号令牌 |
 | 能力缺席 404 | `scds-api/src/main/java/com/dualx/api/security/DisabledCapabilityRouteFilter.java` | **单开关**匹配表（段 91） |
 | 控制器 | `scds-api/src/main/java/com/dualx/api/auth/{AuthController,AccountAuthController,DeviceAuthController}.java` | 前二者无条件注册，后二者 `@ConditionalOnProperty(signing-enabled)` |
 | 服务 | `scds-core/src/main/java/com/dualx/core/auth/{AuthService,DeviceAuthService}.java` | `DeviceAuthService` 现经 `TokenSigner.signDeviceToken` 签设备 |
-| 配置样例 | `scds-app/src/main/resources/application.yml` | `scds.auth.jwt.*`（第 88~108 行） |
+| 配置样例 | `scds-app/src/main/resources/application.yml` | `scds.auth.jwt.account.*`（第 88~110 行） |
 | 相关测试 | `scds-api/src/test/java/com/dualx/api/security/{AuthJwtPropertiesTest,RsaTokenSignerTest,DisabledCapabilityRouteFilterTest}.java`、`scds-app/src/test/java/com/dualx/api/security/SecurityJwtValidationIT.java`、`scds-app/src/test/java/com/dualx/{AuthHttpIT,ApplicationStartupIT}.java`、`scds-app/src/test/java/com/dualx/security/SecurityMetricsIT.java`、`scds-core/src/test/java/com/dualx/core/auth/{AuthServiceIT,DeviceAuthServiceIT}.java` | 单密钥装配 |
 
 ### 10.1 工作包 2 — 账号键重命名 + 设备配置与 domain 签发端口

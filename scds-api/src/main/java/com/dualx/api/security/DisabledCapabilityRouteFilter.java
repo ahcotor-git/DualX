@@ -35,7 +35,7 @@ import java.util.Set;
  * 仍走正常 401/403。</p>
  *
  * <p><b>与能力开关的关系。</b>本仓库把账号签发与设备登录合并为**同一个**开关
- * {@code scds.auth.jwt.signing-enabled}（两者都必需私钥；review R06 段 90 裁定），
+ * {@code scds.auth.jwt.account.signing-enabled}（两者都必需私钥；review R06 段 90 裁定），
  * 因此该开关关闭时缺席的是这四个精确路径。若将来把账号/设备拆成两个开关，
  * 这里应改成「按实际关闭的能力**分别**构建精确匹配表」，而不是继续共用一个集合。</p>
  */

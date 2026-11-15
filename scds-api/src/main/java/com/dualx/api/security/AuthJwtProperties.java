@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.time.Duration;
 
 /**
- * 本地鉴权配置（{@code scds.auth.jwt.*}），部署边界见 docs/architecture.md 第0节。
+ * 本地鉴权配置（{@code scds.auth.jwt.account.*}），部署边界见 docs/architecture.md 第0节。
  *
  * <p>账号与设备均由本地业务实例签发、验签；云端仅反向代理。
  * {@code deployment-mode}是历史兼容登记，不能反推签发能力或是否启用FRPC。
@@ -29,7 +29,7 @@ import java.time.Duration;
  * @param refreshTokenTtl 刷新令牌有效期，覆盖一次集训周期
  * @param deviceTokenTtl  设备令牌从签发起的有效期，不按日历午夜截断
  */
-@ConfigurationProperties(prefix = "scds.auth.jwt")
+@ConfigurationProperties(prefix = "scds.auth.jwt.account")
 public record AuthJwtProperties(
         String issuer,
         Boolean signingEnabled,
@@ -74,7 +74,7 @@ public record AuthJwtProperties(
         // 两者相等或倒挂时前端要么没有换发窗口，要么拿得到一个比它自己的续命凭证还短命的 access。
         if (refreshTokenTtl.compareTo(accessTokenTtl) <= 0) {
             throw new IllegalArgumentException(
-                    "scds.auth.jwt.refresh-token-ttl must outlast access-token-ttl.");
+                    "scds.auth.jwt.account.refresh-token-ttl must outlast access-token-ttl.");
         }
     }
 
@@ -84,7 +84,7 @@ public record AuthJwtProperties(
      */
     private static void requirePositive(Duration ttl, String key) {
         if (ttl.isZero() || ttl.isNegative()) {
-            throw new IllegalArgumentException("scds.auth.jwt." + key + " must be positive.");
+            throw new IllegalArgumentException("scds.auth.jwt.account." + key + " must be positive.");
         }
     }
 }

@@ -94,8 +94,8 @@ java -jar target\scds-next.jar --spring.profiles.active=local
 
 ```powershell
 java -jar scds-app\target\scds-next.jar --spring.profiles.active=local `
-  --scds.auth.jwt.public-key-file=dev-keys/dev-jwt-public.pem `
-  --scds.auth.jwt.private-key-file=dev-keys/dev-jwt-private.pem
+  --scds.auth.jwt.account.public-key-file=dev-keys/dev-jwt-public.pem `
+  --scds.auth.jwt.account.private-key-file=dev-keys/dev-jwt-private.pem
 ```
 
 local profile显式绑定127.0.0.1，并导入 `.env`/`../.env`。
@@ -193,11 +193,11 @@ Windows使用实际绝对位置，例如 `file:E:/ScdsConfig/application.propert
 ```properties
 server.address=127.0.0.1
 scds.deployment-mode=PRIVATE
-scds.auth.jwt.signing-enabled=true
-scds.auth.jwt.issuer=scds-customer-local
-scds.auth.jwt.jwks-uri=
-scds.auth.jwt.public-key-file=/etc/scds/keys/jwt-public.pem
-scds.auth.jwt.private-key-file=/etc/scds/keys/jwt-private.pem
+scds.auth.jwt.account.signing-enabled=true
+scds.auth.jwt.account.issuer=scds-customer-local
+scds.auth.jwt.account.jwks-uri=
+scds.auth.jwt.account.public-key-file=/etc/scds/keys/jwt-public.pem
+scds.auth.jwt.account.private-key-file=/etc/scds/keys/jwt-private.pem
 spring.datasource.url=jdbc:mysql://127.0.0.1:13306/scds_next?rewriteBatchedStatements=true
 spring.datasource.username=scds_app
 # spring.datasource.password 由受保护配置/部署环境提供

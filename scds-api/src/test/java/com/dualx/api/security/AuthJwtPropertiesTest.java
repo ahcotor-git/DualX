@@ -56,7 +56,7 @@ class AuthJwtPropertiesTest {
     void externalOverrideFailsDuringBindingBeforeDecoderConstruction() {
         new ApplicationContextRunner()
                 .withUserConfiguration(PropertiesOnly.class)
-                .withPropertyValues("scds.auth.jwt.jwks-uri=https://must-not-contact.invalid/jwks")
+                .withPropertyValues("scds.auth.jwt.account.jwks-uri=https://must-not-contact.invalid/jwks")
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(rootCause(context.getStartupFailure()))
@@ -94,7 +94,7 @@ class AuthJwtPropertiesTest {
     void ttlMisconfigurationFailsDuringBindingNotAtFirstLogin() {
         new ApplicationContextRunner()
                 .withUserConfiguration(PropertiesOnly.class)
-                .withPropertyValues("scds.auth.jwt.device-token-ttl=0s")
+                .withPropertyValues("scds.auth.jwt.account.device-token-ttl=0s")
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(rootCause(context.getStartupFailure()))

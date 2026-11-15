@@ -121,7 +121,7 @@
 **claim 集合**（固定，不随意扩充）：
 
 ```
-iss   当前实现为scds.auth.jwt.issuer；D02拟按账号/设备用途绑定独立issuer，见03b
+iss   当前实现为scds.auth.jwt.account.issuer；D02拟按账号/设备用途绑定独立issuer，见03b
 sub   账号令牌 = accountId(UUIDv7)；设备令牌 = vestNum
 aud   见上表
 exp / iat / nbf
@@ -179,7 +179,7 @@ scds:
 | 配置 | 回答的问题 | 取值 |
 |---|---|---|
 | `scds.deployment-mode` | **环境**：这台机器是云端实例还是私有化单机 | `CLOUD` / `PRIVATE` |
-| `scds.auth.jwt.signing-enabled` | **能力**：本进程是否具备签发账号 accessToken 的能力 | `true` / `false` |
+| `scds.auth.jwt.account.signing-enabled` | **能力**：本进程是否具备签发账号 accessToken 的能力 | `true` / `false` |
 
 **不要在代码里写 `if (deploymentMode == PRIVATE)` 来判签发能力**：PRIVATE 完全可以只验签（令牌由运维统一在别处签好），CLOUD 也完全可以在某客户的边缘上打开签发（离线演练场景）。两者正交，各配各的。
 
@@ -250,7 +250,7 @@ authenticated：
   也不注册占位 controller、不放行整个 `/api/v1/auth/**`。
   见 [DisabledCapabilityRouteFilter.java](../../scds-api/src/main/java/com/dualx/api/security/DisabledCapabilityRouteFilter.java)。
 - D02 拟议的**账号与设备独立白名单**仍未实现：本仓库把账号签发与设备登录合并为**同一个**
-  `scds.auth.jwt.signing-enabled`（review R06 段 90 裁定：两者都必需私钥）。因此 03b §5 矩阵
+  `scds.auth.jwt.account.signing-enabled`（review R06 段 90 裁定：两者都必需私钥）。因此 03b §5 矩阵
   里「两列独立开关」这一半**不是运行结果**，不得据其宣称可只关其一。
 
 ### 4.5 角色 → 权限点
@@ -421,7 +421,7 @@ ALTER TABLE t_vest
 
 ### 4.12 配置校验：漏配给默认，配错就失败关闭
 
-`AuthJwtProperties` 的紧凑构造器是 `scds.auth.jwt.*` 的唯一入口，规则分两类：
+`AuthJwtProperties` 的紧凑构造器是 `scds.auth.jwt.account.*` 的唯一入口，规则分两类：
 
 - **漏配（`null`）补明确默认值**，不让整个上下文因一项漏配而起不来：`issuer` 取 `scds-edge`、
   access 30m、refresh 14d、device 12h、`signing-enabled` 取 `true`。

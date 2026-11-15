@@ -5210,7 +5210,7 @@ expected: {"t_account"=2L, …, "t_refresh_token"=2L}
 
 ### 79.2 落点
 
-- **`DeviceAuthController`（新，scds-api）**：整类 `@ConditionalOnProperty(prefix = "scds.auth.jwt",
+- **`DeviceAuthController`（新，scds-api）**：整类 `@ConditionalOnProperty(prefix = "scds.auth.jwt.account",
   name = "signing-enabled", havingValue = "true", matchIfMissing = true)`，与 R05 的 `AccountAuthController` 同源；
   `device/login` 从 `AuthController` 迁入。**`device/me` 不迁**：它只验签不签发（校 SID 单端在线 + 读台账），
   与 `/auth/me` 同理留在**不条件注册**的 `AuthController`。
@@ -5343,5 +5343,53 @@ expected: {"t_account"=2L, …, "t_refresh_token"=2L}
 - **端到端演练未做**：只验了 HTTP 状态 / 错误码 / bean 数量，**未做**「客户端据 404 换 `baseUrl`」的真实链路演练。
 - **Docker 环境**：本段门禁依赖 `scds-local-mysql`（13306）容器；本机 Docker Desktop 需**管理员**启动
   （`com.docker.service` 无法非提权启动），容器随引擎重启会 `Exited (255)`，需 `docker start` 重新拉起后才可跑 IT。
+
+
+## 81. 03b §10.1 工作包 2a：账号键重命名 `scds.auth.jwt.*` → `scds.auth.jwt.account.*`
+
+承段 92「03b 双能力分段实施白名单（§10.1 拆 2a）」。用户在**无人值守模式**下经 AskUserQuestion 裁定：
+① 配置键取「**统一重命名子键**」（§10.6）；② 2a 分笔取「**一笔全改**」（不拆 3 笔）。
+**本段属配置键重命名**：账号用途令牌的配置前缀 `scds.auth.jwt` → `scds.auth.jwt.account`，**行为等价**（不改语义 / 不改值 / 不改密钥与迁移）。
+
+### 81.1 落点（为何不止 3 文件）
+
+§10.1 原列 2a 为 3 文件（`AuthJwtProperties` / `application.yml` / `AuthJwtPropertiesTest`）。实际 `grep scds.auth.jwt`
+命中的**非历史**文件共 **18**（12 Java ＋ 4 文档 ＋ `application.yml` ＋ `deploy.sh`），一次改净以免留不一致中间态（用户裁定「一笔全改」）：
+
+- **主代码（6）**：`AuthJwtProperties.java`（`@ConfigurationProperties` 前缀 ＋ javadoc ＋ 两处错误消息）、
+  `AccountAuthController.java` / `DeviceAuthController.java`（`@ConditionalOnProperty` 前缀 ＋ javadoc）、
+  `RsaTokenSigner.java`（日志两处）、`DisabledCapabilityRouteFilter.java`（javadoc）、`FileStorageProperties.java`（javadoc 交叉引用）。
+- **测试（6）**：`AuthJwtPropertiesTest.java`、`SecurityMetricsIT.java`、`RoleWritePermissionIT.java`、
+  `ApplicationStartupSupport.java`、`ApplicationStartupIT.java`、`SecurityJwtValidationIT.java`（`DynamicPropertySource` / `@TestPropertySource` / `settings.put` 键名）。
+- **配置 / 部署（2）**：`scds-app/src/main/resources/application.yml`（账号段下移一层为 `auth.jwt.account.*`，第 88~110 行）、
+  `deploy/minipc/deploy.sh`（生成的 `application.properties` 键名）。
+- **文档（4）**：`docs/environments.md`（命令覆盖 ＋ 生产 properties 样例）、`docs/design/03-auth.md`（claim / §4.3 配置表 / §4.4 注记 / §4.12）、
+  `docs/testing.md`（§79.2 落点）、`docs/design/03b-token-capabilities.md`（§5 ＋ §10.0 锚点表两行）。
+
+**未改（历史存档）**：`decision-register` 段 90 行保留原键名（历史决策记录）。
+**环境变量名不变**：`SCDS_JWT_ISSUER` / `SCDS_JWT_SIGNING` / `SCDS_JWT_PUBLIC_KEY(_FILE)` / `SCDS_JWT_PRIVATE_KEY(_FILE)` / `SCDS_JWKS_URI`
+**键名不改**（只改 Spring 属性键）。
+
+### 81.2 门禁实测（2026-11-15，`scds-local-mysql` 13306 healthy，Java 21）
+
+命令：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS**。计数取自各模块 `surefire-reports/TEST-*.xml` 的 `<testcase>` 之和。
+
+| 模块 | 测试数 | 失败/错误/跳过 |
+|---|---:|---|
+| protocol | 19 | 0/0/0 |
+| solver | 18 | 0/0/0 |
+| gateway | 49 | 0/0/0 |
+| core | 630 | 0/0/0 |
+| api | 150 | 0/0/0 |
+| app | 333 | 0/0/0 |
+| 总计 | **1199** | **0/0/0** |
+
+**与段 91 基线 1199 完全一致 ⇒ 重命名行为等价**（无新增 / 无删减用例）。
+
+### 81.3 未验项 / 边界
+
+- 本段**不动** `TokenSigner` 的设备方法（删除在包 3b，与 `DeviceAuthService` 迁移同段）。
+- 包 2b（`DeviceJwtProperties` ＋ `DeviceTokenSigner` 端口）与 2c（yml 设备段）**未开工**。
+- 旧键名 `scds.auth.jwt.*` 自此**不再生效**；升级须同步迁移配置（03b §3 已记）。
 
 

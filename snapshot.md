@@ -1,14 +1,16 @@
 # scds-next 交接快照
 
 > 更新：2026-11-15，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 92 03b 双能力分段实施白名单（为工作包 2/3/4 逐包列文件白名单与测试计划，纯文档）**——
-> 承段 91「下一段（候选）① 03b §5 账号与设备「独立」开关 + 两套独立白名单（需先定设计）」。用户在**无人值守模式**下经 AskUserQuestion 裁定下一段方向「**03b 双能力：先出分段白名单（推荐）**」：先按 03b §8「每包开工前列具体文件白名单及测试」把双能力拆分的**实施计划**写清，落成文档，**批准后再逐段开工**。
-> **本段性质**：**纯文档**——不改 Java / 契约 / Dart、不改 `.env` / 不生成密钥 / 不改迁移 / 不重置数据库；故**未重跑** `mvn` / `flutter test`，复用段 91 证据（**1199 项 / 0/0/0**）。
-> **落点**：`docs/design/03b-token-capabilities.md` **新增 §10**「分段实施白名单与测试计划」——§10.0 现状锚点表（11 行）；§10.1 包 2（**账号键重命名** `scds.auth.jwt.account.*` ＋ 新增 `scds.auth.jwt.device.*`（默认 false，负向校验含「issuer / 公钥与账号相同即失败」），拆 2a / 2b / 2c）；§10.2 包 3（新 `DeviceRsaTokenSigner`，改 `PemKeys`（键来源**参数化**）＋ `DeviceAuthService`）；§10.3 包 4（`JwtDecoderConfig` 改**门面**，按未验签 `aud` 分派账号 / 设备 decoder，不试遍公钥、不跨用途）；§10.4 包 5 **已完成**（段 90/91），仅余「单开关匹配表 → 按实际关闭能力分别构建」＋「`SecurityConfig` 白名单条件化」（**依赖包 2**）；§10.5-10.7 包 6/7/8 依赖（包 6 身份策略**已裁定**、包 8 待 D03）＋ **§10.6 四项已裁定** ＋ 复述「本表不构成授权」。
-> **文档笔（3 文件，恰在上限内、未破「≤3 文件」）**：`docs/design/03b-token-capabilities.md`（§10）＋ `docs/decision-register.md`（段 92）＋ 本快照。
-> **§10.6 四项设计前置已裁定（2026-11-15 续）**：① 配置键**统一重命名子键** `scds.auth.jwt.account.*` / `scds.auth.jwt.device.*`（取代 §3 原拟议）；② `TokenSigner` 设备方法**一次迁净**删除 `signDeviceToken`（不保留兼容入口）；③ `me` 身份策略取**边缘预置/同步最小身份快照、复用本地 `me`**；④ 设备密钥由**部署侧提供 PEM**（不入库）。裁定已写入 03b §3 / §7 / §10.1 / §10.2 / §10.5 / §10.6；**仅解除设计阻塞，不构成包 2 开工授权**。
-> **口径**：本段只**列白名单**，**不构成开工授权**；每包开工**逐段授权**，提交 / 推送**逐次授权**。
-> 下一项**（候选，按推荐序）**：① **工作包 2a**（账号键重命名：`AuthJwtProperties` 前缀 → `scds.auth.jwt.account` ＋ `application.yml` 账号段 ＋ `AuthJwtPropertiesTest`，3 文件，**经逐段授权后开工**）；② 工作包 2b / 2c（设备配置与端口 ＋ yml 接线）；③ 全库行尾 renormalize（大范围 diff，需显式授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑤ R27 剩余项定型（队列 / 客户端上限与 RPO · RTO，**需产品 / 运维口径**）。
+> 当前任务：**段 92 工作包 2a —— 账号键重命名 `scds.auth.jwt.*` → `scds.auth.jwt.account.*`（行为等价）**——
+> 承段 92「03b 双能力分段实施白名单（§10.1 拆 2a）」。用户在**无人值守模式**下经 AskUserQuestion 裁定：① 配置键取「**统一重命名子键**」（§10.6）；② 2a 分笔取「**一笔全改**」（不拆 3 笔）。
+> **本段性质**：**配置键重命名**——不改语义 / 值 / 密钥 / 迁移，**行为等价**。**环境变量名 `SCDS_JWT_*` / `SCDS_JWKS_URI` 不变**；历史存档（decision-register 段 90 行）保留原键名。
+> **落点（18 文件，破「≤3 文件」已显式声明例外）**：主代码 6（`AuthJwtProperties`（前缀 ＋ javadoc ＋ 2 错误消息）/ `AccountAuthController` / `DeviceAuthController`（`@ConditionalOnProperty` 前缀）/ `RsaTokenSigner`（日志 2 处）/ `DisabledCapabilityRouteFilter` / `FileStorageProperties`（javadoc））＋ 测试 6（`AuthJwtPropertiesTest` / `SecurityMetricsIT` / `RoleWritePermissionIT` / `ApplicationStartupSupport` / `ApplicationStartupIT` / `SecurityJwtValidationIT`）＋ 配置 2（`application.yml`（账号段下移一层为 `auth.jwt.account.*`，88~110 行）/ `deploy/minipc/deploy.sh`）＋ 文档 4（`environments.md` / `03-auth.md` / `testing.md` §79.2 / `03b` §5 ＋ §10.0 锚点）。
+> **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1199 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ api 150 ＋ app 333）。**与段 91 基线同数 ⇒ 行为等价**（无新增 / 无删减用例）。证据见 testing.md §81。
+> **口径**：每包开工**逐段授权**，提交 / 推送**逐次授权**。
+> 下一项**（候选，按推荐序）**：① **工作包 2b / 2c**（`DeviceJwtProperties`（prefix `scds.auth.jwt.device`，默认 false ＋ 负向校验）＋ `DeviceTokenSigner` 域端口 ＋ 测试；yml 设备段接线）；② 工作包 3a / 3b（`DeviceRsaTokenSigner` ＋ `PemKeys` 参数化；删 `TokenSigner.signDeviceToken` 与 `DeviceAuthService` 迁移**同段一次迁净**，3b 破限）；③ 全库行尾 renormalize（大范围 diff，需显式授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑤ R27 剩余项定型（队列 / 客户端上限与 RPO · RTO，**需产品 / 运维口径**）。
+> 上一原子任务：**段 92 03b 双能力分段实施白名单（为工作包 2/3/4 逐包列文件白名单与测试计划，纯文档）**——
+> `docs/design/03b-token-capabilities.md` **新增 §10**「分段实施白名单与测试计划」——§10.0 现状锚点表（11 行）；§10.1 包 2（**账号键重命名** `scds.auth.jwt.account.*` ＋ 新增 `scds.auth.jwt.device.*`（默认 false，负向校验含「issuer / 公钥与账号相同即失败」），拆 2a / 2b / 2c）；§10.2 包 3（新 `DeviceRsaTokenSigner`，改 `PemKeys`（键来源**参数化**）＋ `DeviceAuthService`）；§10.3 包 4（`JwtDecoderConfig` 改**门面**）；§10.4 包 5 **已完成**（段 90/91）；§10.5-10.7 包 6/7/8 依赖 ＋ **§10.6 四项已裁定** ＋ 复述「本表不构成授权」。
+> **§10.6 四项设计前置已裁定（2026-11-15 续）**：① 配置键**统一重命名子键** `scds.auth.jwt.account.*` / `scds.auth.jwt.device.*`（取代 §3 原拟议）；② `TokenSigner` 设备方法**一次迁净**删除 `signDeviceToken`（不保留兼容入口）；③ `me` 身份策略取**边缘预置/同步最小身份快照、复用本地 `me`**；④ 设备密钥由**部署侧提供 PEM**（不入库）。裁定已写入 03b §3 / §7 / §10.1 / §10.2 / §10.5 / §10.6。**纯文档**（未重跑 `mvn`，复用 1199 证据）；文档笔 3 文件（03b ＋ decision-register 段 92 ＋ 本快照）。
 > 上一原子任务：**段 91 03b §5 安全层 404 出口：`DisabledCapabilityRouteFilter`（连无效 Bearer 也是 404）**——
 > 承段 90「下一段（候选）① 03b §5 / §8 工作包 5」。用户在**无人值守模式**下经 AskUserQuestion 裁定下一段方向「**03b §5 安全层 404 出口（推荐）**」。**本段属行为变更**：`signing=false` 时，**带无效 Bearer** 访问四个签发路径由 **401 改 404**（无令牌的匿名请求段 90 已为 404，本段不变）。
 > **问题（段 90 只做到一半）**：段 90 已让**未携带令牌**的匿名请求在已关闭能力路径上得到 404（放行没随能力收回，请求抵达 dispatcher）。但带**无效 Bearer** 时 `BearerTokenAuthenticationFilter`（Security 链 order = -100）**先验签失败**写成 401 `AUTH_TOKEN_INVALID`，请求到不了 dispatcher 的 404。**根因**：`permitAll` 只作用于更靠后的 `AuthorizationFilter`，**管不住**更靠前的 `BearerTokenAuthenticationFilter`。

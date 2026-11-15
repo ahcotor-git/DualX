@@ -223,13 +223,13 @@ class RoleWritePermissionIT {
 
     @DynamicPropertySource
     static void jwtProperties(DynamicPropertyRegistry registry) {
-        registry.add("scds.auth.jwt.issuer", () -> ISSUER);
-        registry.add("scds.auth.jwt.signing-enabled", () -> "false");
-        registry.add("scds.auth.jwt.public-key", () -> publicKeyPem(KEY));
-        registry.add("scds.auth.jwt.public-key-file", () -> "");
-        registry.add("scds.auth.jwt.private-key", () -> "");
-        registry.add("scds.auth.jwt.private-key-file", () -> "");
-        registry.add("scds.auth.jwt.jwks-uri", () -> "");
+        registry.add("scds.auth.jwt.account.issuer", () -> ISSUER);
+        registry.add("scds.auth.jwt.account.signing-enabled", () -> "false");
+        registry.add("scds.auth.jwt.account.public-key", () -> publicKeyPem(KEY));
+        registry.add("scds.auth.jwt.account.public-key-file", () -> "");
+        registry.add("scds.auth.jwt.account.private-key", () -> "");
+        registry.add("scds.auth.jwt.account.private-key-file", () -> "");
+        registry.add("scds.auth.jwt.account.jwks-uri", () -> "");
     }
 
     @Autowired MockMvc mvc;

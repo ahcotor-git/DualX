@@ -57,7 +57,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@TestPropertySource(properties = "scds.auth.jwt.signing-enabled=true")
+@TestPropertySource(properties = "scds.auth.jwt.account.signing-enabled=true")
 class SecurityMetricsIT extends SecurityMetricsAssertions {
     @TestFactory
     Stream<DynamicTest> metricsAccessMatrix() {
@@ -70,7 +70,7 @@ class SecurityMetricsIT extends SecurityMetricsAssertions {
     }
 }
 
-@TestPropertySource(properties = "scds.auth.jwt.signing-enabled=false")
+@TestPropertySource(properties = "scds.auth.jwt.account.signing-enabled=false")
 class SecurityMetricsReadOnlyIT extends SecurityMetricsAssertions {
     @TestFactory
     Stream<DynamicTest> metricsAccessMatrix() {
@@ -105,12 +105,12 @@ abstract class SecurityMetricsAssertions {
 
     @DynamicPropertySource
     static void jwtProperties(DynamicPropertyRegistry registry) {
-        registry.add("scds.auth.jwt.issuer", () -> ISSUER);
-        registry.add("scds.auth.jwt.public-key", () -> publicKeyPem(KEY));
-        registry.add("scds.auth.jwt.public-key-file", () -> "");
-        registry.add("scds.auth.jwt.private-key", () -> "");
-        registry.add("scds.auth.jwt.private-key-file", () -> "");
-        registry.add("scds.auth.jwt.jwks-uri", () -> "");
+        registry.add("scds.auth.jwt.account.issuer", () -> ISSUER);
+        registry.add("scds.auth.jwt.account.public-key", () -> publicKeyPem(KEY));
+        registry.add("scds.auth.jwt.account.public-key-file", () -> "");
+        registry.add("scds.auth.jwt.account.private-key", () -> "");
+        registry.add("scds.auth.jwt.account.private-key-file", () -> "");
+        registry.add("scds.auth.jwt.account.jwks-uri", () -> "");
     }
 
     @Autowired MockMvc mvc;
