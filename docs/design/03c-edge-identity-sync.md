@@ -25,10 +25,12 @@
 | C3 | 云端删号的处置 | 快照无删除指令则**不动**本地行；有删除标记则置 `enabled=false`，**不**物理删除。 |
 | C4 | 导入的原子性与失败形态 | **单事务、全量**；任一条失败**整体回滚**。 |
 | E1 | 同步工具归属哪个工作包 | **单独开包**；包 6 只收口 AUTH-HTTP 端点，避免文件数膨胀。 |
+| F1 | 本轮是否实现「删除标记」字段（§7.4） | **本轮不实现**；快照只带 `enabled`，云端删号由快照生成端表现为 `enabled=false`。 |
 
 > **（2026-11-16 裁定）** 上表**全部推荐项逐项采纳**（用户裁定「裁定 03c 决策点（按 §0 推荐项逐项裁定）」）。
 > 故下文各节标题下的「推荐」**即为已裁定口径**；**唯 §4.2 的 C2-2（授权回查本地 `enabled`）仍为待议项**，
-> 须与 D04 权限规则对齐后再定。裁定记录见 [decision-register.md](../decision-register.md)（段 92 工作包 6 前置方案条）。
+> 须与 D04 权限规则对齐后再定；**§7.4 的 F1** 系本次「同步工具包白名单」（§7）**新引入的待裁定项**。
+> 裁定记录见 [decision-register.md](../decision-register.md)（段 92 工作包 6 前置方案条）。
 
 ---
 
@@ -226,7 +228,89 @@ UUID 形态沿用库约定（[V1__auth.sql](file:///e:/DualX/scds-next/scds-core
 
 ---
 
-## 7. 本方案不构成授权（复述）
+## 7. 落地工作包：文件白名单与测试计划（拟议，2026-11-16）
+
+依据 [03b](03b-token-capabilities.md) §8「每包开工前列具体文件白名单及测试」。按 E1（**同步工具单独开包**），
+拆为两个原子子包（各 ≤3 文件），**均为新增件、不动既有行为**；逐段授权后开工。本表**不构成授权**（§8）。
+
+### 7.1 前置澄清（实现细节，取代 §3.3 末的「提升共享常量」建议）
+
+**占位散列改为「每次导入 `passwordEncoder.encode(一次性随机明文)`」**：明文用后即弃，所得的 BCrypt 串
+**必然不可登录**（无人知道明文），且**每账号各不相同**（不泄露"这是云端账号"的线索）。
+据此**不需要**新建共享常量类、**不需要**改 `AuthService`——
+`AuthService.DUMMY_PASSWORD_HASH` 存在的理由是**另一件事**（登录失败路径的常量时间陪跑），**与本工具无关，保持不动**。
+（**B2 的裁定内容「不可登录占位散列」不变**，仅其"提升共享常量"的实现建议被本条取代。）
+
+### 7.2 包 6a — 同步模型与配置属性（**3 文件**，无行为）
+
+| 文件 | 动作 | 说明 |
+|---|---|---|
+| `scds-core/src/main/java/com/dualx/core/auth/IdentitySyncProperties.java` | **新** | `@ConfigurationProperties("scds.identity")`，`record(String importFile)`；判据 =「trim 后非空才算已配置」。 |
+| `scds-core/src/main/java/com/dualx/core/auth/AccountSnapshot.java` | **新** | 快照模型：`record(int schemaVersion, String source, String generatedAt, List<Entry> accounts)` ＋ `Entry(UUID id, String username, String displayName, List<Role> roles, boolean enabled)`；`source` / `generatedAt` 仅元数据，**不参与 `me` 判定**。 |
+| `scds-core/src/test/java/com/dualx/core/auth/IdentitySyncPropertiesTest.java` | **新** | 绑定 / 缺省 / 空白串三例。 |
+
+- **不外露契约**：快照文件是**运维输入**，不进 `api/paths`、不新增 REST 端点。
+- **测试计划**（≈3 例）：绑定生效 / 未配置为 `null` / `"  "` 视为未配置。
+- **边界**：不建 `ObjectMapper` bean、不写 `application.yml`（默认无该键 ⇒ 不生效）。
+
+### 7.3 包 6b — 导入器实现（**2 文件**，核心行为）
+
+| 文件 | 动作 | 说明 |
+|---|---|---|
+| `scds-core/src/main/java/com/dualx/core/auth/AccountSnapshotImporter.java` | **新** | `@Component` ＋ `ApplicationRunner` ＋ `@ConditionalOnProperty(prefix="scds.identity", name="import-file")`；`@EnableConfigurationProperties(IdentitySyncProperties.class)`；内部用 `TransactionTemplate` 实现**单事务全量**（沿用 `AuthService` 的事务写法，使"全或无"在被测件被**手动构造**时同样成立）。 |
+| `scds-core/src/test/java/com/dualx/core/auth/AccountSnapshotImporterIT.java` | **新** | `@SpringBootTest`（隔离库；沿用 `AdminAccountBootstrapIT` 口径——真实仓储 ＋ 手动构造被测件 ＋ 自身 UUID 清理）。 |
+
+**导入器语义**（逐条对齐 §2–§4 裁定）：
+
+1. **触发**：仅当 `scds.identity.import-file` trim 后非空；空 ⇒ **no-op**（记 INFO）。可用命令行
+   `--scds.identity.import-file=<path>` 一次性触发（一次一跑，不随常规启动重放）。
+2. **解析**：`ObjectMapper` 读文件；`schemaVersion != 1` ⇒ 拒绝。
+3. **逐条校验（A3）**：`id` 合法 UUID **且版本位 = 7**；`username` 非空且 ≤64；`displayName` ≤64（可空）；
+   `roles` 非空且 ⊆ `{ADMIN, DIRECTOR, OPERATOR, VIEWER}`；快照内 `id` / `username` **不重复**；本地
+   `t_account` 中 `id` 同但 `username` 不同、或 `username` 已被**另一个** `id` 占用 ⇒ 拒绝。
+   **任一不通过 ⇒ 整体拒绝 ＋ 逐条报告 ＋ 抛出（非零语义）**。
+4. **写入（B3，单事务）**：
+   - 不存在 ⇒ `accounts.insert(...)`（占位散列 = `passwordEncoder.encode(随机即弃明文)`）＋ `accountRoles.replaceAll(id, roles)`。
+   - 已存在且 `username` 一致 ⇒ **复用现有** `AccountRepository.update(...)`：`passwordHash` / `lastLoginAt` 传**读到的现值**
+     （⇒ 不改口令、不改最后登录），`displayName` / `enabled` 取快照；再 `replaceAll(id, roles)`。
+   - **不**删除快照外的本地行。
+5. **日志**：逐条 INFO（`username` / `id` / 角色 / 新建 or 更新），**绝不**打印口令或散列。
+6. **失败**：结构错 / 冲突 ⇒ 抛出并**整体回滚**；`ApplicationRunner` 抛异常 ⇒ 启动失败（"失败要显眼"）。
+
+**测试计划（`AccountSnapshotImporterIT`，≈9 例）**：
+
+- 新 UUID ⇒ insert：字段 / 角色到位；`password_hash` **不可登录**（`passwordEncoder.matches(任意明文, hash)` == false）。
+- 已存在同 UUID 同 `username` ⇒ 更新 `display_name` / `enabled` / `roles`，**`password_hash` 前后逐字相等**（不改口令）。
+- `id` 冲突（同 UUID 不同 `username`）⇒ 整体拒绝、库零变化。
+- `username` 被另一 `id` 占用 ⇒ 整体拒绝。
+- 快照内重复 `id` ⇒ 整体拒绝。
+- 非法 `role` / 非法 UUID / 非 v7 ⇒ 整体拒绝。
+- **原子性**：一条合法 ＋ 一条冲突 ⇒ **合法那条也不落库**（须在**无外层事务**下验证，并显式清理自建行）。
+- 空白 `import-file` ⇒ no-op。
+- 文件缺失 / JSON 非法 ⇒ 明确失败。
+- **端到端**：导入后 `AuthService.me(云 sub)` 返回正确 `User`（证明"云边同 UUID"链路；**不新增代码**）。
+
+**门禁**：`mvn -B -o clean verify`；计数按各模块 Maven `Results:` 行；预期 core **630 → 630 + N**，其余模块不变 ⇒ 无回归。
+须 `scds-local-mysql`（`127.0.0.1:13306`）在跑。
+
+**边界**：
+
+- **不改** `AuthService` / `AuthController` / 安全链 / 迁移（V1 字段已够） / `.env` / `deploy.sh`。
+- **不实现** CLOUD 形态"不生成 admin"的**部署脚本**改动（A1 的部署脚落实属部署侧，须**单独立项**）。
+- **不实现**快照**导出**端（云管侧，不在本仓）。
+- C3 的「删除标记」字段**本轮不引入**（见 F1）；`enabled` 已足以让 `me` 401。
+- 不声称云边身份闭环完成（§5）。
+
+### 7.4 决策点 F1 —— 本轮是否实现「删除标记」
+
+| 选项 | 说明 |
+|---|---|
+| **① 本轮不实现（推荐）** | 快照只带 `enabled`；云端删号在快照生成端表现为 `enabled=false`（数据口径归云管）。工具更小、语义更简单。 |
+| ② 引入 `deleted` 可选字段 | 命中即置 `enabled=false`（C3）。需在模型 / 校验 / 测试各加一处。 |
+
+---
+
+## 8. 本方案不构成授权（复述）
 
 - 本文**只是设计前置**：不改代码、不改库、不新增迁移、不改已应用 V1~V11、不改 `.env`、不生成密钥、不重置数据库、不清库删卷。
 - 上方所有决策点为**待裁定项**，推荐项**仅为建议**；须逐项裁定后方可开工。

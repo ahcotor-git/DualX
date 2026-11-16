@@ -3717,3 +3717,28 @@ C3 删号置 `enabled=false` **不**物理删除；C4 **单事务全量**；E1 �
 7. **R20 遗留**（登录密码长度约束未定义）。
 
 
+**段 92 工作包 6 前置方案（续，2026-11-16）：`03c` §7 同步工具包文件白名单与测试计划（纯文档）**——
+按用户裁定「**出同步工具包白名单（推荐）**」，在 `03c` **新增 §7「落地工作包：文件白名单与测试计划（拟议）」**
+（原「本方案不构成授权（复述）」**顺延为 §8**），并在 §0 摘要表**新增 F1**。
+
+- **拆包**（各 ≤3 文件；均**新增件、不动既有行为**）：
+  - **包 6a（3 文件）**：`scds-core/.../auth/IdentitySyncProperties.java`（新，`@ConfigurationProperties("scds.identity")`，
+    `record(String importFile)`）＋ `scds-core/.../auth/AccountSnapshot.java`（新，快照模型 record ＋ `Entry`）
+    ＋ `IdentitySyncPropertiesTest.java`（新，≈3 例）。
+  - **包 6b（2 文件）**：`scds-core/.../auth/AccountSnapshotImporter.java`（新，`@Component` ＋ `ApplicationRunner` ＋
+    `@ConditionalOnProperty(prefix="scds.identity", name="import-file")`；内部 `TransactionTemplate` **单事务全量**）
+    ＋ `AccountSnapshotImporterIT.java`（新，`@SpringBootTest` 隔离库；≈9 例含**原子性**与**端到端 `me`** 用例）。
+- **前置澄清（§7.1，取代 §3.3 的「提升共享常量」实现建议）**：占位散列改「`passwordEncoder.encode(一次性随机明文)`」
+  ⇒ **不**新建共享常量类、**不**改 `AuthService`（`DUMMY_PASSWORD_HASH` 服务的是**另一场景**：登录失败路径的常量时间陪跑）；
+  **B2 裁定内容「不可登录占位散列」不变**。
+- **新增决策点 F1（待裁定）**：本轮是否实现「删除标记」字段 —— **推荐 ① 本轮不实现**
+  （快照只带 `enabled`；云端删号由**快照生成端**表现为 `enabled=false`）。
+- **门禁**：**纯文档，未跑 `mvn`**（无代码 / 测试变更）；复用段 92 包 5 证据 **1222 / 0/0/0**（`docs/testing.md` §85）。
+- **未验项**：① 包 6a / 6b **尚未实现**（仅白名单）；② CLOUD 形态「不生成 admin」的**部署脚本**改动属部署侧，
+  **须单独立项**；③ 快照**导出**端在云管侧（**不在本仓**）。
+- **下一段（候选）**：1. **包 6a 开工**（白名单已出）；2. 包 6b；3. **工作包 6**（AUTH-HTTP 收口，`me` 现状已完整）；
+  4. **工作包 7**（`SecurityMetricsIT` ＋ 内存双密钥夹具；`ApplicationStartupIT` 四组合**包 5 已前置完成**）；
+  5. 全库行尾 renormalize（**需显式授权**）；6. C 档（真机 / GUI / 现场硬件 / T-PROD）；
+  7. R27 剩余项定型（**需产品 / 运维口径**）；8. R20 遗留（登录密码长度约束未定义）。
+
+
