@@ -1,15 +1,16 @@
 # scds-next 交接快照
 
 > 更新：2026-11-16，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 92 工作包 2b / 2c —— 设备配置 `DeviceJwtProperties` ＋ domain 端口 `DeviceTokenSigner` ＋ yml 接线**——
-> 承段 92「03b 双能力分段实施白名单（§10.1 拆 2b / 2c）」，按**无人值守模式**推进。
-> **本段性质**：**新增配置 / 端口，默认全关**——不改 `TokenSigner` 设备方法、不改迁移、不生成密钥、不注册任何 signer（设备签发实现留 3a）。
-> **2b（3 文件）**：`DeviceTokenSigner.java`（新，scds-domain 端口：`enabled` / `deviceTokenTtl` / `signDeviceToken`）＋ `DeviceJwtProperties.java`（新，`@ConfigurationProperties(prefix="scds.auth.jwt.device")`：`issuer` / `signingEnabled`（默认 false）/ `publicKey(_File)` / `privateKey(_File)` / `deviceTokenTtl`（默认 12h））＋ `DeviceJwtPropertiesTest.java`（新，8 例）。
-> **2c（2 文件）**：`application.yml`（`scds.auth.jwt.device` 段，111~122 行，`signing-enabled` 默认 false，**不写默认私钥**）＋ `JwtDecoderConfig.java`（`@EnableConfigurationProperties` 加 `DeviceJwtProperties.class`）。**各子包均在「≤3 文件」上限内，无破限例外**。
-> **设计裁定（2b 校验范围收窄）**：§10.1 原列 2b 的「公私钥不配对 / RSA 强度」「issuer·公钥与账号相同」两项**改到 3a 装配期**校验（需 `PemKeys` 参数化 ＋ 跨配置不变量）；2b 只做不依赖密钥材料的校验。理由详 testing.md §82.2 / decision-register 段 92。
-> **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1207 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 158** ＋ app 333）。1199 → 1207（**+8 恰为新增 `DeviceJwtPropertiesTest`**；其余模块计数不变）。证据见 testing.md §82。
+> 当前任务：**段 92 工作包 3a —— 设备 RSA 适配器 `DeviceRsaTokenSigner` ＋ `PemKeys` 键来源参数化**——
+> 承段 92「03b 双能力分段实施白名单（§10.2 拆 3a）」，按**无人值守模式**推进。
+> **本段性质**：**新增设备签发实现＋密钥来源参数化，默认全关**——**不删**旧 `TokenSigner.signDeviceToken`、**不改** `DeviceAuthService`（一次迁净在 3b，须同段）、不改迁移、不生成密钥。
+> **3a（3 文件）**：改 `PemKeys.java`（新增包私有 `record Source(inline, file, inlineEnv, fileEnv)`，读键拆成「按 `AuthJwtProperties`（账号，行为不变）」与「按 `Source`」两套，账号 / 设备**各读各的**）＋ 新 `DeviceRsaTokenSigner.java`（`@Component implements DeviceTokenSigner`；仅 `signingEnabled=true` 读**设备**私钥；签 `aud=scds-device` / `sub=马甲号` / `sid` / `jti`，`exp` 取设备 TTL）＋ 新 `DeviceRsaTokenSignerTest.java`（7 例）。**在「≤3 文件」上限内，无破限例外**。
+> **装配期三项校验（落地 §10.1 / §82.2 移交项）**：启用设备签发时构造期校验 ① 公私钥**配对**（模数比对）② RSA **强度** ≥2048 ③ 与账号 **issuer / 公钥均不同**（为此一并注入 `AuthJwtProperties`——跨配置不变量）；任一不满足即**启动失败关闭**。禁用时不读设备密钥、不做校验。
+> **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1214 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 165** ＋ app 333）。1207 → 1214（**+7 恰为新增 `DeviceRsaTokenSignerTest`**；core / app 不变 ⇒ 无回归）。**计数口径更正**：权威 = 各模块 Maven `Results:` 行；`surefire-reports/TEST-*.xml` 的 `<testcase>` 求和会漏计 `@Nested` 外层类较多的模块（app 实测 329 ≠ 333）。证据见 testing.md §83。
 > **口径**：每包开工**逐段授权**，提交 / 推送**逐次授权**。
-> 下一项**（候选，按推荐序）**：① **工作包 3a**（新 `DeviceRsaTokenSigner`（implements `DeviceTokenSigner`）＋ `PemKeys` 键来源参数化 ＋ `DeviceRsaTokenSignerTest`；装配期补三项校验）；② 工作包 3b（删 `TokenSigner.signDeviceToken`（及仅设备用的 `deviceTokenTtl`）＋ `RsaTokenSigner` 删实现 ＋ `DeviceAuthService` 迁 `DeviceTokenSigner` ＋ `DeviceAuthServiceIT`，**须同段一次迁净**，破限例外）；③ 全库行尾 renormalize（需显式授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑤ R27 剩余项定型（**需产品 / 运维口径**）。
+> 下一项**（候选，按推荐序）**：① **工作包 3b**（删 `TokenSigner.signDeviceToken`（及仅设备用的 `deviceTokenTtl`）＋ `RsaTokenSigner` 删实现 ＋ `DeviceAuthService` 迁 `DeviceTokenSigner` ＋ `DeviceAuthServiceIT`，可能含 `RsaTokenSignerTest` 设备用例；**须同段一次迁净以保证编译**，破限例外）；② 工作包 4（`JwtDecoderConfig` 改**门面**：按未验签 `aud` 分派账号 / 设备 decoder；扩 `SecurityJwtValidationIT` 交叉签发用例）；③ 全库行尾 renormalize（需显式授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑤ R27 剩余项定型（**需产品 / 运维口径**）。
+> 上一原子任务：**段 92 工作包 2b / 2c —— 设备配置 `DeviceJwtProperties` ＋ domain 端口 `DeviceTokenSigner` ＋ yml 接线**——
+> **2b（3 文件）**：`DeviceTokenSigner.java`（domain 端口）＋ `DeviceJwtProperties.java`（prefix `scds.auth.jwt.device`，默认 false）＋ `DeviceJwtPropertiesTest.java`（8 例）；**2c（2 文件）**：`application.yml` 设备段 ＋ `JwtDecoderConfig` 注册 `DeviceJwtProperties`。**设计裁定**：2b 校验范围收窄（「公私钥配对 / RSA 强度 / 与账号相同」三项移交 3a）。`mvn -B -o clean verify` → **BUILD SUCCESS / 1207 项 / 0/0/0**。证据见 testing.md §82。
 > 上一原子任务：**段 92 工作包 2a —— 账号键重命名 `scds.auth.jwt.*` → `scds.auth.jwt.account.*`（行为等价）**——
 > 用户裁定「一笔全改」。18 文件（12 Java ＋ 4 文档 ＋ `application.yml` ＋ `deploy.sh`），**破「≤3 文件」已显式声明例外**；`mvn -B -o clean verify` → **BUILD SUCCESS / 1199 项 / 0/0/0**（与段 91 基线同数 ⇒ 行为等价）。证据见 testing.md §81。
 > 上一原子任务：**段 92 03b 双能力分段实施白名单（为工作包 2/3/4 逐包列文件白名单与测试计划，纯文档）**——

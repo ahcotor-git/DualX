@@ -34,18 +34,38 @@ final class PemKeys {
     private PemKeys() {
     }
 
-    /** 读公钥 PEM：内联文本优先，其次文件。两者都空则由调用方给出可操作的报错。 */
-    static RSAPublicKey readPublicKey(AuthJwtProperties props) {
-        String pem = resolve(props.publicKey(), props.publicKeyFile(), "SCDS_JWT_PUBLIC_KEY",
-                "SCDS_JWT_PUBLIC_KEY_FILE");
-        return parsePublicKey(pem);
+    /**
+     * 密钥来源（设计 03b §10.2）：把「读哪一对 PEM、报错时提示哪组环境变量」抽出来，
+     * 使**账号与设备两套配置各读各的键，两套不互借**——缺设备私钥不得借账号私钥顶替（§3）。
+     *
+     * @param inline    内联 PEM 文本（优先）
+     * @param file      PEM 文件路径（其次）
+     * @param inlineEnv 内联形态缺失时用于报错的环境变量名
+     * @param fileEnv   文件形态缺失时用于报错的环境变量名
+     */
+    record Source(String inline, String file, String inlineEnv, String fileEnv) {
     }
 
-    /** 读签名私钥 PEM：内联文本优先，其次文件。 */
+    /** 按账号用途配置（{@link AuthJwtProperties}）读公钥。 */
+    static RSAPublicKey readPublicKey(AuthJwtProperties props) {
+        return readPublicKey(new Source(props.publicKey(), props.publicKeyFile(),
+                "SCDS_JWT_PUBLIC_KEY", "SCDS_JWT_PUBLIC_KEY_FILE"));
+    }
+
+    /** 按账号用途配置（{@link AuthJwtProperties}）读签名私钥。 */
     static RSAPrivateKey readPrivateKey(AuthJwtProperties props) {
-        String pem = resolve(props.privateKey(), props.privateKeyFile(), "SCDS_JWT_PRIVATE_KEY",
-                "SCDS_JWT_PRIVATE_KEY_FILE");
-        return parsePrivateKey(pem);
+        return readPrivateKey(new Source(props.privateKey(), props.privateKeyFile(),
+                "SCDS_JWT_PRIVATE_KEY", "SCDS_JWT_PRIVATE_KEY_FILE"));
+    }
+
+    /** 按键来源读公钥 PEM：内联文本优先，其次文件。两者都空则由调用方给出可操作的报错。 */
+    static RSAPublicKey readPublicKey(Source source) {
+        return parsePublicKey(resolve(source.inline(), source.file(), source.inlineEnv(), source.fileEnv()));
+    }
+
+    /** 按键来源读签名私钥 PEM：内联文本优先，其次文件。 */
+    static RSAPrivateKey readPrivateKey(Source source) {
+        return parsePrivateKey(resolve(source.inline(), source.file(), source.inlineEnv(), source.fileEnv()));
     }
 
     static RSAPublicKey parsePublicKey(String pem) {

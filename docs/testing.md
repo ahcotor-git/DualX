@@ -5456,3 +5456,76 @@ expected: {"t_account"=2L, …, "t_refresh_token"=2L}
 - `SCDS_DEVICE_JWT_*` 环境变量名为**本段新增约定**，尚未写入 `.env` / `deploy.sh`（现场启用时再配，且私钥不入库）。
 
 
+## 83. 03b §10.2 工作包 3a：设备 RSA 适配器 + 键来源参数化
+
+承段 92「03b 双能力分段实施白名单（§10.2）」。段 82 收口 2b / 2c 后，按**无人值守模式**开工 3a。
+本段**新增**设备签发实现并**参数化密钥来源**，把 §82.2 移交的三项装配期校验补上；**不删**旧
+`TokenSigner.signDeviceToken`、**不改** `DeviceAuthService`（那是一次迁净的 3b，须与之同段以保证编译）。
+
+### 83.1 落点（3 文件）
+
+- **改** `scds-api/src/main/java/com/dualx/api/security/PemKeys.java` —— 密钥读取**参数化到「键来源」**：
+  新增包私有 `record Source(String inline, String file, String inlineEnv, String fileEnv)`；原
+  `readPublicKey` / `readPrivateKey` 拆成「按 `AuthJwtProperties`（账号）」与「按 `Source`」两套，前者委托后者
+  （账号沿用 `SCDS_JWT_*` 报错提示，行为不变）。使**账号与设备两套各读各的键，两套不互借**（§3）。
+- **新增** `scds-api/src/main/java/com/dualx/api/security/DeviceRsaTokenSigner.java` —— `@Component
+  implements DeviceTokenSigner`；构造注入 `DeviceJwtProperties` **与** `AuthJwtProperties`。仅
+  `signingEnabled=true` 时读**设备**私钥/公钥并 `new RSASSASigner(...)`，否则 `jwsSigner=null` 且**不读设备私钥**
+  （禁用实例的 `device/login` 不注册 404，方法不会被调到）。`signDeviceToken` 签 `aud=scds-device`、
+  `sub=马甲号`、`claim("sid", 会话 ID)`、`jti=UuidV7`，`exp` 取设备 TTL；`iss` 取设备 issuer。
+- **新增** `scds-api/src/test/java/com/dualx/api/security/DeviceRsaTokenSignerTest.java` —— 7 例（见 §83.3）。
+
+文件合计 **3**，**在「≤3 文件」上限内**，无破限例外。
+
+### 83.2 装配期三项校验（§82.2 / §10.1 移交项落地）
+
+设备签发**启用**时，`DeviceRsaTokenSigner` 构造期补三项（任一不满足即**启动失败关闭**，§3）：
+
+1. **公私钥配对** —— 比对设备私钥与设备公钥的 RSA **模数**（模数唯一标识一对密钥，指数恒为 65537；
+   不做自签自验以免徒增启动开销）。不配对 → 抛「不是同一对」。
+2. **RSA 强度** —— 设备私钥模数 ≥ **2048** 位（§2：算法保持 RS256，RSA 至少 2048 位）。不足 → 抛「强度不足」。
+3. **与账号不同** —— 设备 `issuer` 不得等于账号 `issuer`，设备公钥**指纹**不得等于账号公钥指纹（§3
+   「两用途 issuer 与公钥必须不同」）。为此本类**一并注入 `AuthJwtProperties`**：这是**跨配置不变量**，
+   单条 `@ConfigurationProperties` 记录只能看到自己，判不出「与账号相同」。账号公钥是账号验签器的必需项
+   （`JwtDecoderConfig` 无公钥即启动失败），故读取它不引入新的失败面。
+
+**禁用（`signing-enabled=false`）时不读任何设备密钥、也不做上述校验**：整段缺席是合法配置，只验签的实例
+本来就没有设备私钥。
+
+### 83.3 门禁实测（2026-11-16，`scds-local-mysql` 13306 healthy，Java 21）
+
+聚焦：`mvn -B -o -pl scds-api -am test "-Dtest=DeviceRsaTokenSignerTest" "-Dsurefire.failIfNoSpecifiedTests=false"`
+→ **Tests run: 7, Failures: 0, Errors: 0, Skipped: 0**。
+
+全量：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS**。计数取各模块 Maven `Results:` 行（见 §83.4 口径）。
+
+| 模块 | 测试数 | 失败/错误/跳过 |
+|---|---:|---|
+| protocol | 19 | 0/0/0 |
+| solver | 18 | 0/0/0 |
+| gateway | 49 | 0/0/0 |
+| core | 630 | 0/0/0 |
+| api | **165** | 0/0/0 |
+| app | 333 | 0/0/0 |
+| 总计 | **1214** | **0/0/0** |
+
+**1207 → 1214（+7）**，增量恰为新增 `DeviceRsaTokenSignerTest`（7 例）；core / app 计数与段 82 一致 ⇒ 无回归。
+
+`DeviceRsaTokenSignerTest` 七例：① 载荷 `aud=scds-device`/`sub=42`/`sid`/`iss`/`jti` 齐全且**经生产解码器**验签通过；
+② 有效期取**设备** TTL（6h，且 ≠ 账号的 12h）；③ 禁用时**无任何设备密钥**仍装配成功、`enabled()` 假、签发抛；
+④ 公私钥错配 → 抛；⑤ RSA 1024 位 → 抛；⑥ 设备 issuer 与账号相同 → 抛；⑦ 设备公钥与账号相同 → 抛。
+
+### 83.4 口径与边界
+
+- **计数口径（本段更正）**：权威 = 各模块 Maven `Results:` 行的 `Tests run:` 之和。`surefire-reports/TEST-*.xml`
+  的 `<testcase>` 求和会**漏计**含 `@Nested` 外层类较多的模块（实测 app XML 求和 329 ≠ Maven 333；api 两者一致 165），
+  不宜作为权威口径。
+- **验签器复用**：包 4（`JwtDecoderConfig` 改「按 aud 分派双用途 decoder」门面）**未开工**，故本段测试用
+  「设备 issuer + 设备公钥」构造账号语境的 `AuthJwtProperties` 来复用**生产解码器**（`JwtDecoderConfig#jwtDecoder`），
+  不另搭 nimbus。包 4 落地后应改为经门面验签（届时补交叉签发用例）。
+- **未验项**：本段**不删**旧 `TokenSigner.signDeviceToken`、**不改** `DeviceAuthService` —— `DeviceTokenSigner`
+  端口新增后**无人注入**，`DeviceAuthService` 仍走旧路径；一次迁净在 **3b**（须同段，破「≤3 文件」例外）。
+- 设备密钥来源报错提示为 `SCDS_DEVICE_JWT_PRIVATE_KEY(_FILE)` / `SCDS_DEVICE_JWT_PUBLIC_KEY(_FILE)`；
+  **私钥不入库**、不写 `.env`，现场启用时由部署侧提供 PEM（03b §10.6 已裁定）。
+
+

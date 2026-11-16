@@ -3558,3 +3558,28 @@ R27 原判「部分成立」，逐项拆开后**只有前两项能在本机闭�
 5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
 
 
+**段 92 工作包 3a 执行（2026-11-16）：设备 RSA 适配器 `DeviceRsaTokenSigner` ＋ `PemKeys` 键来源参数化**——
+按**无人值守模式**推进。§10.2 原列 3a＝3 文件，实际 **3 文件**（改 `PemKeys.java` ＋ 新 `DeviceRsaTokenSigner.java` ＋ 新 `DeviceRsaTokenSignerTest.java`），
+**在「≤3 文件」上限内，无破限例外**。
+
+**落点**：① `PemKeys` 新增包私有 `record Source(inline, file, inlineEnv, fileEnv)`，`readPublicKey` / `readPrivateKey`
+拆成「按 `AuthJwtProperties`（账号，行为不变）」与「按 `Source`」两套，使账号 / 设备**各读各的键、两套不互借**（§3）；
+② `DeviceRsaTokenSigner`（`@Component implements DeviceTokenSigner`）仅 `signingEnabled=true` 时读**设备**私钥，
+签 `aud=scds-device` / `sub=马甲号` / `sid` / `jti`，`exp` 取设备 TTL；禁用时不读设备私钥。
+**装配期补 §10.1 移交的「三项校验」**（§82.2）：公私钥**配对**（模数比对）、RSA **强度** ≥2048、与账号 **issuer / 公钥均不同**
+（为此一并注入 `AuthJwtProperties`——跨配置不变量须同时看到两套配置）；任一不满足即**启动失败关闭**。
+
+**性质**：新增签发实现＋密钥来源参数化；**不删**旧 `TokenSigner.signDeviceToken`、**不改** `DeviceAuthService`
+（一次迁净在 3b，须同段）；`DeviceTokenSigner` 端口本段仍**无人注入**。仓库根 `mvn -B -o clean verify` →
+**BUILD SUCCESS / 1214 项 / 0/0/0**（1207 → 1214，**+7 恰为新增 `DeviceRsaTokenSignerTest`**；core 630 / app 333 不变 ⇒ 无回归）。
+**计数口径更正**：权威 = 各模块 Maven `Results:` 行的 `Tests run:` 之和；`surefire-reports/TEST-*.xml` 的 `<testcase>` 求和会漏计 `@Nested` 外层类较多的模块（app 实测 329 ≠ 333）。
+**落点 / 证据**：见 `docs/testing.md` §83。
+
+**下一段（候选）**：
+1. **工作包 3b**（删 `TokenSigner.signDeviceToken`（及仅设备用的 `deviceTokenTtl`）＋ `RsaTokenSigner` 删实现 ＋ `DeviceAuthService` 迁 `DeviceTokenSigner` ＋ `DeviceAuthServiceIT`，可能含 `RsaTokenSignerTest` 设备用例；**须同段一次迁净以保证编译**，**破限例外**）；
+2. **工作包 4**（`JwtDecoderConfig` 改**门面**：按未验签 `aud` 分派账号 / 设备 decoder；扩 `SecurityJwtValidationIT` 交叉签发用例）；
+3. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+4. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
+
+
