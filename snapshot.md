@@ -1,14 +1,22 @@
 # scds-next 交接快照
 
 > 更新：2026-11-16，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 92 工作包 3a —— 设备 RSA 适配器 `DeviceRsaTokenSigner` ＋ `PemKeys` 键来源参数化**——
-> 承段 92「03b 双能力分段实施白名单（§10.2 拆 3a）」，按**无人值守模式**推进。
-> **本段性质**：**新增设备签发实现＋密钥来源参数化，默认全关**——**不删**旧 `TokenSigner.signDeviceToken`、**不改** `DeviceAuthService`（一次迁净在 3b，须同段）、不改迁移、不生成密钥。
+> 当前任务：**段 92 工作包 3b ＋ 工作包 4（合并段）—— `TokenSigner.signDeviceToken` 一次迁净 ＋ `JwtDecoderConfig` 改按未验签 `aud` 分派的双用途门面**——
+> 承段 92「03b 双能力分段实施白名单（§10.2 拆 3b / §10.3 包 4）」，按**无人值守模式**推进。
+> **用户裁定「并入包 4 门面，一次收口（推荐）」**：实测 3b 与包 4 **互为前置、互锁**——3b 删掉 `TokenSigner.signDeviceToken` 后，设备用途签发端口只剩 `DeviceTokenSigner`，而**验签侧仍只认账号 issuer / 公钥**，设备令牌无路可验；反之先做门面也失去可用的设备验签用例。任一段单独落地都无法保持编译或门禁为绿 ⇒ **必须同段**。
+> **本段性质**：**行为变更**——设备令牌**只能**由设备信任项（`scds.auth.jwt.device.*`）验签；账号密钥签设备令牌 / 设备密钥签账号令牌（**交叉签发**）一律 401 `AUTH_TOKEN_INVALID`。
+> **落点（实测 20 文件 = 3b 笔 11 ＋ 包 4 笔 9，破「≤3 文件」已显式声明例外）**：
+> **3b 笔**：`TokenSigner`（删 `deviceTokenTtl()` / `signDeviceToken(...)`，javadoc 指向 `DeviceTokenSigner`）＋ `DeviceTokenClaims`（javadoc 交叉引用）＋ `AuthJwtProperties`（删**仅设备用途**的 `deviceTokenTtl`，record 11 → 10 参）＋ `RsaTokenSigner`（删设备实现）＋ `DeviceScope`（javadoc 实现归属）＋ `AuthJwtPropertiesTest`（删 `device-token-ttl` 断言与「`0s` 即抛」用例，**−1 用例**）＋ `DisabledCapabilityRouteFilterTest`（构造实参 11 → 10）＋ `DeviceAuthService`（依赖 `TokenSigner` → `DeviceTokenSigner`）＋ `TestCoreApplication`（补 `DeviceTokenSigner` 桩 bean）＋ `DeviceAuthServiceIT`（假件类型）＋ `application.yml`（**账号段**删 `device-token-ttl`）。
+> **包 4 笔**：`JwtDecoderConfig`（新增 `AUD_DEVICE`；`buildDecoder` → `buildAccountDecoder`；新增 `buildDeviceDecoder`；`validateRawClaims` 由 `void` 改**返回未验签 `aud`**；三个重载）＋ `JwtDecoderFacade.java`（**新**：`aud != scds-device` → 账号 decoder；`aud == scds-device` → 设备 decoder，未配则 `BadJwtException`，**刻意不回落账号信任项**）＋ `RsaTokenSignerTest` / `DeviceRsaTokenSignerTest`（改用带 `Clock` 重载；后者改走**生产门面**）＋ `ApplicationStartupSupport`（设备第二密钥对 / 独立 issuer / `scds.auth.jwt.device.*` 六项 ＋ 两项 `*-key-file` 入「必须为空」禁项）＋ `ApplicationStartupIT`（设备 signer 双分支断言）＋ `RoleWritePermissionIT` / `SecurityMetricsIT`（设备令牌改由**设备密钥 + 设备 issuer** 签出）＋ `SecurityJwtValidationIT`（按自称 issuer 选钥 ＋ **4 类交叉签发**用例）。
+> **为何不「试遍两套公钥」**：那会让账号密钥签出的设备令牌在**签名层**通过，正是 03b §3 明令禁止的**交叉签发**（两用途 issuer 与公钥必须不同）。
+> **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1217 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 164** ＋ **app 337**）。**1214 → 1217（+3）**：app 333 → 337（+4，恰为新增交叉签发用例）；api 165 → 164（−1，恰为随 `deviceTokenTtl` 删除的用例）；core 630 不变（只换假件类型 / 补桩 bean）⇒ 无回归。计数权威 = 各模块 Maven `Results:` 行。证据见 testing.md §84。
+> **环境**：门禁需 `scds-local-mysql`（127.0.0.1:13306，`mysql:8.4`）在跑。本窗再次复现：Docker Desktop 需**管理员**启动（`com.docker.service` 非提权启动被拒、`Docker Desktop.exe` 随即退出），引擎就绪后容器为 `Exited (255)`，须 `docker start scds-local-mysql` 再等 `healthy`。
+> **口径**：每包开工**逐段授权**，提交 / 推送**逐次授权**。
+> 下一项**（候选，按推荐序）**：① **工作包 5 剩余项**（`DisabledCapabilityRouteFilter` 单开关匹配表 → 按实际关闭能力分别构建 ＋ `SecurityConfig` 白名单条件化 ＋ `DeviceAuthController` 的 `@ConditionalOnProperty` 前缀由账号开关改设备开关）；② **工作包 6 前置方案**（`me` 身份策略：相同 UUID 约定 / 初始化同步工具 / 陈旧容忍，**须先出独立方案**）；③ 工作包 7（`ApplicationStartupIT` 扩四组合；本段已部分前置 `ApplicationStartupSupport` 的设备第二密钥对 / issuer / 开关）；④ 全库行尾 renormalize（需显式授权）；⑤ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑥ R27 剩余项定型（**需产品 / 运维口径**）。
+> 上一原子任务：**段 92 工作包 3a —— 设备 RSA 适配器 `DeviceRsaTokenSigner` ＋ `PemKeys` 键来源参数化**——
 > **3a（3 文件）**：改 `PemKeys.java`（新增包私有 `record Source(inline, file, inlineEnv, fileEnv)`，读键拆成「按 `AuthJwtProperties`（账号，行为不变）」与「按 `Source`」两套，账号 / 设备**各读各的**）＋ 新 `DeviceRsaTokenSigner.java`（`@Component implements DeviceTokenSigner`；仅 `signingEnabled=true` 读**设备**私钥；签 `aud=scds-device` / `sub=马甲号` / `sid` / `jti`，`exp` 取设备 TTL）＋ 新 `DeviceRsaTokenSignerTest.java`（7 例）。**在「≤3 文件」上限内，无破限例外**。
 > **装配期三项校验（落地 §10.1 / §82.2 移交项）**：启用设备签发时构造期校验 ① 公私钥**配对**（模数比对）② RSA **强度** ≥2048 ③ 与账号 **issuer / 公钥均不同**（为此一并注入 `AuthJwtProperties`——跨配置不变量）；任一不满足即**启动失败关闭**。禁用时不读设备密钥、不做校验。
 > **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1214 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 165** ＋ app 333）。1207 → 1214（**+7 恰为新增 `DeviceRsaTokenSignerTest`**；core / app 不变 ⇒ 无回归）。**计数口径更正**：权威 = 各模块 Maven `Results:` 行；`surefire-reports/TEST-*.xml` 的 `<testcase>` 求和会漏计 `@Nested` 外层类较多的模块（app 实测 329 ≠ 333）。证据见 testing.md §83。
-> **口径**：每包开工**逐段授权**，提交 / 推送**逐次授权**。
-> 下一项**（候选，按推荐序）**：① **工作包 3b**（删 `TokenSigner.signDeviceToken`（及仅设备用的 `deviceTokenTtl`）＋ `RsaTokenSigner` 删实现 ＋ `DeviceAuthService` 迁 `DeviceTokenSigner` ＋ `DeviceAuthServiceIT`，可能含 `RsaTokenSignerTest` 设备用例；**须同段一次迁净以保证编译**，破限例外）；② 工作包 4（`JwtDecoderConfig` 改**门面**：按未验签 `aud` 分派账号 / 设备 decoder；扩 `SecurityJwtValidationIT` 交叉签发用例）；③ 全库行尾 renormalize（需显式授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑤ R27 剩余项定型（**需产品 / 运维口径**）。
 > 上一原子任务：**段 92 工作包 2b / 2c —— 设备配置 `DeviceJwtProperties` ＋ domain 端口 `DeviceTokenSigner` ＋ yml 接线**——
 > **2b（3 文件）**：`DeviceTokenSigner.java`（domain 端口）＋ `DeviceJwtProperties.java`（prefix `scds.auth.jwt.device`，默认 false）＋ `DeviceJwtPropertiesTest.java`（8 例）；**2c（2 文件）**：`application.yml` 设备段 ＋ `JwtDecoderConfig` 注册 `DeviceJwtProperties`。**设计裁定**：2b 校验范围收窄（「公私钥配对 / RSA 强度 / 与账号相同」三项移交 3a）。`mvn -B -o clean verify` → **BUILD SUCCESS / 1207 项 / 0/0/0**。证据见 testing.md §82。
 > 上一原子任务：**段 92 工作包 2a —— 账号键重命名 `scds.auth.jwt.*` → `scds.auth.jwt.account.*`（行为等价）**——

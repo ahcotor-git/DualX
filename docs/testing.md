@@ -5529,3 +5529,109 @@ expected: {"t_account"=2L, …, "t_refresh_token"=2L}
   **私钥不入库**、不写 `.env`，现场启用时由部署侧提供 PEM（03b §10.6 已裁定）。
 
 
+## 84. 03b §10.2 工作包 3b ＋ §10.3 工作包 4（合并段）：`signDeviceToken` 一次迁净 ＋ 按未验签 `aud` 分派的双用途 decoder 门面
+
+承段 92「03b 双能力分段实施白名单（§10.2 拆 3b / §10.3 包 4）」。段 83 收口 3a 后，按**无人值守模式**推进。
+**用户裁定「并入包 4 门面，一次收口（推荐）」**——实测发现 **3b 与包 4 互为前置、互锁**：3b 删除
+`TokenSigner.signDeviceToken` 后，`DeviceTokenSigner` 成为设备用途的**唯一**签发端口，而**验签侧仍只认账号
+issuer / 公钥**，设备令牌无路可验；反过来先做包 4 门面也会失去可用的设备验签用例。任一段单独落地都无法
+保持编译或门禁为绿，故**必须同段**。
+
+### 84.1 落点（实测 20 文件：11 ＋ 9；**破「每原子任务 ≤3 文件」上限，已显式声明例外**）
+
+**3b 笔（11 文件）—— 设备签发的唯一消费方一次迁净到 `DeviceTokenSigner`**
+
+- `scds-domain/src/main/java/com/dualx/core/port/TokenSigner.java` —— 删 `deviceTokenTtl()` 与
+  `signDeviceToken(DeviceTokenClaims)`；类 javadoc 注明设备用途**刻意不在此端口**（独立 issuer / 密钥 / 开关）。
+- `scds-domain/src/main/java/com/dualx/core/port/DeviceTokenClaims.java` —— javadoc 交叉引用改指 `DeviceTokenSigner`。
+- `scds-api/src/main/java/com/dualx/api/security/AuthJwtProperties.java` —— 删**仅设备用途**的
+  `deviceTokenTtl`（组件 / 默认 `12h` / 正数校验 / 访问器一并删，record 由 11 参降为 10 参）。
+- `scds-api/src/main/java/com/dualx/api/security/RsaTokenSigner.java` —— 删 `deviceTokenTtl()` 实现与
+  `signDeviceToken(...)` 实现（账号 access / refresh 签发**不变**）。
+- `scds-api/src/main/java/com/dualx/api/security/DeviceScope.java` —— javadoc 里的实现归属改指 `DeviceRsaTokenSigner`。
+- `scds-api/src/test/java/com/dualx/api/security/AuthJwtPropertiesTest.java` —— 删 `device-token-ttl` 相关
+  断言与「`0s` 即抛」用例（**−1 用例**）。
+- `scds-api/src/test/java/com/dualx/api/security/DisabledCapabilityRouteFilterTest.java` —— 属性构造实参 11 → 10。
+- `scds-core/src/main/java/com/dualx/core/auth/DeviceAuthService.java` —— 依赖由 `TokenSigner` 改 `DeviceTokenSigner`。
+- `scds-core/src/test/java/com/dualx/core/TestCoreApplication.java` —— 补 `DeviceTokenSigner` 桩 bean（本测试上下文
+  没有 `scds-api` 那套装配，而 `DeviceAuthService` 对它**强依赖**）。
+- `scds-core/src/test/java/com/dualx/core/auth/DeviceAuthServiceIT.java` —— 假件类型改 `DeviceTokenSigner`。
+- `scds-app/src/main/resources/application.yml` —— **账号段**删 `device-token-ttl`（余两档），并把
+  `signing-enabled` 注释收敛为「只讲账号签发」；设备段本就在 `scds.auth.jwt.device.*`（段 82 已接线）。
+
+**包 4 笔（9 文件）—— `JwtDecoderConfig` 由单 decoder 变双用途门面**
+
+- `scds-api/src/main/java/com/dualx/api/security/JwtDecoderConfig.java` —— 新增常量 `AUD_DEVICE = "scds-device"`；
+  `KNOWN_AUDIENCES` 纳入设备用途；原 `buildDecoder` 更名 `buildAccountDecoder`；新增
+  `buildDeviceDecoder(DeviceJwtProperties, Clock)`；`validateRawClaims` 由 `void` 改**返回 `String`（未验签 `aud`）**；
+  三个 `jwtDecoder(...)` 重载分别服务「生产 bean」「单用途（测试）」「双用途门面」。
+- `scds-api/src/main/java/com/dualx/api/security/JwtDecoderFacade.java`（**新**）—— 门面本体：先取未验签 `aud`，
+  `aud != scds-device` → **账号** decoder；`aud == scds-device` → **设备** decoder（未配设备信任项则
+  `BadJwtException`，**刻意不回落账号信任项**）。
+- `scds-api/src/test/java/com/dualx/api/security/RsaTokenSignerTest.java`、`DeviceRsaTokenSignerTest.java` —— 改用
+  带 `Clock` 的重载；后者由「借账号语境复用生产解码器」改为**走生产双用途门面**（§83.4 的交接项落地）。
+- `scds-app/src/test/java/com/dualx/ApplicationStartupSupport.java` —— 补**设备第二密钥对**、独立设备 issuer、
+  `scds.auth.jwt.device.*` 六项设置，并把两项 `*-key-file` 加入「必须为空」禁项集合。
+- `scds-app/src/test/java/com/dualx/ApplicationStartupIT.java` —— `signing=true` 断言设备签发可经 decoder 自洽
+  （`sid` 回读）；`signing=false` 断言设备 signer 亦 `enabled()==false` 且签发抛。
+- `scds-app/src/test/java/com/dualx/RoleWritePermissionIT.java`、`security/SecurityMetricsIT.java` —— 设备令牌
+  改由**设备密钥 + 设备 issuer** 签出（此前借账号密钥，门面落地后会 401），三条「越权 → 403」语义不变。
+- `scds-app/src/test/java/com/dualx/api/security/SecurityJwtValidationIT.java` —— 按**自称 issuer 选钥**；
+  新增 **4 类交叉签发**动态用例（见 §84.2）。
+
+### 84.2 门面口径（03b §10.3 落地）
+
+**为什么「按未验签 `aud` 分派」而不是「试遍两套公钥」**：试遍会让**账号密钥签出的设备令牌在签名层通过**
+——那正是 §3 明令禁止的**交叉签发**（两用途 issuer 与公钥必须不同）。按用途各信任一套、且**只信一套**，
+错签必然落成 401 `AUTH_TOKEN_INVALID`。
+
+| 自称 `aud` | 分派到 | 强制项 |
+|---|---|---|
+| `scds-edge` / `scds-refresh` | 账号 decoder | 账号 issuer（精确）、固定 RS256、账号公钥 |
+| `scds-device` | 设备 decoder | 设备 issuer（精确）、固定 RS256、设备公钥 |
+| 其他 / 缺席 | 账号 decoder ⇒ 401 | 同上 |
+
+其它语义**不变**：纯过期 → `AUTH_TOKEN_EXPIRED`；错签且过期 → `AUTH_TOKEN_INVALID`；60 秒时钟偏差照旧。
+`validateRawClaims` 的返回值**只用于分流**，javadoc 已注明「调用方不得把它当作可信事实」。
+
+`SecurityJwtValidationIT` 新增 4 类交叉签发用例：① 账号密钥签设备令牌；② 设备令牌**伪造账号 issuer**；
+③ 设备密钥签 `scds-edge`；④ 设备密钥签 `scds-refresh`——四条均断言 **401 `AUTH_TOKEN_INVALID`**。
+
+### 84.3 门禁实测（2026-11-16，`scds-local-mysql` 13306 healthy，Java 21）
+
+聚焦（不依赖 DB 的安全 IT）：
+`mvn -B -o -pl scds-app -am test "-Dtest=RoleWritePermissionIT,SecurityJwtValidationIT,SecurityMetricsIT,SecurityMetricsReadOnlyIT" "-Dsurefire.failIfNoSpecifiedTests=false"`
+→ **Tests run: 218, Failures: 0, Errors: 0, Skipped: 0**。`scds-api` 聚焦 → **37 / 0/0/0**。
+
+全量：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS**。计数取各模块 Maven `Results:` 行（§83.4 口径）。
+
+| 模块 | 测试数 | 失败/错误/跳过 |
+|---|---:|---|
+| protocol | 19 | 0/0/0 |
+| solver | 18 | 0/0/0 |
+| gateway | 49 | 0/0/0 |
+| core | 630 | 0/0/0 |
+| api | **164** | 0/0/0 |
+| app | **337** | 0/0/0 |
+| 总计 | **1217** | **0/0/0** |
+
+**1214 → 1217（+3）**，逐项对账：**app 333 → 337（+4）**恰为 `SecurityJwtValidationIT` 新增的 4 类交叉签发用例；
+**api 165 → 164（−1）**恰为随 `AuthJwtProperties.deviceTokenTtl` 一并删除的「`0s` 即抛」用例。
+其余模块计数**逐位一致** ⇒ 无回归。`core` 计数不变，说明 `DeviceAuthServiceIT` 只换假件类型、`TestCoreApplication`
+只补桩 bean，无新增 / 删减用例。
+
+### 84.4 口径与边界
+
+- **计数口径**：权威 = 各模块 Maven `Results:` 行的 `Tests run:` 之和（§83.4）。
+- **本段收敛了 §83.4 的两项交接**：① 验签不再借「设备 issuer + 设备公钥」伪装账号语境，改走**生产门面**；
+  ② `TokenSigner` 设备方法已**一次迁净**，`DeviceTokenSigner` 自此是设备用途唯一签发端口。
+- **环境**：门禁需 `scds-local-mysql`（127.0.0.1:13306，`mysql:8.4`）在跑。本窗再次复现：Docker Desktop 需
+  **管理员**启动（`com.docker.service` 非提权启动被拒、`Docker Desktop.exe` 随即退出），引擎就绪后容器为
+  `Exited (255)`，须 `docker start scds-local-mysql` 再等 `healthy`。
+- **未验项**：① 包 5 剩余项（`DisabledCapabilityRouteFilter` 单开关匹配表 → 按实际关闭能力分别构建、
+  `SecurityConfig` 白名单条件化、`DeviceAuthController` 的 `@ConditionalOnProperty` 前缀由账号开关改设备开关）
+  **未开工**——本仓仍为**单一 `signing-enabled`**，03b §5 矩阵「账号开、设备关」列仍不可达；
+  ② 端到端演练未做（只验 HTTP 状态 / 错误码 / 签发-验签往返，未做「设备端据 404 换 `baseUrl`」的真实链路）；
+  ③ `me` 身份策略（03b §7）与包 6 前置（相同 UUID 约定 / 初始化同步工具 / 陈旧容忍）未定。
+
+

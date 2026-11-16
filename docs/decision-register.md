@@ -3583,3 +3583,48 @@ R27 原判「部分成立」，逐项拆开后**只有前两项能在本机闭�
 5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
 
 
+**段 92 工作包 3b ＋ 包 4 执行（2026-11-16，合并段）：`TokenSigner.signDeviceToken` 一次迁净 ＋ `JwtDecoderConfig` 改按未验签 `aud` 分派的双用途门面**——
+按**无人值守模式**推进。**用户裁定「并入包 4 门面，一次收口（推荐）」**，取代 §10.2 / §10.3 分别开工的原计划。
+
+**裁定依据（互锁，实测得出）**：3b 与包 4 **互为前置**——3b 删掉 `TokenSigner.signDeviceToken` 后，设备用途的
+签发端口只剩 `DeviceTokenSigner`，而**验签侧仍只认账号 issuer / 公钥**，设备令牌**无路可验**；反之先做包 4 门面，
+也失去可用的设备验签用例。任一段单独落地都无法保持编译或门禁为绿 ⇒ **必须同段收口**。
+
+**落点（实测 20 文件 = 3b 笔 11 ＋ 包 4 笔 9；破「每原子任务 ≤3 文件」上限已显式声明例外）**：
+- **3b 笔（11）**：`TokenSigner`（删 `deviceTokenTtl()` / `signDeviceToken(...)`，javadoc 指向 `DeviceTokenSigner`）、
+  `DeviceTokenClaims`（javadoc 交叉引用）、`AuthJwtProperties`（删**仅设备用途**的 `deviceTokenTtl`，record 11 →
+  10 参）、`RsaTokenSigner`（删设备实现）、`DeviceScope`（javadoc 实现归属）、`AuthJwtPropertiesTest`（删
+  `device-token-ttl` 断言与「`0s` 即抛」用例，**−1 用例**）、`DisabledCapabilityRouteFilterTest`（构造实参 11 → 10）、
+  `DeviceAuthService`（依赖 `TokenSigner` → `DeviceTokenSigner`）、`TestCoreApplication`（补 `DeviceTokenSigner` 桩 bean）、
+  `DeviceAuthServiceIT`（假件类型）、`application.yml`（**账号段**删 `device-token-ttl`，注释收敛为只讲账号签发）。
+- **包 4 笔（9）**：`JwtDecoderConfig`（新增 `AUD_DEVICE`；`buildDecoder` → `buildAccountDecoder`；新增
+  `buildDeviceDecoder`；`validateRawClaims` 由 `void` 改**返回未验签 `aud`**；三个重载）、`JwtDecoderFacade`（**新**）、
+  `RsaTokenSignerTest` / `DeviceRsaTokenSignerTest`（改用带 `Clock` 重载；后者改走**生产门面**）、
+  `ApplicationStartupSupport`（设备第二密钥对 / 独立 issuer / `scds.auth.jwt.device.*` 六项 ＋ 两项 `*-key-file`
+  入「必须为空」禁项）、`ApplicationStartupIT`（设备 signer 双分支断言）、`RoleWritePermissionIT` / `SecurityMetricsIT`
+  （设备令牌改由**设备密钥 + 设备 issuer** 签出）、`SecurityJwtValidationIT`（按自称 issuer 选钥 ＋ **4 类交叉签发**）。
+
+**门面口径（§10.3 落地）**：先取**未验签** `aud` 分流——`scds-edge` / `scds-refresh` → 账号 decoder；
+`scds-device` → 设备 decoder（未配设备信任项则 `BadJwtException`，**刻意不回落账号信任项**）；其他 / 缺席 → 账号
+decoder ⇒ 401。**不做「试遍两套公钥」**：那会让账号密钥签出的设备令牌在签名层通过，正是 §3 明令禁止的
+**交叉签发**。其余语义不变（纯过期 `EXPIRED` / 错签且过期 `INVALID` / 60 秒时钟偏差）。
+
+**性质**：行为变更（设备令牌**只能**由设备信任项验签；交叉签发 401）。仓库根 `mvn -B -o clean verify` →
+**BUILD SUCCESS / 1217 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 164** ＋ **app 337**）。
+**1214 → 1217（+3）** 逐项对账：app 333 → 337（+4，恰为新增交叉签发用例）；api 165 → 164（−1，恰为随
+`deviceTokenTtl` 删除的用例）；core 630 不变（只换假件类型 / 补桩 bean）。**落点 / 证据**：见 `docs/testing.md` §84。
+
+**未验项**：① **包 5 剩余项未开工**——`DisabledCapabilityRouteFilter` 单开关匹配表 → 按实际关闭能力分别构建、
+`SecurityConfig` 白名单条件化、`DeviceAuthController` 的 `@ConditionalOnProperty` 前缀由**账号开关改设备开关**
+（依赖包 2 的独立开关）；本仓仍为**单一 `signing-enabled`**，03b §5 矩阵「账号开、设备关」列仍**不可达**；
+② 端到端演练未做；③ `me` 身份策略（§7）与包 6 前置（相同 UUID 约定 / 初始化同步工具 / 陈旧容忍）未定。
+
+**下一段（候选）**：
+1. **工作包 5 剩余项**（`DisabledCapabilityRouteFilter` 匹配表按实际关闭能力分别构建 ＋ `SecurityConfig` 白名单条件化 ＋ `DeviceAuthController` 开关前缀改设备开关）；
+2. **工作包 6 前置方案**（`me` 身份策略：相同 UUID 约定 / 初始化同步工具 / 陈旧容忍，**须先出独立方案**）；
+3. **工作包 7**（`ApplicationStartupIT` 扩四组合 ＋ `SecurityMetricsIT` ＋ 内存双密钥夹具——本段已部分前置 `ApplicationStartupSupport` 的设备第二密钥对 / issuer / 开关）；
+4. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+5. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+6. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
+
+
