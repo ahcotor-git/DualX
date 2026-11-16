@@ -3628,3 +3628,46 @@ decoder ⇒ 401。**不做「试遍两套公钥」**：那会让账号密钥签�
 6. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
 
 
+**段 92 工作包 5 剩余项执行（2026-11-16）：能力分表 404 出口 ＋ `SecurityConfig` 白名单条件化 ＋ `DeviceAuthController` 归设备开关**——
+承段 84「未验项 ①」（03b §10.4）。用户在**无人值守模式**下经 AskUserQuestion 裁定「**5a 同上，但 `SecurityConfig`
+也条件化（三件一起做）**」，取代 §10.4 原拟「文件数 4 ⇒ 拆两小段」。**本段属行为变更 ＋ 口径变更**。
+
+**裁定与原委（旧裁定为何作废）**：段 90 曾裁定「`SecurityConfig` **不读**能力开关、三条匿名换取令牌入口
+**无条件** `permitAll`」，理由是「收窄放行会让匿名登录先撞末条兜底 `anyRequest().hasAuthority(AUD_EDGE)` 得 401」。
+但 03b §5 第 136 行要求「**开启的** `login`/`refresh`/`device-login` 才进入对应免鉴权白名单，`logout` 始终要求账号令牌」。
+**本段取 §5 第 136 行，段 90 旧口径作废**——前提已变：404 出口 `DisabledCapabilityRouteFilter` 排在安全链
+（order = -100）**之前**（段 91 落地），能力关闭的路径先被它短路成 `ROUTE_NOT_FOUND`，故收窄白名单**不会**
+把缺失路由的 404 退化成 401。**耦合条件**：若日后移除该过滤器，须恢复无条件放行，否则匿名登录会退回 401。
+
+**落点（实测 7 文件 ＝ 3 主 ＋ 4 测试/支撑；破「每原子任务 ≤3 文件」上限已显式声明例外）**：
+- **主（3）**：`DisabledCapabilityRouteFilter`（单集合拆为**两张能力表**——账号 `{login,refresh,logout}` / 设备 `{device/login}`；
+  构造注入 `AuthJwtProperties` ＋ `DeviceJwtProperties`；账号用 `Boolean.FALSE.equals`、设备「非 `true` 即关闭」）、
+  `DeviceAuthController`（`@ConditionalOnProperty` 前缀由账号开关改 **`scds.auth.jwt.device`** ＋ `matchIfMissing=false`
+  ⇒ 账号开 / 设备关时 **404 而非 500**，03b §5 第 137 行）、`SecurityConfig`（构造注入双属性；三条无条件 `permitAll`
+  改按能力构建，`logout` 从不入白名单；类 javadoc 记明口径变更与耦合条件）。
+- **测试 / 支撑（4）**：`DisabledCapabilityRouteFilterTest`（重写 **14 例**，四组合交叉）、`MvcProblemIT`（补
+  `device.signing-enabled=true`）、`ApplicationStartupSupport`（新增 `environment(accountSigning, deviceSigning, key)` 重载）、
+  `ApplicationStartupIT`（`@CsvSource` 四组合，账号 / 设备断言拆分）。
+
+**门禁**：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS / 1222 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋
+core 630 ＋ **api 167** ＋ **app 339**）。**1217 → 1222（+5）**：api 164 → 167（+3，`DisabledCapabilityRouteFilterTest`
+11 → 14）；app 337 → 339（+2，`ApplicationStartupIT` 37 → 39，2 组合扩 4 组合）。证据见 `docs/testing.md` §85。
+
+**改约（文档笔，随本段）**：`docs/design/03-auth.md` §4.4（白名单清单改条件化 ＋ 两条补充约定重写）、
+`docs/design/03b-token-capabilities.md` §5「实现进展」重写 ＋ §10.4 标注完成。
+
+**连带结论**：段 84「未验项 ①」所记「本仓仍为**单一 `signing-enabled`**、03b §5 矩阵『账号开、设备关』列
+**不可达**」**自本段起不再成立**——两个开关**各自独立且均已落地**，该列**可达**。
+
+**未验项**：① 端到端演练未做（只验 HTTP 状态 / 错误码 / 注册数 / 签发-验签往返，未做「设备端据 404 换 `baseUrl`」
+的真实链路）；② `me` 身份策略（§7）与包 6 前置（相同 UUID 约定 / 初始化同步工具 / 陈旧容忍）未定。
+
+**下一段（候选）**：
+1. **工作包 6 前置方案**（`me` 身份策略：相同 UUID 约定 / 初始化同步工具 / 陈旧容忍，**须先出独立方案**）；
+2. **工作包 7**（`SecurityMetricsIT` ＋ 内存双密钥夹具；`ApplicationStartupIT` 四组合**本段已前置完成**）；
+3. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+4. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）；
+6. **R20 遗留**（登录密码长度约束未定义）。
+
+

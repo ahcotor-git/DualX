@@ -209,16 +209,16 @@ public interface TokenSigner {
 ### 4.4 免鉴权白名单（默认拒绝）
 
 ```
-permitAll：
-  POST  /api/v1/auth/login          signing-enabled=false 时 controller 不注册 → 404
+permitAll（段 92 工作包 5 起**按能力条件化**）：
+  POST  /api/v1/auth/login          account.signing-enabled=true 时放行；关闭时不放行且 controller 不注册 → 404
   POST  /api/v1/auth/refresh        同上
-  POST  /api/v1/auth/device/login   signing-enabled=false 时 controller 不注册 → 404
+  POST  /api/v1/auth/device/login   device.signing-enabled=true 时放行；关闭时不放行且 controller 不注册 → 404
   GET   /api/v1/files               受保护文件的取文件路由；授权凭据是查询参数里的短时效签名，不是 Bearer
   GET   /actuator/health            探活
   GET   /error                      Boot 内部错误转发
 
 authenticated：
-  anyRequest()                       其余一切，含 /ws/v1/** 与 /actuator/info|metrics
+  anyRequest()                       其余一切，含 /ws/v1/**、/api/v1/auth/logout 与 /actuator/info|metrics
 ```
 
 补充约定：
@@ -235,23 +235,27 @@ authenticated：
 - **白名单是"只增不改"清单**：任何新增 `permitAll` 必须回到本文档登记一行。理由——鉴权漏洞几乎从不是"写错了判断"，而是"某次调试顺手放行了一个端点，然后再也没人删"。
 - **服务端授权规则同属"只增不改"**：`SecurityConfig` 里每条按域声明的角色规则都必须在 §4.5.1 的矩阵里出现，
   并与 `RolePermissions` 同源。漏写一组**不会报错**，只会静默退化成"任意账号都能写"，这类缺口没有测试之外的发现途径。
-- **三个「匿名换取令牌」的入口不随能力开关收窄放行**：`login` / `refresh` / `device/login`
-  在 `signing-enabled=false` 时 controller 整类不注册，此时它们靠「路由缺席」给出 404。
-  但 404 只有请求**抵达 dispatcher** 才看得见——若把这三条 `permitAll` 也随能力收回，匿名客户端
-  会先撞上末条兜底的 `anyRequest().hasAuthority(AUD_EDGE)`，拿到 401「令牌不成立」这个与本端点
-  语义无关的信号（旧记录见 testing.md RT-DISABLED）。段 90 已按此纠正 R05/R06：
-  **免鉴权清单只回答「哪些路径免鉴权」，不回答「哪些端点存在」**，后者交给条件注册。
-- **能力关闭的精确路径由安全层固定 404 出口兜底**（段 91）：`DisabledCapabilityRouteFilter`
-  排在 Bearer 验证**之前**，对 `signing-enabled=false` 时缺席的精确 operation
-  （`POST /api/v1/auth/{login,refresh,logout,device/login}`）直接写 `ROUTE_NOT_FOUND`（404），
-  于是**无令牌 / 合法令牌 / 无效令牌**三种请求得到同一个 404。理由是 `permitAll` 只作用于更靠后的
-  `AuthorizationFilter`，拦不住 `BearerTokenAuthenticationFilter` 验签失败写出的 401。
-  该过滤器只在精确的「方法 + 路径」上生效（其余路径、以及这些路径上的其他方法都不受影响），
+- **三个「匿名换取令牌」入口的放行随能力开关收窄**（段 92 工作包 5 起，**口径变更**）：
+  `login` / `refresh` 仅在 `scds.auth.jwt.account.signing-enabled=true` 时 `permitAll`，
+  `device/login` 仅在 `scds.auth.jwt.device.signing-enabled=true` 时 `permitAll`；
+  `logout` **从不**进入白名单（始终要求账号令牌）。段 90 的旧口径「三条无条件 `permitAll`、
+  `SecurityConfig` 不读能力开关」**就此作废**。
+  收窄**不会**把缺失路由的 404 退回 401：404 出口（见下一条）排在安全链**之前**，
+  能力关闭时请求先被短路，根本到不了末条兜底的 `anyRequest().hasAuthority(AUD_EDGE)`
+  （旧记录见 testing.md RT-DISABLED）。原意保留：**免鉴权清单只回答「哪些路径免鉴权」，
+  不回答「哪些端点存在」**，后者交给条件注册。
+- **能力关闭的精确路径由安全层固定 404 出口兜底**（段 91；段 92 起**按实际关闭的能力分表**）：
+  `DisabledCapabilityRouteFilter` 排在 Bearer 验证**之前**，**账号**关闭时对
+  `POST /api/v1/auth/{login,refresh,logout}`、**设备**关闭时对 `POST /api/v1/auth/device/login`
+  直接写 `ROUTE_NOT_FOUND`（404），于是**无令牌 / 合法令牌 / 无效令牌**三种请求得到同一个 404。
+  理由是 `permitAll` 只作用于更靠后的 `AuthorizationFilter`，拦不住 `BearerTokenAuthenticationFilter`
+  验签失败写出的 401。该过滤器只在精确的「方法 + 路径」上生效（其余路径、以及这些路径上的其他方法都不受影响），
   也不注册占位 controller、不放行整个 `/api/v1/auth/**`。
   见 [DisabledCapabilityRouteFilter.java](../../scds-api/src/main/java/com/dualx/api/security/DisabledCapabilityRouteFilter.java)。
-- D02 拟议的**账号与设备独立白名单**仍未实现：本仓库把账号签发与设备登录合并为**同一个**
-  `scds.auth.jwt.account.signing-enabled`（review R06 段 90 裁定：两者都必需私钥）。因此 03b §5 矩阵
-  里「两列独立开关」这一半**不是运行结果**，不得据其宣称可只关其一。
+- D02 拟议的**账号与设备独立白名单**已落地（段 92 工作包 5）：`scds.auth.jwt.account.signing-enabled`
+  与 `scds.auth.jwt.device.signing-enabled` **各自独立**，白名单与 404 出口均按两者**分别**构建；
+  `DeviceAuthController` 归设备开关（`matchIfMissing=false`），故「账号开 / 设备关」时设备端点 404 而非 500。
+  （段 90 曾把两者合并为同一开关，本段取消该合并；03b §5 矩阵「账号开、设备关」列自此**可达**。）
 
 ### 4.5 角色 → 权限点
 

@@ -136,21 +136,31 @@ scds:
 开启的login/refresh/device-login才进入对应免鉴权白名单，logout始终要求账号令牌。
 不得把注册却因配置错误抛IllegalStateException的500当成能力关闭响应。
 
-**实现进展（2026-11-14，段 91）**：与本仓库实际落地形态对照——
+**实现进展（2026-11-16，段 92 工作包 5 —— 取代段 91 旧口径）**：与本仓库实际落地形态对照——
 
-- **「安全层固定 404 出口」已落地**：`DisabledCapabilityRouteFilter`（`scds-api`）排在 Bearer
-  验证**之前**，对能力关闭时缺席的精确 operation 写固定 `ROUTE_NOT_FOUND`，因此**无令牌 /
-  合法令牌 / 无效令牌**三种请求得到同一个 404；其他受保护路径仍走正常 401/403。
-  控制器仍是条件注册（不注册占位 controller），也未放行整个 `/api/v1/auth/**`。
-  本地证据：`DisabledCapabilityRouteFilterTest`（过滤器判定）＋ `ApplicationStartupIT`
-  （真 Tomcat + 真安全链，`signing=false` 带无效 Bearer 得 404 / `signing=true` 得 401）；见 testing.md §80。
-- **「账号 / 设备两个独立开关」未落地**：本仓库把两者合并为**同一个**
-  `scds.auth.jwt.account.signing-enabled`（账号签发与设备登录都必需私钥；review R06 段 90 裁定）。
-  因此上表「云端账号签发实例：账号开、设备关」这一列在本仓库**不可达**——只能整开或整关。
-  段 91 的精确匹配表据此构建为「关闭时缺席的四个路径」；若将来拆成两个开关，
-  应改为**按实际关闭的能力分别**构建匹配表（过滤器已就此留注）。
+- **「账号 / 设备两个独立开关」已落地**：`scds.auth.jwt.account.signing-enabled`（默认 `true`）与
+  `scds.auth.jwt.device.signing-enabled`（默认 `false`）**各自独立**；账号侧由 `AccountAuthController` /
+  `RsaTokenSigner`、设备侧由 `DeviceAuthController` / `DeviceRsaTokenSigner` 分别控制
+  （§10.1 / §10.2 / §10.3 落地）。段 90 曾把两者合并为**同一个**开关，本段起**取消该合并**，
+  上表「云端账号签发实例：账号开、设备关」这一列因此在本仓库**可达**了。
+- **「安全层固定 404 出口」改为按能力分表**：`DisabledCapabilityRouteFilter`（`scds-api`）由
+  「单开关 / 单一匹配表」改为**两张表**——**账号**关闭时命中 `{login, refresh, logout}`，
+  **设备**关闭时命中 `{device/login}`；仍排在 Bearer 验证**之前**，对缺席的精确 operation 写固定
+  `ROUTE_NOT_FOUND`，因此**无令牌 / 合法令牌 / 无效令牌**三种请求得到同一个 404；其他受保护路径
+  仍走正常 401/403。控制器仍是条件注册（不注册占位 controller），也未放行整个 `/api/v1/auth/**`。
+- **免鉴权白名单已条件化**（**口径变更**）：`SecurityConfig` 按能力构建 `permitAll` 清单——
+  **开启的** `login` / `refresh` / `device/login` 才进白名单，`logout` **始终**要求账号令牌（本节第 136 行）。
+  段 90 的旧口径「`SecurityConfig` 不读能力开关、三条无条件放行」**就此作废**，改约同步于
+  `docs/design/03-auth.md` §4.4。**这与第 134 行「连无效 Bearer 也保持 404」不冲突**：404 出口排在
+  安全链**之前**，能力关闭的路径先被过滤器短路，根本到不了 `AuthorizationFilter`，故收窄白名单
+  不会把缺失路由的 404 退化成 401。（若日后移除该过滤器，则须恢复无条件放行，二者耦合。）
+- **`device/login` 归设备开关**：`DeviceAuthController` 的 `@ConditionalOnProperty` 前缀由账号开关改为
+  `scds.auth.jwt.device`，且 `matchIfMissing = false`——「账号开 / 设备关」时设备端点**不注册（404）**，
+  而不是注册后因缺设备私钥抛 `IllegalStateException` 变成 500（本节第 137 行）。
 - **logout 不进免鉴权白名单**：它始终要求账号令牌；只有能力关闭、路由缺席时才得到 404，
   此时由上述 404 出口给出（`AuthorizationFilter` 已不在其路径上）。
+- 本地证据：`DisabledCapabilityRouteFilterTest`（14 例，四组合交叉判定）＋ `ApplicationStartupIT`
+  （四组合 `account × device`：真 Tomcat + 真安全链 + 真 MySQL）；见 testing.md §85。
 
 ## 6. 断网边界与设备会话
 
@@ -319,16 +329,21 @@ displayName、roles、permissions和lastLoginAt。当前JWT只稳定提供sub/ro
 - **文件数**：≤3。
 - **边界**：仍不读远端密钥地址（`jwks-uri` 保持强制为空）；不承诺同用途平滑轮换（§4 末）。
 
-### 10.4 工作包 5 — 路由能力分离（**已完成**，段 90 / 91；仅余一项）
+### 10.4 工作包 5 — 路由能力分离（**已完成**，段 90 / 91 / 92）
 
-- **已落地**：拆 `AccountAuthController` / `DeviceAuthController` 条件注册；`DisabledCapabilityRouteFilter` 安全层精确 404 出口
+- **段 90 / 91 已落地**：拆 `AccountAuthController` / `DeviceAuthController` 条件注册；`DisabledCapabilityRouteFilter` 安全层精确 404 出口
   （无令牌 / 合法令牌 / 无效令牌同一 404）；见 testing.md §79 / §80。
-- **剩余（依赖包 2 的独立开关）**：把 `DisabledCapabilityRouteFilter` 的**单开关**匹配表改为
-  「按**实际关闭的能力**分别构建」（§5 末），并把 `SecurityConfig` 白名单条件化——
-  **开启的** `login`/`refresh`/`device-login` 才 `permitAll`，`logout` 始终要求账号令牌（§5 第 134 行）。
-- **修改** `scds-api/src/main/java/com/dualx/api/security/{DisabledCapabilityRouteFilter,SecurityConfig}.java`；
-  **测试** `.../DisabledCapabilityRouteFilterTest.java`（改）、`scds-app/src/test/java/com/dualx/ApplicationStartupIT.java`（改，四组合）。
-- **文件数**：4 ⇒ 拆为「过滤器匹配表」与「白名单条件化」两小段。
+- **段 92 剩余项已收口（2026-11-16）**：① `DisabledCapabilityRouteFilter` 的单开关匹配表改为**两张表**
+  （账号关闭 → `{login, refresh, logout}`；设备关闭 → `{device/login}`，§5 第 135 行）；
+  ② `SecurityConfig` 白名单**条件化**——**开启的** `login`/`refresh`/`device-login` 才 `permitAll`，
+  `logout` 始终要求账号令牌（§5 第 136 行）；③ `DeviceAuthController` 的 `@ConditionalOnProperty` 前缀由
+  **账号**开关改**设备**开关且 `matchIfMissing=false`，故「账号开 / 设备关」时设备端点 404 而非 500（§5 第 137 行）。
+- **落点（实测 7 文件）**：`scds-api/.../security/{DisabledCapabilityRouteFilter,SecurityConfig}.java`、
+  `scds-api/.../auth/DeviceAuthController.java`；**测试 / 支撑** `DisabledCapabilityRouteFilterTest.java`、
+  `scds-app/src/test/java/com/dualx/api/MvcProblemIT.java`、`ApplicationStartupSupport.java`、
+  `ApplicationStartupIT.java`（四组合）。按用户裁定**合并一段**执行（原拟「文件数 4 ⇒ 拆两小段」作废）。
+- **口径变更**：`SecurityConfig` 自此**读**能力开关，段 90 旧裁定与 `03-auth.md` §4.4 已同步改约；
+  与 §5 第 134 行「连无效 Bearer 也 404」不冲突（404 出口在安全链之前）。证据见 testing.md §85。
 
 ### 10.5 工作包 6 / 7 / 8 — 依赖项（§7 身份策略**已裁定**）
 

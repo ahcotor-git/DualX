@@ -5635,3 +5635,90 @@ issuer / 公钥**，设备令牌无路可验；反过来先做包 4 门面也会
   ③ `me` 身份策略（03b §7）与包 6 前置（相同 UUID 约定 / 初始化同步工具 / 陈旧容忍）未定。
 
 
+## 85. 03b §10.4 工作包 5 剩余项：能力分表 404 出口 + 白名单条件化 + 设备 controller 归设备开关
+
+承段 92「03b 双能力分段实施白名单（§10.4）」＋段 84「未验项 ①」。按**无人值守模式**推进；用户裁定
+「**5a 同上，但 `SecurityConfig` 也条件化（三件一起做）**」，取代 §10.4 原拟「文件数 4 ⇒ 拆两小段」。
+**本段属行为变更 ＋ 口径变更**（见 §85.2）。
+
+### 85.1 落点（实测 7 文件 = 3 主 + 4 测试/支撑；**破「每原子任务 ≤3 文件」上限，已显式声明例外**）
+
+- **主代码（3）**
+  - `scds-api/src/main/java/com/dualx/api/security/DisabledCapabilityRouteFilter.java` —— 单集合
+    `DISABLED_OPERATIONS` 拆为**两张能力表**：`ACCOUNT_DISABLED_OPERATIONS = {login, refresh, logout}`、
+    `DEVICE_DISABLED_OPERATIONS = {device/login}`；构造由「单属性」改注入 `AuthJwtProperties` ＋
+    `DeviceJwtProperties`；判定改为实例方法——账号用 `Boolean.FALSE.equals(signingEnabled())`，
+    设备用「非 `true` 即关闭」（与 `DeviceJwtProperties.signingEnabled` 缺省 `false` 一致）。
+  - `scds-api/src/main/java/com/dualx/api/auth/DeviceAuthController.java` —— `@ConditionalOnProperty` 前缀由
+    `scds.auth.jwt.account` 改 `scds.auth.jwt.device`，并显式 `matchIfMissing = false`：账号开 / 设备关时
+    设备端点**不注册（404）**，而非注册后缺私钥抛 `IllegalStateException` 的 **500**（03b §5 第 137 行）。
+  - `scds-api/src/main/java/com/dualx/api/security/SecurityConfig.java` —— 构造注入账号 / 设备两个属性；
+    `authorize(...)` 中三条无条件 `permitAll` 改为**按能力构建**清单（**开启的** `login` / `refresh` /
+    `device/login` 才放行，`logout` **从不**入白名单）。类 javadoc 记明与段 90 旧口径的**变更关系**及
+    「若移除 `DisabledCapabilityRouteFilter` 就须恢复无条件放行」的耦合条件。
+- **测试 / 支撑（4）**
+  - `scds-api/src/test/java/com/dualx/api/security/DisabledCapabilityRouteFilterTest.java` —— 重写为 **14 例**：
+    工厂改 `filter(accountEnabled, deviceEnabled)`、断言助手 `assertRouteNotFound(filter, path)`；
+    新增四组合交叉用例（账号关命中 3 条账号路径、设备关命中 `device/login`、两关全命中、
+    账号关不影响 `device/login`、设备关不影响账号路径、两开全留链上）。
+  - `scds-app/src/test/java/com/dualx/api/MvcProblemIT.java` —— `@SpringBootTest(properties=...)` 补
+    `scds.auth.jwt.device.signing-enabled=true`（该切片不读 `application.yml`，设备开关缺省为关 ⇒
+    否则 4 条 `device/login` 校验用例会得 404）。
+  - `scds-app/src/test/java/com/dualx/ApplicationStartupSupport.java` —— 新增
+    `environment(accountSigning, deviceSigning, key)` 重载，旧三参入口委托新入口（既有十几个 IT 不改）。
+  - `scds-app/src/test/java/com/dualx/ApplicationStartupIT.java` —— `@ValueSource` 改 `@CsvSource`
+    四组合 `{true,true} / {true,false} / {false,true} / {false,false}`；按开关分别断言
+    `AccountAuthController` / `DeviceAuthController` 注册数、`DeviceJwtProperties.signingEnabled()` /
+    `privateKey().isEmpty()`、账号与设备各自的签发 / 拒签分支；HTTP 断言拆分（login / refresh 用账号开关，
+    device/login 用设备开关；带无效 Bearer 的循环把 `device/login` 单列，`deviceSigning ? 401 : 404`）。
+
+### 85.2 口径变更：`SecurityConfig` 自此读能力开关
+
+段 90 的裁定是「`SecurityConfig` **不读**能力开关——『哪些端点存在』交给 controller 条件注册，
+过滤链只管『哪些端点免鉴权』」，三条「匿名换取令牌」入口**无条件** `permitAll`。03b §5 第 136 行要求的却是
+「**开启的** `login`/`refresh`/`device-login` 才进入对应免鉴权白名单，`logout` 始终要求账号令牌」。
+本段按用户裁定取 **§5 第 136 行**，段 90 旧口径**作废**。
+
+**为何不与 §5 第 134 行「连无效 Bearer 也保持 404」冲突**：404 出口 `DisabledCapabilityRouteFilter`
+排在安全链（order = -100）**之前**，能力关闭的路径先被它短路成 `ROUTE_NOT_FOUND`，请求根本到不了
+`AuthorizationFilter`，因此**收窄白名单不会把缺失路由的 404 退化成 401**。反过来说**二者耦合**：
+若日后移除该过滤器，必须恢复无条件放行，否则匿名登录会退回 401。改约已同步 `docs/design/03-auth.md`
+§4.4（白名单清单 ＋ 两条补充约定）与 `docs/design/03b-token-capabilities.md` §5「实现进展」＋ §10.4。
+
+**连带结论**：段 84「未验项 ①」所记「本仓仍为**单一 `signing-enabled`**、03b §5 矩阵『账号开、设备关』列
+不可达」**自本段起不再成立**——两个开关**各自独立且均已落地**，该列**可达**（由 `ApplicationStartupIT`
+四组合与 `DisabledCapabilityRouteFilterTest` 四组合交叉覆盖）。
+
+### 85.3 门禁实测（2026-11-16，`scds-local-mysql` 13306 healthy，Java 21）
+
+聚焦：`mvn -B -o -q -DskipTests test-compile` → exit 0；
+`mvn -B -o -pl scds-api,scds-app -am test "-Dtest=DisabledCapabilityRouteFilterTest,MvcProblemIT" "-Dsurefire.failIfNoSpecifiedTests=false"`
+→ `DisabledCapabilityRouteFilterTest` **14 / 0/0/0**、`MvcProblemIT` **27 / 0/0/0**。
+
+全量：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS**。计数取各模块 Maven `Results:` 行（§83.4 口径）。
+
+| 模块 | 测试数 | 失败/错误/跳过 |
+|---|---:|---|
+| protocol | 19 | 0/0/0 |
+| solver | 18 | 0/0/0 |
+| gateway | 49 | 0/0/0 |
+| core | 630 | 0/0/0 |
+| api | **167** | 0/0/0 |
+| app | **339** | 0/0/0 |
+| 总计 | **1222** | **0/0/0** |
+
+**1217 → 1222（+5）**，逐项对账：**api 164 → 167（+3）**恰为 `DisabledCapabilityRouteFilterTest`
+11 → **14** 的重写；**app 337 → 339（+2）**恰为 `ApplicationStartupIT` 由 2 组合扩 4 组合
+（37 → **39**，日志中实测 `Tests run: 39`）。其余模块计数**逐位一致** ⇒ 无回归。
+
+### 85.4 未验项 / 边界
+
+- `MvcProblemIT` 用例数不变（本段只补一条测试属性），仍 27。
+- **端到端演练未做**：只验 HTTP 状态 / 错误码 / 注册数 / 签发-验签往返，**未**做「设备端据 404 换
+  `baseUrl`」的真实链路。
+- **未开工**：`me` 身份策略（03b §7）与包 6 前置（相同 UUID 约定 / 初始化同步工具 / 陈旧容忍）。
+- 环境：门禁需 `scds-local-mysql`（127.0.0.1:13306，`mysql:8.4`）在跑；本窗再次复现 Docker Desktop
+  **需管理员**启动（非提权自启反复「起来即掉」、named pipe 随即消失、13306 不监听），
+  经提权启动后 `docker start scds-local-mysql` 并等 `healthy` 方可跑全量。
+
+

@@ -1,7 +1,21 @@
 # scds-next 交接快照
 
 > 更新：2026-11-16，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 92 工作包 3b ＋ 工作包 4（合并段）—— `TokenSigner.signDeviceToken` 一次迁净 ＋ `JwtDecoderConfig` 改按未验签 `aud` 分派的双用途门面**——
+> 当前任务：**段 92 工作包 5 剩余项 —— 能力分表 404 出口 ＋ `SecurityConfig` 白名单条件化 ＋ `DeviceAuthController` 归设备开关**——
+> 承段 84「未验项 ①」（03b §10.4），按**无人值守模式**推进。
+> **用户裁定「5a 同上，但 `SecurityConfig` 也条件化（三件一起做）」**，取代 §10.4 原拟「文件数 4 ⇒ 拆两小段」。
+> **本段性质**：**行为变更 ＋ 口径变更**——账号 / 设备两个签发开关自此**各自独立**（段 90 的合并作废）；`SecurityConfig` 自此**读**能力开关（段 90 旧口径作废），**开启的** `login`/`refresh`/`device/login` 才 `permitAll`，`logout` **从不**入白名单；`device/login` 归设备开关（`matchIfMissing=false`，账号开 / 设备关时 **404 而非 500**）。
+> **为何不与「连无效 Bearer 也 404」冲突**：404 出口 `DisabledCapabilityRouteFilter` 排在安全链**之前**，能力关闭的路径先被短路，收窄白名单不会把 404 退化成 401；**耦合条件**＝若移除该过滤器须恢复无条件放行。
+> **落点（实测 7 文件 = 3 主 ＋ 4 测试/支撑，破「≤3 文件」已显式声明例外）**：
+> **主 3**：`DisabledCapabilityRouteFilter`（单集合拆为账号表 `{login,refresh,logout}` / 设备表 `{device/login}`，注入双属性，账号 `Boolean.FALSE.equals`、设备「非 true 即关」）＋ `DeviceAuthController`（前缀改 `scds.auth.jwt.device` ＋ `matchIfMissing=false`）＋ `SecurityConfig`（注入双属性，按能力构建 `permitAll`）。
+> **测试/支撑 4**：`DisabledCapabilityRouteFilterTest`（重写 14 例四组合交叉）＋ `MvcProblemIT`（补 `device.signing-enabled=true`）＋ `ApplicationStartupSupport`（新增 `environment(accountSigning, deviceSigning, key)` 重载）＋ `ApplicationStartupIT`（`@CsvSource` 四组合、账号 / 设备断言拆分）。
+> **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1222 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 167** ＋ **app 339**）。**1217 → 1222（+5）**：api 164 → 167（+3，`DisabledCapabilityRouteFilterTest` 11 → 14）；app 337 → 339（+2，`ApplicationStartupIT` 37 → 39）。证据见 testing.md §85。
+> **改约**：`docs/design/03-auth.md` §4.4（白名单清单 ＋ 两条补充约定）、`docs/design/03b-token-capabilities.md` §5「实现进展」＋ §10.4。
+> **连带**：段 84「本仓仍为单一 `signing-enabled`、03b §5『账号开 / 设备关』列不可达」**不再成立**，该列**可达**。
+> **环境**：门禁需 `scds-local-mysql`（127.0.0.1:13306，`mysql:8.4`）在跑。本窗复现：Docker Desktop 需**管理员**启动（非提权自启反复「起来即掉」、named pipe 随即消失、13306 不监听），用户提权启动后 `docker start scds-local-mysql` 并等 `healthy` 方可跑全量。
+> **口径**：每包开工**逐段授权**，提交 / 推送**逐次授权**。
+> 下一项**（候选，按推荐序）**：① **工作包 6 前置方案**（`me` 身份策略：相同 UUID 约定 / 初始化同步工具 / 陈旧容忍，**须先出独立方案**）；② **工作包 7**（`SecurityMetricsIT` ＋ 内存双密钥夹具；`ApplicationStartupIT` 四组合**本段已前置完成**）；③ 全库行尾 renormalize（需显式评估与授权）；④ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑤ R27 剩余项定型（**需产品 / 运维口径**）；⑥ R20 遗留（密码长度约束未定义）。
+> 上一原子任务：**段 92 工作包 3b ＋ 工作包 4（合并段）—— `TokenSigner.signDeviceToken` 一次迁净 ＋ `JwtDecoderConfig` 改按未验签 `aud` 分派的双用途门面**——
 > 承段 92「03b 双能力分段实施白名单（§10.2 拆 3b / §10.3 包 4）」，按**无人值守模式**推进。
 > **用户裁定「并入包 4 门面，一次收口（推荐）」**：实测 3b 与包 4 **互为前置、互锁**——3b 删掉 `TokenSigner.signDeviceToken` 后，设备用途签发端口只剩 `DeviceTokenSigner`，而**验签侧仍只认账号 issuer / 公钥**，设备令牌无路可验；反之先做门面也失去可用的设备验签用例。任一段单独落地都无法保持编译或门禁为绿 ⇒ **必须同段**。
 > **本段性质**：**行为变更**——设备令牌**只能**由设备信任项（`scds.auth.jwt.device.*`）验签；账号密钥签设备令牌 / 设备密钥签账号令牌（**交叉签发**）一律 401 `AUTH_TOKEN_INVALID`。
@@ -12,7 +26,7 @@
 > **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1217 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ core 630 ＋ **api 164** ＋ **app 337**）。**1214 → 1217（+3）**：app 333 → 337（+4，恰为新增交叉签发用例）；api 165 → 164（−1，恰为随 `deviceTokenTtl` 删除的用例）；core 630 不变（只换假件类型 / 补桩 bean）⇒ 无回归。计数权威 = 各模块 Maven `Results:` 行。证据见 testing.md §84。
 > **环境**：门禁需 `scds-local-mysql`（127.0.0.1:13306，`mysql:8.4`）在跑。本窗再次复现：Docker Desktop 需**管理员**启动（`com.docker.service` 非提权启动被拒、`Docker Desktop.exe` 随即退出），引擎就绪后容器为 `Exited (255)`，须 `docker start scds-local-mysql` 再等 `healthy`。
 > **口径**：每包开工**逐段授权**，提交 / 推送**逐次授权**。
-> 下一项**（候选，按推荐序）**：① **工作包 5 剩余项**（`DisabledCapabilityRouteFilter` 单开关匹配表 → 按实际关闭能力分别构建 ＋ `SecurityConfig` 白名单条件化 ＋ `DeviceAuthController` 的 `@ConditionalOnProperty` 前缀由账号开关改设备开关）；② **工作包 6 前置方案**（`me` 身份策略：相同 UUID 约定 / 初始化同步工具 / 陈旧容忍，**须先出独立方案**）；③ 工作包 7（`ApplicationStartupIT` 扩四组合；本段已部分前置 `ApplicationStartupSupport` 的设备第二密钥对 / issuer / 开关）；④ 全库行尾 renormalize（需显式授权）；⑤ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑥ R27 剩余项定型（**需产品 / 运维口径**）。
+> 下一项**（候选，按推荐序，承接时点）**：① 工作包 5 剩余项（**已完成**，见上方「当前任务」）；② **工作包 6 前置方案**（`me` 身份策略：相同 UUID 约定 / 初始化同步工具 / 陈旧容忍，**须先出独立方案**）；③ 工作包 7（`ApplicationStartupIT` 扩四组合；本段已部分前置 `ApplicationStartupSupport` 的设备第二密钥对 / issuer / 开关）；④ 全库行尾 renormalize（需显式授权）；⑤ C 档（真机 / GUI / 现场硬件 / T-PROD）；⑥ R27 剩余项定型（**需产品 / 运维口径**）。
 > 上一原子任务：**段 92 工作包 3a —— 设备 RSA 适配器 `DeviceRsaTokenSigner` ＋ `PemKeys` 键来源参数化**——
 > **3a（3 文件）**：改 `PemKeys.java`（新增包私有 `record Source(inline, file, inlineEnv, fileEnv)`，读键拆成「按 `AuthJwtProperties`（账号，行为不变）」与「按 `Source`」两套，账号 / 设备**各读各的**）＋ 新 `DeviceRsaTokenSigner.java`（`@Component implements DeviceTokenSigner`；仅 `signingEnabled=true` 读**设备**私钥；签 `aud=scds-device` / `sub=马甲号` / `sid` / `jti`，`exp` 取设备 TTL）＋ 新 `DeviceRsaTokenSignerTest.java`（7 例）。**在「≤3 文件」上限内，无破限例外**。
 > **装配期三项校验（落地 §10.1 / §82.2 移交项）**：启用设备签发时构造期校验 ① 公私钥**配对**（模数比对）② RSA **强度** ≥2048 ③ 与账号 **issuer / 公钥均不同**（为此一并注入 `AuthJwtProperties`——跨配置不变量）；任一不满足即**启动失败关闭**。禁用时不读设备密钥、不做校验。
