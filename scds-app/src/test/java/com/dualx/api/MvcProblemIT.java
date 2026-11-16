@@ -75,7 +75,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "server.address=127.0.0.1",
         "spring.mvc.problemdetails.enabled=true",
         "spring.servlet.multipart.max-file-size=1KB",
-        "spring.servlet.multipart.max-request-size=4KB"
+        "spring.servlet.multipart.max-request-size=4KB",
+        // DeviceAuthController 现由**设备**开关条件注册（03b §5/§10.2 拆分），且缺省为关。
+        // 本切片不读 application.yml 的设备段，故须显式开启，否则端点不注册、4 条校验用例得 404。
+        "scds.auth.jwt.device.signing-enabled=true"
 })
 @AutoConfigureMockMvc(print = MockMvcPrint.NONE, printOnlyOnFailure = false)
 @ActiveProfiles("err01-test")

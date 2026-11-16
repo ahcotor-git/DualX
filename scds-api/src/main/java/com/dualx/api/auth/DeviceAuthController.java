@@ -13,12 +13,17 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 设备登录端点：{@code POST /api/v1/auth/device/login}（设计 03 §4.9、02 §4）。
  *
- * <p><b>整类条件注册。</b>设备令牌同样要由本进程用私钥签出（{@code aud = scds-device}），
- * 因此它与账号的 {@code login} / {@code refresh} 受同一个能力开关约束：{@code
- * scds.auth.jwt.account.signing-enabled=false} 的实例只验签不签发，这个端点**不注册**（路由缺席），
- * 而不是注册后在 {@link DeviceAuthService#login} 里抛 500——后者把「本实例没有这个能力」
- * 报成了服务端缺陷，客户端也拿不到可据以换 baseUrl 的信号。{@code matchIfMissing=true}
- * 与 {@link AccountAuthController} 一致：配置缺省时按可签发处理。</p>
+ * <p><b>整类条件注册，且只认设备开关。</b>设备令牌由**设备**私钥签出（{@code aud = scds-device}），
+ * 因此本类的注册条件必须与设备签发能力同源——{@code scds.auth.jwt.device.signing-enabled=true}
+ * 才注册；{@code false}（{@link com.dualx.api.security.DeviceJwtProperties} 的**缺省值**）时不注册，
+ * 路由缺席即 404（安全层出口见 {@link com.dualx.api.security.DisabledCapabilityRouteFilter}）。</p>
+ *
+ * <p><b>不再与账号的 {@code login} / {@code refresh} 共用开关</b>（03b §5 / §10.2 段 92 拆分）。
+ * 此前由账号开关注册，于是「账号开 / 设备关」时端点已注册却发现设备签发器未启用，
+ * {@link DeviceAuthService#login} 里的能力检查会抛 {@code IllegalStateException} 变成 500——
+ * 那正是 §5 第 137 行明令禁止的「把配置错误当成能力关闭响应」。因此这里
+ * {@code matchIfMissing=false}（与账号的 {@code matchIfMissing=true} 相反）：漏配设备开关时按
+ * **不可签发**处理，与 {@code DeviceRsaTokenSigner} 的默认关闭保持一致，宁可 404 也不 500。</p>
  *
  * <p><b>为什么 {@code device/me} 不在这里：</b>它只验签不签发（校验 SID 单端在线 + 读台账），
  * 与 {@code /api/v1/auth/me} 同理留在不条件注册的 {@link AuthController}。</p>
@@ -27,8 +32,8 @@ import org.springframework.web.bind.annotation.RestController;
  * 「HTTP 请求 → 服务调用 → 契约 DTO」的翻译。</p>
  */
 @RestController
-@ConditionalOnProperty(prefix = "scds.auth.jwt.account", name = "signing-enabled",
-        havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "scds.auth.jwt.device", name = "signing-enabled",
+        havingValue = "true", matchIfMissing = false)
 public class DeviceAuthController {
 
     private final DeviceAuthService deviceAuthService;

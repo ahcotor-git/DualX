@@ -5,6 +5,7 @@ import com.dualx.api.auth.AuthController;
 import com.dualx.api.auth.DeviceAuthController;
 import com.dualx.api.error.ApiExceptionHandler;
 import com.dualx.api.security.AuthJwtProperties;
+import com.dualx.api.security.DeviceJwtProperties;
 import com.dualx.api.security.RsaTokenSigner;
 import com.dualx.api.security.SecurityConfig;
 import com.dualx.core.auth.AdminAccountBootstrap;
@@ -22,7 +23,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
@@ -112,11 +113,12 @@ class ApplicationStartupIT {
         }));
     }
 
-    @ParameterizedTest(name = "full production startup: signing={0}")
-    @ValueSource(booleans = {true, false})
-    void productionApplicationStartsAndClosesWithRealSecurityAndDatabase(boolean signing) throws Exception {
+    @ParameterizedTest(name = "full production startup: account={0}, device={1}")
+    @CsvSource({"true, true", "true, false", "false, true", "false, false"})
+    void productionApplicationStartsAndClosesWithRealSecurityAndDatabase(boolean accountSigning, boolean deviceSigning)
+            throws Exception {
         KeyPair key = ApplicationStartupSupport.newKeyPair();
-        ConfigurableEnvironment environment = ApplicationStartupSupport.environment(signing, key);
+        ConfigurableEnvironment environment = ApplicationStartupSupport.environment(accountSigning, deviceSigning, key);
         Map<String, Long> before = rowCounts(environment);
         HikariDataSource pool = null;
         int port = -1;
@@ -132,16 +134,20 @@ class ApplicationStartupIT {
             assertThat(context.getBeansOfType(SecurityConfig.class)).hasSize(1);
             assertThat(context.getBeansOfType(ApiExceptionHandler.class)).hasSize(1);
             assertThat(context.getBeansOfType(AuthController.class)).hasSize(1);
-            // 签发端点随 signing-enabled 条件注册：只验签实例不注册账号 login/refresh/logout（设计 03 Q1）
-            assertThat(context.getBeansOfType(AccountAuthController.class)).hasSize(signing ? 1 : 0);
-            // 设备登录同样要签设备令牌，故与账号签发共用能力开关（review R06）
-            assertThat(context.getBeansOfType(DeviceAuthController.class)).hasSize(signing ? 1 : 0);
+            // 签发端点随**各自**能力开关条件注册（03b §5 / §10.2 段 92 拆分）：
+            // 账号 login/refresh/logout 认账号开关（缺省开），设备 login 认**设备**开关（缺省关）。
+            assertThat(context.getBeansOfType(AccountAuthController.class)).hasSize(accountSigning ? 1 : 0);
+            assertThat(context.getBeansOfType(DeviceAuthController.class)).hasSize(deviceSigning ? 1 : 0);
             assertThat(context.getBeansOfType(AdminAccountBootstrap.class)).hasSize(1);
             assertThat(context.getBeansOfType(AuthService.class)).hasSize(1);
             assertThat(context.getBean(AdminProperties.class))
                     .isEqualTo(new AdminProperties("", "", ""));
-            assertThat(context.getBean(AuthJwtProperties.class).signingEnabled()).isEqualTo(signing);
-            assertThat(context.getBean(AuthJwtProperties.class).privateKey().isEmpty()).isEqualTo(!signing);
+            assertThat(context.getBean(AuthJwtProperties.class).signingEnabled()).isEqualTo(accountSigning);
+            assertThat(context.getBean(AuthJwtProperties.class).privateKey().isEmpty()).isEqualTo(!accountSigning);
+            assertThat(context.getBean(DeviceJwtProperties.class).signingEnabled()).isEqualTo(deviceSigning);
+            assertThat(context.getBean(DeviceJwtProperties.class).privateKey().isEmpty()).isEqualTo(!deviceSigning);
+            assertThat(context.getBean(DeviceJwtProperties.class).issuer())
+                    .isEqualTo(ApplicationStartupSupport.DEVICE_ISSUER);
             assertThat(context.getBean(TokenSigner.class)).isInstanceOf(RsaTokenSigner.class);
             assertThat(context.getBeansOfType(TokenSigner.class)).hasSize(1);
 
@@ -167,28 +173,34 @@ class ApplicationStartupIT {
             JwtDecoder decoder = context.getBean(JwtDecoder.class);
             UUID subject = UUID.randomUUID();
             String admin;
-            if (signing) {
+            // 账号签发能力：开启则本地签出并自验；关闭则拒绝签发，改用测试密钥另签一份**外部**令牌，
+            // 供后续 /actuator/metrics 用例使用——账号验签公钥仍在，故外部令牌照样过验证（与现状等价）。
+            assertThat(signer.enabled()).isEqualTo(accountSigning);
+            if (accountSigning) {
                 admin = signer.signAccessToken(new AccessTokenClaims(subject, List.of(Role.ADMIN)));
                 assertThat(decoder.decode(admin).getSubject()).isEqualTo(subject.toString());
                 assertThat(decoder.decode(signer.signRefreshToken(
                         new RefreshTokenClaims(UUID.randomUUID(), subject))).getAudience())
                         .containsExactly("scds-refresh");
-                // 设备令牌由**设备**签发器用**设备**私钥签出，再走同一入口验签：能过就证明门面确实
-                // 按 aud 分派到了设备信任项，而不是拿账号公钥验签成功。
-                assertThat(deviceSigner.enabled()).isTrue();
+            } else {
+                assertThatThrownBy(() -> signer.signAccessToken(
+                        new AccessTokenClaims(subject, List.of(Role.ADMIN))))
+                        .isInstanceOf(IllegalStateException.class);
+                admin = ApplicationStartupSupport.externalAccessToken(key, List.of("ADMIN"));
+                assertThat(decoder.decode(admin).getAudience()).containsExactly("scds-edge");
+            }
+
+            // 设备签发能力**独立于**账号（03b §4/§10.2）：设备令牌由设备签发器用设备私钥签出，再走同一
+            // 入口验签——能过就证明门面确实按 aud 分派到了设备信任项，而不是拿账号公钥验签成功。
+            // 「账号关 / 设备开」这一组合正是 §9 要证的目标边缘形态：无账号私钥仍启动，设备签发有效。
+            assertThat(deviceSigner.enabled()).isEqualTo(deviceSigning);
+            if (deviceSigning) {
                 UUID sid = UUID.randomUUID();
                 assertThat(decoder.decode(deviceSigner.signDeviceToken(new DeviceTokenClaims(7, sid)))
                         .getClaimAsString("sid")).isEqualTo(sid.toString());
             } else {
-                assertThat(signer.enabled()).isFalse();
-                assertThat(deviceSigner.enabled()).isFalse();
-                assertThatThrownBy(() -> signer.signAccessToken(
-                        new AccessTokenClaims(subject, List.of(Role.ADMIN))))
-                        .isInstanceOf(IllegalStateException.class);
                 assertThatThrownBy(() -> deviceSigner.signDeviceToken(new DeviceTokenClaims(7, UUID.randomUUID())))
                         .isInstanceOf(IllegalStateException.class);
-                admin = ApplicationStartupSupport.externalAccessToken(key, List.of("ADMIN"));
-                assertThat(decoder.decode(admin).getAudience()).containsExactly("scds-edge");
             }
 
             ObjectMapper mapper = context.getBean(ObjectMapper.class);
@@ -214,28 +226,31 @@ class ApplicationStartupIT {
                         401, "AUTH_TOKEN_INVALID", "/api/v1/auth/me");
                 expectProblem(mapper, get(client, base, "/api/v1/full-startup-missing", admin),
                         404, "ROUTE_NOT_FOUND", "/api/v1/full-startup-missing");
-                // 三个「匿名换取令牌」的入口一律免鉴权：请求必须能抵达 dispatcher。
-                // signing=true 时它们存在，空体先撞契约校验（400）；signing=false 时对应 controller
-                // 不注册、路由缺席（404）。若把放行随能力一并收回，匿名客户端会先撞上末条兜底的
-                // hasAuthority(AUD_EDGE) 拿到 401——那是「令牌不成立」，不是「本实例没有这个能力」
-                // （testing.md RT-DISABLED 记录过这个偏差，T-SEC-4 要求带 / 不带 token 都是 404）。
-                int issuanceStatus = signing ? 400 : 404;
-                String issuanceCode = signing ? "VALIDATION_FAILED" : "ROUTE_NOT_FOUND";
-                for (String path : List.of("/api/v1/auth/login", "/api/v1/auth/refresh",
-                        "/api/v1/auth/device/login")) {
+                // 「匿名换取令牌」的入口按**能力**放行（03b §5 第 136 行）：开启的才进白名单，请求
+                // 抵达 dispatcher，空体先撞契约校验（400）；关闭的对应 controller 不注册、路由缺席，
+                // 由 DisabledCapabilityRouteFilter 给出 404。账号开关管 login/refresh，设备开关管
+                // device/login——两开关独立，故四个组合下这些断言各不相同。
+                for (String path : List.of("/api/v1/auth/login", "/api/v1/auth/refresh")) {
                     expectProblem(mapper, post(client, base, path, "{}", null),
-                            issuanceStatus, issuanceCode, path);
+                            accountSigning ? 400 : 404,
+                            accountSigning ? "VALIDATION_FAILED" : "ROUTE_NOT_FOUND", path);
                 }
+                expectProblem(mapper, post(client, base, "/api/v1/auth/device/login", "{}", null),
+                        deviceSigning ? 400 : 404,
+                        deviceSigning ? "VALIDATION_FAILED" : "ROUTE_NOT_FOUND", "/api/v1/auth/device/login");
                 // 能力关闭的精确路径还有一条安全层 404 出口，排在 Bearer 验证**之前**
                 // （DisabledCapabilityRouteFilter，03b §5）。所以带**无效 Bearer** 也必须是 404：
                 // 否则 BearerTokenAuthenticationFilter 会先验签失败写成 401，「本实例没有这个能力」
-                // 就在这一种请求形态下退化成「令牌不成立」。logout 同样随账号能力缺席，一并覆盖。
-                // signing=true 时不设该出口，无效 Bearer 仍按常规得 401，顺序与语义都不变。
-                for (String path : List.of("/api/v1/auth/login", "/api/v1/auth/refresh",
-                        "/api/v1/auth/logout", "/api/v1/auth/device/login")) {
+                // 就在这一种请求形态下退化成「令牌不成立」。logout 随账号能力缺席，一并覆盖。
+                // 开启时不设该出口，无效 Bearer 仍按常规得 401，顺序与语义都不变。
+                for (String path : List.of("/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout")) {
                     expectProblem(mapper, post(client, base, path, "{}", wrong),
-                            signing ? 401 : 404, signing ? "AUTH_TOKEN_INVALID" : "ROUTE_NOT_FOUND", path);
+                            accountSigning ? 401 : 404,
+                            accountSigning ? "AUTH_TOKEN_INVALID" : "ROUTE_NOT_FOUND", path);
                 }
+                expectProblem(mapper, post(client, base, "/api/v1/auth/device/login", "{}", wrong),
+                        deviceSigning ? 401 : 404,
+                        deviceSigning ? "AUTH_TOKEN_INVALID" : "ROUTE_NOT_FOUND", "/api/v1/auth/device/login");
             }
             assertThat(rowCounts(environment)).isEqualTo(before);
         } finally {

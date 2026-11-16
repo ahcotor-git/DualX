@@ -27,9 +27,14 @@ import java.util.List;
  * docs/design/03-auth.md §4.4 登记一行。鉴权漏洞几乎从来不是「判断写错」，
  * 而是「某次联调顺手放行了一个端点，然后再没人删」。</p>
  *
- * <p><b>本类不读能力开关。</b>「哪些端点存在」由 controller 的条件注册决定，
- * 过滤链只管「哪些端点免鉴权」。两者混在一起时，收窄白名单会顺手把缺失路由的 404
- * 变成 401——匿名客户端再也看不到「本实例没有这个能力」。</p>
+ * <p><b>本类读能力开关（03b §5 第 136 行；口径变更于段 92 工作包 5）。</b>「哪些端点存在」由
+ * controller 的条件注册决定，「哪些端点免鉴权」由本类决定：**开启的** {@code login} / {@code refresh} /
+ * {@code device-login} 才进入免鉴权白名单，{@code logout} 从不进入（始终要求账号令牌）。
+ * 这与段 90「本类不读能力开关」的旧口径不同——收窄白名单**不会**把缺失路由的 404 变成 401，
+ * 因为缺失能力的 404 由 {@link DisabledCapabilityRouteFilter} 排在安全链**之前**给出，
+ * 匿名 / 合法 / 无效 Bearer 三种请求仍得到同一个 404。若哪天移除那个过滤器，就必须恢复无条件放行
+ * （否则匿名客户端会先撞上末条兜底的 {@code hasAuthority(AUD_EDGE)}，拿到 401「令牌不成立」这个
+ * 与本端点语义无关的信号）。</p>
  */
 @Configuration
 @EnableMethodSecurity
@@ -46,11 +51,17 @@ public class SecurityConfig {
 
     private final ApiProblemAuthenticationEntryPoint authenticationEntryPoint;
     private final ApiProblemAccessDeniedHandler accessDeniedHandler;
+    private final AuthJwtProperties accountProperties;
+    private final DeviceJwtProperties deviceProperties;
 
     public SecurityConfig(ApiProblemAuthenticationEntryPoint authenticationEntryPoint,
-                          ApiProblemAccessDeniedHandler accessDeniedHandler) {
+                          ApiProblemAccessDeniedHandler accessDeniedHandler,
+                          AuthJwtProperties accountProperties,
+                          DeviceJwtProperties deviceProperties) {
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.accessDeniedHandler = accessDeniedHandler;
+        this.accountProperties = accountProperties;
+        this.deviceProperties = deviceProperties;
     }
 
     @Bean
@@ -87,14 +98,23 @@ public class SecurityConfig {
         // 当成实例不健康；/error 是 Boot 的错误页转发目标，拦它会把所有错误变成 401。
         registry.requestMatchers(HttpMethod.GET, "/actuator/health", "/error").permitAll();
 
-        // 三个「匿名换取令牌」的入口一律放行：它们本来就不带 Bearer，与能力开关无关。
-        // 关闭签发能力的实例上对应 controller 不注册，路由缺席即 404——但这条 404 只有让请求
-        // **抵达 dispatcher** 才看得见：若连放行也随能力一并收回去，匿名客户端会先撞上末条
-        // 兜底的 hasAuthority(AUD_EDGE)，拿到 401「令牌不成立」这个与本端点语义无关的信号
-        // （testing.md RT-DISABLED 记录过这个偏差；T-SEC-4 要求带 / 不带 token 都是 404）。
-        registry.requestMatchers(HttpMethod.POST,
-                        "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/device/login")
-                .permitAll();
+        // 「匿名换取令牌」的入口按**能力**放行（03b §5 第 136 行）：账号开关开启才放行
+        // login/refresh，设备开关开启才放行 device/login。关闭能力的实例上对应 controller
+        // 不注册、路由缺席，这条 404 由 DisabledCapabilityRouteFilter 排在安全链**之前**给出，
+        // 因此这里收窄不会把 404 变成 401——匿名 / 合法 / 无效 Bearer 三种请求仍是同一个 404
+        // （testing.md RT-DISABLED；T-SEC-4）。logout 从不进入本白名单：它始终要求账号令牌，
+        // 只有账号能力关闭、路由缺席时才由上述 404 出口给出。
+        List<String> issuanceEntrypoints = new ArrayList<>();
+        if (accountProperties.signingEnabled()) {
+            issuanceEntrypoints.add("/api/v1/auth/login");
+            issuanceEntrypoints.add("/api/v1/auth/refresh");
+        }
+        if (deviceProperties.signingEnabled()) {
+            issuanceEntrypoints.add("/api/v1/auth/device/login");
+        }
+        if (!issuanceEntrypoints.isEmpty()) {
+            registry.requestMatchers(HttpMethod.POST, issuanceEntrypoints.toArray(String[]::new)).permitAll();
+        }
 
         // 受保护文件的签名 URL（D09-②）：授权凭据是短时效签名而非令牌，故免 Bearer——
         // `<img>` 与浏览器不会为图片请求带上 Authorization。**放行不等于放行访问**：

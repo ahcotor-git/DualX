@@ -34,39 +34,49 @@ import java.util.Set;
  * 于是「无令牌 / 合法令牌 / 无效令牌」三种请求得到同一个 404。其余受保护路径完全不受影响，
  * 仍走正常 401/403。</p>
  *
- * <p><b>与能力开关的关系。</b>本仓库把账号签发与设备登录合并为**同一个**开关
- * {@code scds.auth.jwt.account.signing-enabled}（两者都必需私钥；review R06 段 90 裁定），
- * 因此该开关关闭时缺席的是这四个精确路径。若将来把账号/设备拆成两个开关，
- * 这里应改成「按实际关闭的能力**分别**构建精确匹配表」，而不是继续共用一个集合。</p>
+ * <p><b>与能力开关的关系（03b §5 第 135 行）。</b>账号签发与设备签发是两个**独立开关**
+ * （{@code scds.auth.jwt.account.signing-enabled} / {@code scds.auth.jwt.device.signing-enabled}），
+ * 因此本过滤器**按实际关闭的能力**分表：账号关闭时缺席 {@code login}/{@code refresh}/{@code logout}，
+ * 设备关闭时缺席 {@code device/login}。两张表的判定必须与其对应控制器的注册条件一致
+ * （{@code AccountAuthController} 账号缺省为开、{@code DeviceAuthController} 设备缺省为关），
+ * 否则会出现「端点注册了却签不出」的 500——§5 第 137 行明令不得把这种配置错误当成能力关闭响应。</p>
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public class DisabledCapabilityRouteFilter extends OncePerRequestFilter {
 
     /**
-     * {@code signing-enabled=false} 时缺席的精确 operation 路径。
+     * 账号签发能力关闭（{@code scds.auth.jwt.account.signing-enabled=false}）时缺席的精确 operation 路径。
      *
-     * <p>只登记**方法 + 路径**都吻合的条目：同名路径上的其他方法本就不是契约里的 operation，
-     * 不该被这条 404 出口顺带放行或改变其既有 401/403。</p>
+     * <p>只有**方法 + 路径**都吻合的条目才登记：同名路径上的其他方法本就不是契约里的 operation，
+     * 不该被这条 404 出口顺带放行或改变其既有 401/403。{@code logout} 属此表——它虽始终要求账号令牌、
+     * 不进免鉴权白名单，但账号控制器关闭时其路由同样缺席，故仍需这条 404 出口。</p>
      */
-    private static final Set<String> DISABLED_OPERATIONS = Set.of(
+    private static final Set<String> ACCOUNT_DISABLED_OPERATIONS = Set.of(
             "/api/v1/auth/login",
             "/api/v1/auth/refresh",
-            "/api/v1/auth/logout",
+            "/api/v1/auth/logout");
+
+    /** 设备签发能力关闭（{@code scds.auth.jwt.device.signing-enabled=false}，**缺省值**）时缺席的精确路径。 */
+    private static final Set<String> DEVICE_DISABLED_OPERATIONS = Set.of(
             "/api/v1/auth/device/login");
 
-    private final AuthJwtProperties properties;
+    private final AuthJwtProperties accountProperties;
+    private final DeviceJwtProperties deviceProperties;
     private final ObjectMapper objectMapper;
 
-    public DisabledCapabilityRouteFilter(AuthJwtProperties properties, ObjectMapper objectMapper) {
-        this.properties = properties;
+    public DisabledCapabilityRouteFilter(AuthJwtProperties accountProperties,
+                                         DeviceJwtProperties deviceProperties,
+                                         ObjectMapper objectMapper) {
+        this.accountProperties = accountProperties;
+        this.deviceProperties = deviceProperties;
         this.objectMapper = objectMapper;
     }
 
     @Override
     protected void doFilterInternal(@NonNull HttpServletRequest request, @NonNull HttpServletResponse response,
                                     @NonNull FilterChain chain) throws ServletException, IOException {
-        if (Boolean.FALSE.equals(properties.signingEnabled()) && isDisabledOperation(request)) {
+        if (isDisabledOperation(request)) {
             // 与 dispatcher 的 404 保持同一形状（code/instance/traceId 一致，title 取同一
             // reason phrase），客户端不必、也无法区分这条 404 是"路由没注册"还是"能力被关"。
             ApiProblemWriter.write(objectMapper, request, response, HttpStatus.NOT_FOUND,
@@ -76,13 +86,19 @@ public class DisabledCapabilityRouteFilter extends OncePerRequestFilter {
         chain.doFilter(request, response);
     }
 
-    private static boolean isDisabledOperation(HttpServletRequest request) {
+    private boolean isDisabledOperation(HttpServletRequest request) {
         if (!HttpMethod.POST.matches(request.getMethod())) {
             return false;
         }
         // 安全链里的 requestMatchers 以 context path 为界；这里同样剥掉前缀再比对，
         // 否则一旦部署在非根 context path 下，精确匹配会整条失效。
         String path = request.getRequestURI().substring(request.getContextPath().length());
-        return DISABLED_OPERATIONS.contains(path);
+        if (Boolean.FALSE.equals(accountProperties.signingEnabled())
+                && ACCOUNT_DISABLED_OPERATIONS.contains(path)) {
+            return true;
+        }
+        // 设备开关缺省为 false，故用「非 true 即关闭」判定，与 DeviceJwtProperties 的默认值一致。
+        return !Boolean.TRUE.equals(deviceProperties.signingEnabled())
+                && DEVICE_DISABLED_OPERATIONS.contains(path);
     }
 }

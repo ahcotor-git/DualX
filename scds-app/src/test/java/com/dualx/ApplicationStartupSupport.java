@@ -59,7 +59,13 @@ final class ApplicationStartupSupport {
         }
     }
 
+    /** 账号与设备同值的便捷入口：多数 IT 只关心「签发 / 只验签」两态，两开关同开同关。 */
     static ConfigurableEnvironment environment(boolean signing, KeyPair key) {
+        return environment(signing, signing, key);
+    }
+
+    /** 账号 / 设备两个开关**独立**入参（03b §9 四个组合：{@code (true,true)/(true,false)/(false,true)/(false,false)}）。 */
+    static ConfigurableEnvironment environment(boolean accountSigning, boolean deviceSigning, KeyPair key) {
         Properties credentials = new Properties();
         List<Path> candidates = List.of(Path.of(".env.test"), Path.of("../.env.test"))
                 .stream().filter(Files::isRegularFile).toList();
@@ -98,22 +104,23 @@ final class ApplicationStartupSupport {
         settings.put("scds.admin.password", "");
         settings.put("scds.admin.display-name", "");
         settings.put("scds.auth.jwt.account.issuer", ISSUER);
-        settings.put("scds.auth.jwt.account.signing-enabled", Boolean.toString(signing));
+        settings.put("scds.auth.jwt.account.signing-enabled", Boolean.toString(accountSigning));
         settings.put("scds.auth.jwt.account.public-key", pem("PUBLIC KEY", key.getPublic().getEncoded()));
         settings.put("scds.auth.jwt.account.public-key-file", "");
-        settings.put("scds.auth.jwt.account.private-key", signing ? pem("PRIVATE KEY", key.getPrivate().getEncoded()) : "");
+        settings.put("scds.auth.jwt.account.private-key",
+                accountSigning ? pem("PRIVATE KEY", key.getPrivate().getEncoded()) : "");
         settings.put("scds.auth.jwt.account.private-key-file", "");
         settings.put("scds.auth.jwt.account.jwks-uri", "");
-        // 设备用途（03b §3）：独立 issuer、独立密钥对、独立开关，均不继承账号配置。开关与账号同值，
-        // 因为 device/login 这个端点本身随账号能力一并注册（review R06）；配齐设备 identity 与公钥后，
-        // 门面就能把 aud=scds-device 的令牌分派到设备 decoder。私钥只在签发分支给——只验签不留私钥。
+        // 设备用途（03b §3）：独立 issuer、独立密钥对、**独立开关**，均不继承账号配置。
+        // 设备 issuer / 公钥始终配齐，故门面能把 aud=scds-device 的令牌分派到设备 decoder；
+        // 私钥只在设备签发分支给——只验签不留私钥（§10.2：禁用不读设备私钥）。
         KeyPair deviceKey = newDeviceKeyPair();
         settings.put("scds.auth.jwt.device.issuer", DEVICE_ISSUER);
-        settings.put("scds.auth.jwt.device.signing-enabled", Boolean.toString(signing));
+        settings.put("scds.auth.jwt.device.signing-enabled", Boolean.toString(deviceSigning));
         settings.put("scds.auth.jwt.device.public-key", pem("PUBLIC KEY", deviceKey.getPublic().getEncoded()));
         settings.put("scds.auth.jwt.device.public-key-file", "");
         settings.put("scds.auth.jwt.device.private-key",
-                signing ? pem("PRIVATE KEY", deviceKey.getPrivate().getEncoded()) : "");
+                deviceSigning ? pem("PRIVATE KEY", deviceKey.getPrivate().getEncoded()) : "");
         settings.put("scds.auth.jwt.device.private-key-file", "");
 
         var environment = new StandardEnvironment();
