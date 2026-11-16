@@ -1,6 +1,7 @@
 package com.dualx.core;
 
 import com.dualx.core.port.DeviceLinkAdmin;
+import com.dualx.core.port.DeviceTokenSigner;
 import com.dualx.core.port.TokenSigner;
 import com.dualx.core.state.SituationSessionBinder;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
@@ -77,6 +78,16 @@ class TestCoreApplication {
     @Bean
     TokenSigner tokenSigner() {
         return mock(TokenSigner.class);
+    }
+
+    /**
+     * 设备签发的装配点在生产侧是 {@code scds-api} 的 {@code DeviceRsaTokenSigner}（依赖
+     * {@code DeviceJwtProperties}，本测试上下文没有那套装配）。{@code DeviceAuthService} 对它
+     * 有强依赖，故补一个桩；设备登录的真实行为由 {@code DeviceAuthServiceIT} 自带假件覆盖。
+     */
+    @Bean
+    DeviceTokenSigner deviceTokenSigner() {
+        return mock(DeviceTokenSigner.class);
     }
 
     /**

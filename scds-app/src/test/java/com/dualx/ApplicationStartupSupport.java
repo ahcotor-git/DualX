@@ -36,6 +36,8 @@ final class ApplicationStartupSupport {
     static final String URL =
             "jdbc:mysql://127.0.0.1:13306/scds_next_test?rewriteBatchedStatements=true";
     static final String ISSUER = "scds-full-startup-test";
+    /** 设备用途身份：必须与账号 issuer 不同（03b §3），门面按 aud 分派到这里。 */
+    static final String DEVICE_ISSUER = "scds-full-startup-device-test";
     static final String PROFILE = "full-startup-test";
     static final String GUARD_MESSAGE = "TEST-01 full startup requires isolated local test settings.";
 
@@ -46,6 +48,15 @@ final class ApplicationStartupSupport {
         KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
         generator.initialize(2048);
         return generator.generateKeyPair();
+    }
+
+    /** 设备密钥对由本类自产：调用方无需关心，也保证与账号那把不同（§3 不得复用账号密钥）。 */
+    private static KeyPair newDeviceKeyPair() {
+        try {
+            return newKeyPair();
+        } catch (Exception failure) {
+            throw new IllegalStateException("RSA is required for device token tests", failure);
+        }
     }
 
     static ConfigurableEnvironment environment(boolean signing, KeyPair key) {
@@ -93,6 +104,17 @@ final class ApplicationStartupSupport {
         settings.put("scds.auth.jwt.account.private-key", signing ? pem("PRIVATE KEY", key.getPrivate().getEncoded()) : "");
         settings.put("scds.auth.jwt.account.private-key-file", "");
         settings.put("scds.auth.jwt.account.jwks-uri", "");
+        // 设备用途（03b §3）：独立 issuer、独立密钥对、独立开关，均不继承账号配置。开关与账号同值，
+        // 因为 device/login 这个端点本身随账号能力一并注册（review R06）；配齐设备 identity 与公钥后，
+        // 门面就能把 aud=scds-device 的令牌分派到设备 decoder。私钥只在签发分支给——只验签不留私钥。
+        KeyPair deviceKey = newDeviceKeyPair();
+        settings.put("scds.auth.jwt.device.issuer", DEVICE_ISSUER);
+        settings.put("scds.auth.jwt.device.signing-enabled", Boolean.toString(signing));
+        settings.put("scds.auth.jwt.device.public-key", pem("PUBLIC KEY", deviceKey.getPublic().getEncoded()));
+        settings.put("scds.auth.jwt.device.public-key-file", "");
+        settings.put("scds.auth.jwt.device.private-key",
+                signing ? pem("PRIVATE KEY", deviceKey.getPrivate().getEncoded()) : "");
+        settings.put("scds.auth.jwt.device.private-key-file", "");
 
         var environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("full-startup-test", settings));
@@ -144,7 +166,8 @@ final class ApplicationStartupSupport {
         }
         for (String property : Set.of("spring.config.import", "spring.config.additional-location",
                 "spring.profiles.include", "scds.admin.username", "scds.admin.password", "scds.admin.display-name",
-                "scds.auth.jwt.account.public-key-file", "scds.auth.jwt.account.private-key-file", "scds.auth.jwt.account.jwks-uri")) {
+                "scds.auth.jwt.account.public-key-file", "scds.auth.jwt.account.private-key-file", "scds.auth.jwt.account.jwks-uri",
+                "scds.auth.jwt.device.public-key-file", "scds.auth.jwt.device.private-key-file")) {
             if (!environment.getProperty(property, "").isEmpty()) {
                 throw new IllegalStateException(GUARD_MESSAGE);
             }

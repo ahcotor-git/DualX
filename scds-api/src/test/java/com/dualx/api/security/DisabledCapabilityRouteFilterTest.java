@@ -86,7 +86,7 @@ class DisabledCapabilityRouteFilterTest {
 
     private static DisabledCapabilityRouteFilter filter(boolean signingEnabled) {
         AuthJwtProperties properties = new AuthJwtProperties(
-                null, signingEnabled, null, null, null, null, null, null, null, null, null);
+                null, signingEnabled, null, null, null, null, null, null, null, null);
         return new DisabledCapabilityRouteFilter(properties, MAPPER);
     }
 }

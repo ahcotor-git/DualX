@@ -2,7 +2,6 @@ package com.dualx.api.security;
 
 import com.dualx.core.domain.Role;
 import com.dualx.core.port.AccessTokenClaims;
-import com.dualx.core.port.DeviceTokenClaims;
 import com.dualx.core.port.RefreshTokenClaims;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -15,6 +14,7 @@ import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
@@ -39,7 +39,6 @@ class RsaTokenSignerTest {
     private static final String ISSUER = "scds-edge-test";
     private static final Duration ACCESS_TTL = Duration.ofMinutes(30);
     private static final Duration REFRESH_TTL = Duration.ofDays(14);
-    private static final Duration DEVICE_TTL = Duration.ofHours(12);
 
     private static RSAPrivateKey privateKey;
     private static AuthJwtProperties signingProperties;
@@ -57,10 +56,11 @@ class RsaTokenSignerTest {
         signingProperties = new AuthJwtProperties(ISSUER, true,
                 pem("PUBLIC KEY", publicKey.getEncoded()), null,
                 pem("PRIVATE KEY", privateKey.getEncoded()), null,
-                null, null, ACCESS_TTL, REFRESH_TTL, DEVICE_TTL);
+                null, null, ACCESS_TTL, REFRESH_TTL);
 
         signer = new RsaTokenSigner(signingProperties);
-        decoder = new JwtDecoderConfig().jwtDecoder(signingProperties);
+        // 单用途重载：账号信任项一条，够验 access / refresh；设备分派由 DeviceRsaTokenSignerTest 覆盖。
+        decoder = new JwtDecoderConfig().jwtDecoder(signingProperties, Clock.systemUTC());
     }
 
     private static String pem(String type, byte[] der) {
@@ -88,14 +88,12 @@ class RsaTokenSignerTest {
     }
 
     @Test
-    @DisplayName("三种令牌的 aud 互不相同——这是唯一的横向越权防线")
+    @DisplayName("账号 access 与 refresh 的 aud 互不相同——账号侧唯一的横向越权防线")
     void eachTokenKindCarriesItsOwnAudience() {
         assertThat(decoder.decode(signer.signAccessToken(new AccessTokenClaims(UUID.randomUUID(), List.of(Role.VIEWER))))
                 .getAudience()).containsExactly("scds-edge");
         assertThat(decoder.decode(signer.signRefreshToken(new RefreshTokenClaims(UUID.randomUUID(), UUID.randomUUID())))
                 .getAudience()).containsExactly("scds-refresh");
-        assertThat(decoder.decode(signer.signDeviceToken(new DeviceTokenClaims(7, UUID.randomUUID())))
-                .getAudience()).containsExactly("scds-device");
     }
 
     @Test
@@ -111,29 +109,15 @@ class RsaTokenSignerTest {
     }
 
     @Test
-    @DisplayName("设备令牌带 sid 与马甲号：单端在线比对的就是这两个值")
-    void deviceTokenCarriesSidAndVestNum() {
-        UUID sessionId = UUID.randomUUID();
-
-        Jwt jwt = decoder.decode(signer.signDeviceToken(new DeviceTokenClaims(42, sessionId)));
-
-        assertThat(jwt.getSubject()).isEqualTo("42");
-        assertThat(jwt.getClaimAsString("sid")).isEqualTo(sessionId.toString());
-    }
-
-    @Test
     @DisplayName("有效期取自配置，不在实现里另写一份常量")
     void expiryComesFromConfiguration() {
         Jwt access = decoder.decode(signer.signAccessToken(new AccessTokenClaims(UUID.randomUUID(), List.of(Role.VIEWER))));
         Jwt refresh = decoder.decode(signer.signRefreshToken(new RefreshTokenClaims(UUID.randomUUID(), UUID.randomUUID())));
-        Jwt device = decoder.decode(signer.signDeviceToken(new DeviceTokenClaims(1, UUID.randomUUID())));
 
         assertThat(Duration.between(access.getIssuedAt(), access.getExpiresAt())).isEqualTo(ACCESS_TTL);
         assertThat(Duration.between(refresh.getIssuedAt(), refresh.getExpiresAt())).isEqualTo(REFRESH_TTL);
-        assertThat(Duration.between(device.getIssuedAt(), device.getExpiresAt())).isEqualTo(DEVICE_TTL);
         assertThat(signer.accessTokenTtl()).isEqualTo(ACCESS_TTL);
         assertThat(signer.refreshTokenTtl()).isEqualTo(REFRESH_TTL);
-        assertThat(signer.deviceTokenTtl()).isEqualTo(DEVICE_TTL);
     }
 
     @Test
@@ -141,7 +125,7 @@ class RsaTokenSignerTest {
     void disabledSignerRefusesToSignWithoutNeedingAPrivateKey() {
         // 关键：这份配置**没有私钥**，构造仍然成功——只验签的实例本来就没有私钥。
         RsaTokenSigner disabled = new RsaTokenSigner(new AuthJwtProperties(
-                ISSUER, false, null, null, null, null, null, null, null, null, null));
+                ISSUER, false, null, null, null, null, null, null, null, null));
 
         assertThat(disabled.enabled()).isFalse();
         assertThatThrownBy(() -> disabled.signAccessToken(new AccessTokenClaims(UUID.randomUUID(), List.of(Role.VIEWER))))
@@ -153,7 +137,7 @@ class RsaTokenSignerTest {
     @DisplayName("signing-enabled=true 却缺私钥：装配期就响亮失败，而不是等第一次登录才炸")
     void missingPrivateKeyWhileSigningEnabledFailsAtStartup() {
         AuthJwtProperties misconfigured = new AuthJwtProperties(
-                ISSUER, true, null, null, null, null, null, null, null, null, null);
+                ISSUER, true, null, null, null, null, null, null, null, null);
 
         assertThatThrownBy(() -> new RsaTokenSigner(misconfigured))
                 .isInstanceOf(IllegalStateException.class)

@@ -76,8 +76,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("sec02-test")
 class SecurityJwtValidationIT {
     private static final String ISSUER = "scds-jwt-validation-test";
+    /** 设备用途是**独立信任**（03b §3/§4）：独立 issuer、独立密钥对，门面按 aud 分派到设备 decoder。 */
+    private static final String DEVICE_ISSUER = "scds-jwt-validation-device-test";
     private static final String PATH = "/actuator/info";
     private static final KeyPair KEY = newKeyPair();
+    private static final KeyPair DEVICE_KEY = newKeyPair();
     private static final KeyPair WRONG_KEY = newKeyPair();
 
     @Configuration(proxyBeanMethods = false)
@@ -96,6 +99,13 @@ class SecurityJwtValidationIT {
         registry.add("scds.auth.jwt.account.private-key", () -> "");
         registry.add("scds.auth.jwt.account.private-key-file", () -> "");
         registry.add("scds.auth.jwt.account.jwks-uri", () -> "");
+        // 设备信任项（只验签）：本类全部 device 用例都要求它在场——设备令牌的分派目标就是它。
+        registry.add("scds.auth.jwt.device.issuer", () -> DEVICE_ISSUER);
+        registry.add("scds.auth.jwt.device.signing-enabled", () -> false);
+        registry.add("scds.auth.jwt.device.public-key", SecurityJwtValidationIT::devicePublicKeyPem);
+        registry.add("scds.auth.jwt.device.public-key-file", () -> "");
+        registry.add("scds.auth.jwt.device.private-key", () -> "");
+        registry.add("scds.auth.jwt.device.private-key-file", () -> "");
     }
 
     @Autowired MockMvc mvc;
@@ -179,7 +189,8 @@ class SecurityJwtValidationIT {
             tests.add(dynamicTest("expired " + audience, () -> {
                 Map<String, Object> claims = claims(audience);
                 expire(claims);
-                expectProblem(sign(claims, KEY), 401, "AUTH_TOKEN_EXPIRED");
+                // 各用途用自己的密钥签：本用例要证的是「纯过期 → EXPIRED」，不是「签名不符 → INVALID」。
+                expectProblem(sign(claims), 401, "AUTH_TOKEN_EXPIRED");
             }));
         }
         tests.add(invalid("future nbf",
@@ -207,6 +218,19 @@ class SecurityJwtValidationIT {
         }));
         tests.add(dynamicTest("incorrect signature", () ->
                 expectProblem(sign(claims("scds-edge"), WRONG_KEY), 401, "AUTH_TOKEN_INVALID")));
+        // ---- 03b §10.3：跨用途签发一律拒绝。门面按 aud 分派，两把公钥互不认账，
+        // 所以「用账号密钥签设备令牌」既验不过签名，也不会有任何回落。
+        tests.add(dynamicTest("account key signing a device token", () ->
+                expectProblem(sign(claims("scds-device"), KEY), 401, "AUTH_TOKEN_INVALID")));
+        tests.add(dynamicTest("device token carrying the account issuer", () -> {
+            Map<String, Object> claims = claims("scds-device");
+            claims.put("iss", ISSUER);
+            expectProblem(sign(claims, DEVICE_KEY), 401, "AUTH_TOKEN_INVALID");
+        }));
+        for (String audience : List.of("scds-edge", "scds-refresh")) {
+            tests.add(dynamicTest("device key signing a " + audience + " token", () ->
+                    expectProblem(sign(claims(audience), DEVICE_KEY), 401, "AUTH_TOKEN_INVALID")));
+        }
         tests.add(dynamicTest("HS256 is rejected", () -> {
             JWSObject jwt = new JWSObject(new JWSHeader(JWSAlgorithm.HS256), new Payload(claims("scds-edge")));
             jwt.sign(new MACSigner(new byte[32]));
@@ -255,7 +279,7 @@ class SecurityJwtValidationIT {
             tests.add(dynamicTest("valid device identity " + subject + " cannot read ADMIN info", () -> {
                 Map<String, Object> claims = claims("scds-device");
                 claims.put("sub", subject);
-                expectProblem(sign(claims, KEY), 403, "AUTH_FORBIDDEN");
+                expectProblem(sign(claims), 403, "AUTH_FORBIDDEN");
             }));
         }
         tests.add(dynamicTest("valid refresh purpose cannot read ADMIN info", () ->
@@ -321,7 +345,7 @@ class SecurityJwtValidationIT {
         try {
             String uri = "http://127.0.0.1:" + server.getAddress().getPort() + "/jwks";
             assertThatThrownBy(() -> new AuthJwtProperties(ISSUER, false,
-                    null, null, null, null, uri, null, null, null, null))
+                    null, null, null, null, uri, null, null, null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Local deployment requires PEM keys; remote JWKS is not supported.")
                     .hasMessageNotContaining(uri);
@@ -384,7 +408,7 @@ class SecurityJwtValidationIT {
 
     private static AuthJwtProperties localProperties() {
         return new AuthJwtProperties(ISSUER, false, publicKeyPem(),
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     private static void expectDecoderError(JwtDecoder decoder, String encoded, String code) {
@@ -406,13 +430,14 @@ class SecurityJwtValidationIT {
         return dynamicTest(name, () -> {
             Map<String, Object> values = claims("scds-device");
             mutate.accept(values);
-            expectProblem(sign(values, KEY), 401, "AUTH_TOKEN_INVALID");
+            // 签名密钥与用途一致：这些用例要证的 401 来自**结构**，不是来自签名不符。
+            expectProblem(sign(values), 401, "AUTH_TOKEN_INVALID");
         });
     }
 
     private void expectAccepted(Map<String, Object> claims, int expectedStatus) throws Exception {
         mvc.perform(get(PATH).accept(MediaType.APPLICATION_JSON)
-                        .header("Authorization", "Bearer " + sign(claims, KEY)))
+                        .header("Authorization", "Bearer " + sign(claims)))
                 .andExpect(status().is(expectedStatus));
     }
 
@@ -433,7 +458,8 @@ class SecurityJwtValidationIT {
     private static Map<String, Object> claims(String audience) {
         Instant now = Instant.now();
         Map<String, Object> values = new LinkedHashMap<>();
-        values.put("iss", ISSUER);
+        // iss 与用途必须配套（03b §3）：门面按 aud 分派，设备 decoder 只认设备 issuer。
+        values.put("iss", "scds-device".equals(audience) ? DEVICE_ISSUER : ISSUER);
         values.put("sub", "scds-device".equals(audience) ? "7" : UUID.randomUUID().toString());
         values.put("aud", audience);
         values.put("exp", now.plusSeconds(300).getEpochSecond());
@@ -455,6 +481,16 @@ class SecurityJwtValidationIT {
         values.put("exp", now.minusSeconds(300).getEpochSecond());
     }
 
+    /**
+     * 按令牌自称的 issuer 选签名密钥。
+     *
+     * <p>两个用途各签各的密钥（03b §3）——用错密钥的用例必须**显式**传参
+     * （{@code sign(claims, DEVICE_KEY)}），那样才看得出「这一条测的是交叉签发被拒」。</p>
+     */
+    private static String sign(Map<String, Object> claims) throws Exception {
+        return sign(claims, DEVICE_ISSUER.equals(claims.get("iss")) ? DEVICE_KEY : KEY);
+    }
+
     private static String sign(Map<String, Object> claims, KeyPair key) throws Exception {
         JWSObject jwt = new JWSObject(new JWSHeader(JWSAlgorithm.RS256), new Payload(claims));
         jwt.sign(new RSASSASigner((RSAPrivateKey) key.getPrivate()));
@@ -472,8 +508,16 @@ class SecurityJwtValidationIT {
     }
 
     private static String publicKeyPem() {
+        return pem(KEY);
+    }
+
+    private static String devicePublicKeyPem() {
+        return pem(DEVICE_KEY);
+    }
+
+    private static String pem(KeyPair key) {
         return "-----BEGIN PUBLIC KEY-----\n"
-                + Base64.getMimeEncoder(64, new byte[] {'\n'}).encodeToString(KEY.getPublic().getEncoded())
+                + Base64.getMimeEncoder(64, new byte[] {'\n'}).encodeToString(key.getPublic().getEncoded())
                 + "\n-----END PUBLIC KEY-----\n";
     }
 }

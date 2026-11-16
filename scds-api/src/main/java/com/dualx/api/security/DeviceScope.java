@@ -42,7 +42,7 @@ public class DeviceScope {
         if (edge) {
             return true;
         }
-        // 剩下只可能是设备令牌：其 sub 就是马甲编号（RsaTokenSigner#signDeviceToken），
+        // 剩下只可能是设备令牌：其 sub 就是马甲编号（DeviceRsaTokenSigner#signDeviceToken），
         // 解析不出说明不是设备令牌，按「看不到」处理，不当服务端缺陷。
         return selfVestNum(authentication).stream().anyMatch(self -> self == vestNum);
     }

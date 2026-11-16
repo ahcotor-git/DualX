@@ -101,7 +101,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 class RoleWritePermissionIT {
 
     private static final String ISSUER = "scds-authz-test";
+    /** 设备用途是**独立信任**（03b §3/§4）：独立 issuer、独立密钥对，门面按 aud 分派到设备 decoder。 */
+    private static final String DEVICE_ISSUER = "scds-authz-device-test";
     private static final KeyPair KEY = newKeyPair();
+    private static final KeyPair DEVICE_KEY = newKeyPair();
     private static final List<String> ROLES = List.of("ADMIN", "DIRECTOR", "OPERATOR", "VIEWER");
     private static final List<String> ADMIN_ONLY = List.of("ADMIN");
     private static final List<String> DIRECTOR_UP = List.of("ADMIN", "DIRECTOR");
@@ -230,6 +233,14 @@ class RoleWritePermissionIT {
         registry.add("scds.auth.jwt.account.private-key", () -> "");
         registry.add("scds.auth.jwt.account.private-key-file", () -> "");
         registry.add("scds.auth.jwt.account.jwks-uri", () -> "");
+        // 本切片只验签不签发；设备信任项必须显式配齐，否则门面会拒收 aud=scds-device 的令牌（401），
+        // 下面「设备令牌越权 → 403」那三条用例就会退化成 401——那是「令牌不成立」，语义完全不同。
+        registry.add("scds.auth.jwt.device.issuer", () -> DEVICE_ISSUER);
+        registry.add("scds.auth.jwt.device.signing-enabled", () -> "false");
+        registry.add("scds.auth.jwt.device.public-key", () -> publicKeyPem(DEVICE_KEY));
+        registry.add("scds.auth.jwt.device.public-key-file", () -> "");
+        registry.add("scds.auth.jwt.device.private-key", () -> "");
+        registry.add("scds.auth.jwt.device.private-key-file", () -> "");
     }
 
     @Autowired MockMvc mvc;
@@ -412,7 +423,9 @@ class RoleWritePermissionIT {
     private static String deviceToken(String audience) throws JOSEException {
         Instant now = Instant.now();
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
-                .issuer(ISSUER)
+                // 设备令牌必须由**设备**身份签出（03b §3）：用账号 issuer/密钥签的 scds-device 令牌
+                // 会被门面分派到设备 decoder 后验签失败——那正是 §10.3 要的「交叉签发一律拒绝」。
+                .issuer(DEVICE_ISSUER)
                 // 设备令牌的 sub 即马甲编号：单兵自身范围（D04）以它为判据，
                 // 故这里必须与用例里请求的 vestNum 一致。
                 .subject("1")
@@ -421,12 +434,16 @@ class RoleWritePermissionIT {
                 .expirationTime(Date.from(now.plusSeconds(300)))
                 .claim("sid", UUID.randomUUID().toString())
                 .build();
-        return sign(claims);
+        return sign(claims, DEVICE_KEY);
     }
 
     private static String sign(JWTClaimsSet claims) throws JOSEException {
+        return sign(claims, KEY);
+    }
+
+    private static String sign(JWTClaimsSet claims, KeyPair key) throws JOSEException {
         SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.RS256), claims);
-        jwt.sign(new RSASSASigner((RSAPrivateKey) KEY.getPrivate()));
+        jwt.sign(new RSASSASigner((RSAPrivateKey) key.getPrivate()));
         return jwt.serialize();
     }
 

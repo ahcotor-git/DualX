@@ -12,6 +12,7 @@ import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.UUID;
@@ -22,11 +23,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * 设备令牌签发器的签-验往返与装配期失败关闭测试。
  *
- * <p>验签仍走**生产装配的那条路径**（{@link JwtDecoderConfig#jwtDecoder}），只是把 issuer / 公钥换成设备
- * 那一套——本阶段尚无「按 aud 分派双用途 decoder」的门面（工作包 4），因此这里用设备密钥/身份构造一个
- * 账号语境的可分配对象来复用生产解码器，而不是在测试里另搭一套 nimbus。自己签的令牌自己验不过，
- * 最常见的原因就是签发侧与验签侧对 {@code kid}、{@code alg}、{@code aud} 的处理不一致，另搭解码器恰好
- * 会把这类不一致掩盖掉。</p>
+ * <p>验签仍走**生产装配的那条路径**（{@link JwtDecoderConfig} 的双用途门面）：账号配置 + 设备配置各给一套，
+ * 令牌按 {@code aud} 被分派到设备 decoder。自己签的令牌自己验不过，最常见的原因就是签发侧与验签侧对
+ * {@code kid}、{@code alg}、{@code aud} 的处理不一致，另搭解码器恰好会把这类不一致掩盖掉。</p>
  *
  * <p>密钥对在测试内现生成：本类验证的是编解码与装配校验逻辑，与具体密钥材料无关。设备与账号故意用
  * **两对不同的密钥、两个不同的 issuer**，这正是 §3「两用途 issuer 与公钥必须不同」要守的不变量。</p>
@@ -36,11 +35,10 @@ class DeviceRsaTokenSignerTest {
     private static final String DEVICE_ISSUER = "scds-edge-device-test";
     private static final String ACCOUNT_ISSUER = "scds-edge-account-test";
 
-    /** 故意区别于账号的默认设备 TTL（12h），以证明有效期取自**设备**配置。 */
+    /** 设备令牌 TTL，故意取非默认的 6h，以证明有效期取自**设备**配置。 */
     private static final Duration DEVICE_TTL = Duration.ofHours(6);
     private static final Duration ACCOUNT_ACCESS_TTL = Duration.ofMinutes(30);
     private static final Duration ACCOUNT_REFRESH_TTL = Duration.ofDays(14);
-    private static final Duration ACCOUNT_DEVICE_TTL = Duration.ofHours(12);
 
     private static RSAPrivateKey devicePrivate;
     private static RSAPublicKey devicePublic;
@@ -62,17 +60,17 @@ class DeviceRsaTokenSignerTest {
         accountProperties = new AuthJwtProperties(ACCOUNT_ISSUER, true,
                 pem("PUBLIC KEY", accountPublic.getEncoded()), null,
                 pem("PRIVATE KEY", accountPrivate.getEncoded()), null,
-                null, null, ACCOUNT_ACCESS_TTL, ACCOUNT_REFRESH_TTL, ACCOUNT_DEVICE_TTL);
+                null, null, ACCOUNT_ACCESS_TTL, ACCOUNT_REFRESH_TTL);
 
         signer = new DeviceRsaTokenSigner(
                 deviceProperties(DEVICE_ISSUER, devicePublic, devicePrivate, DEVICE_TTL),
                 accountProperties);
 
-        // 让生产解码器按「设备 issuer + 设备公钥」构造：等价于包 4 落地后按 aud 分派到设备 decoder 的效果。
-        deviceDecoder = new JwtDecoderConfig().jwtDecoder(new AuthJwtProperties(
-                DEVICE_ISSUER, true, pem("PUBLIC KEY", devicePublic.getEncoded()), null,
-                pem("PRIVATE KEY", devicePrivate.getEncoded()), null,
-                null, null, ACCOUNT_ACCESS_TTL, ACCOUNT_REFRESH_TTL, DEVICE_TTL));
+        // 生产门面：账号信任项 + 设备信任项各一套。设备令牌（aud=scds-device）因此被分派到设备
+        // decoder——若门面没分派，这里会拿账号公钥去验，验签当场失败。
+        deviceDecoder = new JwtDecoderConfig().jwtDecoder(accountProperties,
+                deviceProperties(DEVICE_ISSUER, devicePublic, devicePrivate, DEVICE_TTL),
+                Clock.systemUTC());
     }
 
     /** 构造一份「启用设备签发」的配置；键为 {@code null} 时表示该项缺席（由各自负例决定是否合法）。 */
@@ -113,14 +111,12 @@ class DeviceRsaTokenSignerTest {
     }
 
     @Test
-    @DisplayName("有效期取自**设备**配置：与账号的设备 TTL 无关")
+    @DisplayName("有效期取自**设备**配置，不继承账号用途配置")
     void expiryComesFromDeviceConfiguration() {
         Jwt jwt = deviceDecoder.decode(signer.signDeviceToken(new DeviceTokenClaims(1, UUID.randomUUID())));
 
         assertThat(Duration.between(jwt.getIssuedAt(), jwt.getExpiresAt())).isEqualTo(DEVICE_TTL);
         assertThat(signer.deviceTokenTtl()).isEqualTo(DEVICE_TTL);
-        // 反例护栏：账号配置里的设备 TTL 是 12h；若实现误读了账号配置，这里会立刻失败。
-        assertThat(signer.deviceTokenTtl()).isNotEqualTo(ACCOUNT_DEVICE_TTL);
     }
 
     @Test

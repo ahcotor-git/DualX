@@ -13,6 +13,7 @@ import com.dualx.core.auth.AuthService;
 import com.dualx.core.domain.Role;
 import com.dualx.core.port.AccessTokenClaims;
 import com.dualx.core.port.DeviceTokenClaims;
+import com.dualx.core.port.DeviceTokenSigner;
 import com.dualx.core.port.RefreshTokenClaims;
 import com.dualx.core.port.TokenSigner;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -162,6 +163,7 @@ class ApplicationStartupIT {
                     .containsExactly("1", "2", "3", "4", "5", "6", "7", "9", "10", "11");
 
             TokenSigner signer = context.getBean(TokenSigner.class);
+            DeviceTokenSigner deviceSigner = context.getBean(DeviceTokenSigner.class);
             JwtDecoder decoder = context.getBean(JwtDecoder.class);
             UUID subject = UUID.randomUUID();
             String admin;
@@ -171,13 +173,19 @@ class ApplicationStartupIT {
                 assertThat(decoder.decode(signer.signRefreshToken(
                         new RefreshTokenClaims(UUID.randomUUID(), subject))).getAudience())
                         .containsExactly("scds-refresh");
+                // 设备令牌由**设备**签发器用**设备**私钥签出，再走同一入口验签：能过就证明门面确实
+                // 按 aud 分派到了设备信任项，而不是拿账号公钥验签成功。
+                assertThat(deviceSigner.enabled()).isTrue();
                 UUID sid = UUID.randomUUID();
-                assertThat(decoder.decode(signer.signDeviceToken(new DeviceTokenClaims(7, sid)))
+                assertThat(decoder.decode(deviceSigner.signDeviceToken(new DeviceTokenClaims(7, sid)))
                         .getClaimAsString("sid")).isEqualTo(sid.toString());
             } else {
                 assertThat(signer.enabled()).isFalse();
+                assertThat(deviceSigner.enabled()).isFalse();
                 assertThatThrownBy(() -> signer.signAccessToken(
                         new AccessTokenClaims(subject, List.of(Role.ADMIN))))
+                        .isInstanceOf(IllegalStateException.class);
+                assertThatThrownBy(() -> deviceSigner.signDeviceToken(new DeviceTokenClaims(7, UUID.randomUUID())))
                         .isInstanceOf(IllegalStateException.class);
                 admin = ApplicationStartupSupport.externalAccessToken(key, List.of("ADMIN"));
                 assertThat(decoder.decode(admin).getAudience()).containsExactly("scds-edge");

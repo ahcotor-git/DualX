@@ -24,7 +24,6 @@ class AuthJwtPropertiesTest {
         assertThat(properties.signingEnabled()).isTrue();
         assertThat(properties.accessTokenTtl()).isEqualTo(Duration.ofMinutes(30));
         assertThat(properties.refreshTokenTtl()).isEqualTo(Duration.ofDays(14));
-        assertThat(properties.deviceTokenTtl()).isEqualTo(Duration.ofHours(12));
     }
 
     @ParameterizedTest
@@ -67,25 +66,22 @@ class AuthJwtPropertiesTest {
 
     @Test
     void explicitNonPositiveTtlFailsInsteadOfFallingBackToDefaults() {
-        assertThatThrownBy(() -> ttls(Duration.ZERO, Duration.ofDays(14), Duration.ofHours(12)))
+        assertThatThrownBy(() -> ttls(Duration.ZERO, Duration.ofDays(14)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("access-token-ttl");
-        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofSeconds(-1), Duration.ofHours(12)))
+        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofSeconds(-1)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("refresh-token-ttl");
-        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofDays(14), Duration.ZERO))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("device-token-ttl");
     }
 
     @Test
     void refreshTtlMustOutlastAccessTtl() {
         // access 与 refresh 相等也不行：滚动换发靠的是「access 先过期、refresh 还有效」的窗口。
-        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofMinutes(30), Duration.ofHours(12)))
+        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofMinutes(30)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("refresh-token-ttl")
                 .hasMessageContaining("outlast");
-        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofMinutes(10), Duration.ofHours(12)))
+        assertThatThrownBy(() -> ttls(Duration.ofMinutes(30), Duration.ofMinutes(10)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("refresh-token-ttl");
     }
@@ -94,23 +90,23 @@ class AuthJwtPropertiesTest {
     void ttlMisconfigurationFailsDuringBindingNotAtFirstLogin() {
         new ApplicationContextRunner()
                 .withUserConfiguration(PropertiesOnly.class)
-                .withPropertyValues("scds.auth.jwt.account.device-token-ttl=0s")
+                .withPropertyValues("scds.auth.jwt.account.access-token-ttl=0s")
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(rootCause(context.getStartupFailure()))
                             .isInstanceOf(IllegalArgumentException.class)
-                            .hasMessageContaining("device-token-ttl");
+                            .hasMessageContaining("access-token-ttl");
                 });
     }
 
     private static AuthJwtProperties properties(String jwksUri) {
         return new AuthJwtProperties("scds-local-test", null,
-                "", "", "", "", jwksUri, null, null, null, null);
+                "", "", "", "", jwksUri, null, null, null);
     }
 
-    private static AuthJwtProperties ttls(Duration access, Duration refresh, Duration device) {
+    private static AuthJwtProperties ttls(Duration access, Duration refresh) {
         return new AuthJwtProperties("scds-local-test", null,
-                "", "", "", "", "", null, access, refresh, device);
+                "", "", "", "", "", null, access, refresh);
     }
 
     private static Throwable rootCause(Throwable failure) {

@@ -3,7 +3,7 @@ package com.dualx.core.port;
 import java.util.UUID;
 
 /**
- * 设备令牌的载荷输入（{@link TokenSigner#signDeviceToken}）。
+ * 设备令牌的载荷输入（{@link DeviceTokenSigner#signDeviceToken}）。
  *
  * <p>{@code sessionId} 是「单端在线」的全部实现：每次设备登录都生成新的 sid 并写入
  * {@code t_vest.device_session_sid}，校验时比对令牌 claim 与库中该列是否相等。

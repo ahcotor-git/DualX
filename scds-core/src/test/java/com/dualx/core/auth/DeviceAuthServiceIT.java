@@ -4,7 +4,7 @@ import com.dualx.core.domain.Vest;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.core.port.DeviceTokenClaims;
-import com.dualx.core.port.TokenSigner;
+import com.dualx.core.port.DeviceTokenSigner;
 import com.dualx.core.repository.VestDeviceSessionRepository;
 import com.dualx.core.repository.VestRepository;
 import com.dualx.protocol.Team;
@@ -49,13 +49,13 @@ class DeviceAuthServiceIT {
     @Autowired private JdbcClient jdbc;
 
     private final List<Integer> createdVests = new ArrayList<>();
-    private TokenSigner signer;
+    private DeviceTokenSigner signer;
     private DeviceAuthService deviceAuth;
     private int nextVestNum = FIRST_VEST_NUM;
 
     @BeforeEach
     void setUp() {
-        signer = mock(TokenSigner.class);
+        signer = mock(DeviceTokenSigner.class);
         when(signer.enabled()).thenReturn(true);
         when(signer.deviceTokenTtl()).thenReturn(Duration.ofHours(12));
         when(signer.signDeviceToken(any())).thenAnswer(call ->

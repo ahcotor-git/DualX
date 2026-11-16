@@ -53,17 +53,30 @@ import java.util.stream.Collectors;
  * 「这个令牌能不能访问这个资源」由 {@code SecurityConfig} 的 aud 规则决定。
  * 因此这里对 {@code aud} 校验「单一已知用途」，不限定具体某一种——
  * 设备令牌访问指挥台接口必须是 403（已认证但无权），而不是 401（令牌不成立）。</p>
+ *
+ * <p><b>双用途门面（03b §4 / §10.3）</b>：账号（access / refresh）与设备是两套<b>独立信任</b>——
+ * 独立 issuer、独立公钥。门面先做结构检查取出<b>未验签</b>的 {@code aud}，据此<b>选</b>一条信任项
+ * （不试遍公钥、不跨用途）：{@code scds-device} 走设备 decoder，其余走账号 decoder。
+ * 未配置设备 issuer / 公钥的实例（纯账号签发）不构造设备 decoder，设备令牌一律 401——
+ * 宁可拒绝，也不拿账号公钥去验设备令牌。</p>
  */
 @Configuration
 @EnableConfigurationProperties({AuthJwtProperties.class, DeviceJwtProperties.class})
 public class JwtDecoderConfig {
 
     /**
+     * 设备用途的 {@code aud}：门面据此把令牌分派到**设备**信任项（03b §4）。
+     *
+     * <p>这是分派的唯一依据，也是账号与设备两套信任的接缝所在。</p>
+     */
+    static final String AUD_DEVICE = "scds-device";
+
+    /**
      * 本系统会签发的三种 {@code aud}。验签阶段只认这个集合。
      *
      * <p>它们是「用途」不是「租户」——本产品每客户独立实例，凭据里没有多租户维度。</p>
      */
-    static final Set<String> KNOWN_AUDIENCES = Set.of("scds-edge", "scds-device", "scds-refresh");
+    static final Set<String> KNOWN_AUDIENCES = Set.of("scds-edge", AUD_DEVICE, "scds-refresh");
     private static final Set<String> KNOWN_ROLES = Arrays.stream(Role.values())
             .map(Role::name).collect(Collectors.toUnmodifiableSet());
     private static final Duration CLOCK_SKEW = Duration.ofSeconds(60);
@@ -75,21 +88,43 @@ public class JwtDecoderConfig {
     private static final Logger log = LoggerFactory.getLogger(JwtDecoderConfig.class);
 
     @Bean
-    JwtDecoder jwtDecoder(AuthJwtProperties props) {
-        return jwtDecoder(props, Clock.systemUTC());
+    JwtDecoder jwtDecoder(AuthJwtProperties props, DeviceJwtProperties deviceProperties) {
+        return jwtDecoder(props, deviceProperties, Clock.systemUTC());
     }
 
+    /**
+     * 单用途解码器：结构检查 + 一个固定的 issuer / 公钥信任项。
+     *
+     * <p>只用于「拿指定的一套密钥自验」的场景（签发器自身的签-验往返测试）：生产装配走
+     * {@link #jwtDecoder(AuthJwtProperties, DeviceJwtProperties, Clock)} 的双用途门面。</p>
+     */
     JwtDecoder jwtDecoder(AuthJwtProperties props, Clock clock) {
-        NimbusJwtDecoder decoder = buildDecoder(props);
+        NimbusJwtDecoder decoder = buildAccountDecoder(props);
         decoder.setJwtValidator(tokenValidator(props.issuer(), clock));
+        return withStructureCheck(decoder);
+    }
+
+    /**
+     * 双用途门面（03b §4 / §10.3）：账号信任项 + **可选**的设备信任项，按未验签 {@code aud} 分派。
+     *
+     * <p>设备信任项缺席（未配设备 issuer 或公钥）时仍返回门面，只是设备用途无路可走——
+     * 落在 {@link JwtDecoderFacade} 的显式拒绝上，表现为 401。</p>
+     */
+    JwtDecoder jwtDecoder(AuthJwtProperties props, DeviceJwtProperties deviceProperties, Clock clock) {
+        NimbusJwtDecoder account = buildAccountDecoder(props);
+        account.setJwtValidator(tokenValidator(props.issuer(), clock));
+        return new JwtDecoderFacade(account, buildDeviceDecoder(deviceProperties, clock));
+    }
+
+    /** 结构检查包一层：只拒绝不合格结构，不信任未验签载荷，也不在验签前判定「过期」。 */
+    private static JwtDecoder withStructureCheck(NimbusJwtDecoder decoder) {
         return encoded -> {
-            // 这里只拒绝不合格结构，不信任未验签载荷，也不在验签前判定“过期”。
             validateRawClaims(encoded);
             return decoder.decode(encoded);
         };
     }
 
-    private NimbusJwtDecoder buildDecoder(AuthJwtProperties props) {
+    private NimbusJwtDecoder buildAccountDecoder(AuthJwtProperties props) {
         String jwksUri = props.jwksUri();
         if (jwksUri != null && !jwksUri.isBlank()) {
             // 该分支下 Nimbus 的 RemoteJWKSet 是**首次验签时**才去拉取，不是启动时；
@@ -106,6 +141,40 @@ public class JwtDecoderConfig {
         log.info("JWT 验签公钥来源：本地 PEM（SHA-256 指纹 {}），进程不会为此联网",
                 PemKeys.fingerprint(publicKey));
         return decoderFor(publicKey);
+    }
+
+    /**
+     * 设备信任项（03b §4）：只有**显式配齐**设备 issuer 与设备公钥时才构造。
+     *
+     * <p>未配齐即返回 {@code null}——门面随即对设备令牌一律 401。<b>刻意不回落账号信任项</b>：
+     * 拿账号公钥去验设备令牌，等于把「设备令牌」降级成「账号令牌换了个 aud」，03b §3
+     * 要守的「两用途独立信任」就没了。</p>
+     *
+     * <p>设备侧没有 {@code jwks-uri} 分支（{@link DeviceJwtProperties} 无此字段）：边缘设备的
+     * 公钥由部署侧以 PEM 提供，不需要、也不允许在验签期联网取钥。</p>
+     */
+    private static NimbusJwtDecoder buildDeviceDecoder(DeviceJwtProperties properties, Clock clock) {
+        if (properties == null) {
+            return null;
+        }
+        boolean hasPublicKey = isConfigured(properties.publicKey()) || isConfigured(properties.publicKeyFile());
+        if (!isConfigured(properties.issuer()) || !hasPublicKey) {
+            log.info("设备令牌信任项未配置（scds.auth.jwt.device.issuer / public-key）："
+                    + "aud={} 的令牌一律 401，本进程不拿账号公钥代替", AUD_DEVICE);
+            return null;
+        }
+        RSAPublicKey publicKey = PemKeys.readPublicKey(new PemKeys.Source(
+                properties.publicKey(), properties.publicKeyFile(),
+                "SCDS_DEVICE_JWT_PUBLIC_KEY", "SCDS_DEVICE_JWT_PUBLIC_KEY_FILE"));
+        NimbusJwtDecoder decoder = decoderFor(publicKey);
+        decoder.setJwtValidator(tokenValidator(properties.issuer(), clock));
+        log.info("设备令牌验签公钥来源：本地 PEM（SHA-256 指纹 {}），iss={}",
+                PemKeys.fingerprint(publicKey), properties.issuer());
+        return decoder;
+    }
+
+    private static boolean isConfigured(String value) {
+        return value != null && !value.isBlank();
     }
 
     /**
@@ -168,7 +237,13 @@ public class JwtDecoderConfig {
         return OAuth2TokenValidatorResult.failure(new OAuth2Error(code.name(), description, null));
     }
 
-    private static void validateRawClaims(String encoded) {
+    /**
+     * 结构检查，返回取出的**未验签** {@code aud}（门面的分派依据）。
+     *
+     * <p>调用方不得把这个返回值当作可信事实：它只用来「选哪一套信任项去验签」，
+     * 选错或伪造用途都会在验签那一步失败。</p>
+     */
+    static String validateRawClaims(String encoded) {
         Map<String, Object> claims;
         try {
             claims = SignedJWT.parse(encoded).getPayload().toJSONObject();
@@ -181,7 +256,7 @@ public class JwtDecoderConfig {
         requireString(claims, "iss");
         String subject = requireString(claims, "sub");
         String audience = singleAudience(claims.get("aud"));
-        if ("scds-device".equals(audience)) {
+        if (AUD_DEVICE.equals(audience)) {
             if (!subject.matches("[1-9][0-9]{0,4}") || Integer.parseInt(subject) > 65532) {
                 throw invalidClaim("sub");
             }
@@ -205,6 +280,7 @@ public class JwtDecoderConfig {
                 throw invalidClaim("roles");
             }
         }
+        return audience;
     }
 
     private static String singleAudience(Object value) {

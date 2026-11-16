@@ -90,8 +90,8 @@ scds:
       # 账号用途令牌（云签发/边缘验签）；设备用途另有 scds.auth.jwt.device.*（后续工作包）。
       account:
         issuer: ${SCDS_JWT_ISSUER:scds-edge}
-        # 本地统一签发账号access/refresh和deviceToken。现场业务应为true。
-        # false保留测试/工具用途；当前控制器尚未接线，不宣称已实现关闭能力的404。
+        # 本地签发账号 access/refresh。现场业务应为 true。
+        # false 保留测试/工具用途；设备用途另有 scds.auth.jwt.device.signing-enabled。
         signing-enabled: ${SCDS_JWT_SIGNING:true}
         # 验签公钥：内联 PEM 或文件二选一。内联形态在 .env/.properties 里要把换行写成 \n，
         # 现场更推荐用 public-key-file，省掉转义与「换行被吃掉」这类难查问题。
@@ -103,11 +103,9 @@ scds:
         # 历史配置键，必须为空；非空在AuthJwtProperties绑定时失败，不访问远端。
         jwks-uri: ${SCDS_JWKS_URI:}
         jwks-refresh-ms: 3600000
-        # 有效期三档：access 覆盖一次指挥台作业，refresh 覆盖一次集训周期，
-        # device从签发起有效12小时，不按日历午夜截断；会话SID另行校验。
+        # 有效期两档：access 覆盖一次指挥台作业，refresh 覆盖一次集训周期。
         access-token-ttl: 30m
         refresh-token-ttl: 14d
-        device-token-ttl: 12h
       # 设备用途令牌（边缘本地签发/验签）；与账号用途完全独立，不回退账号配置（03b §3）。
       # 默认关闭，必须显式启用，且不继承账号 signing-enabled。仅验签设备令牌的实例保持
       # false 并显式配置 issuer/公钥；整段缺席即代表本机不参与设备用途。

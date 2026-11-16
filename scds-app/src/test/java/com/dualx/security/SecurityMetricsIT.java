@@ -93,7 +93,10 @@ class SecurityMetricsReadOnlyIT extends SecurityMetricsAssertions {
 abstract class SecurityMetricsAssertions {
 
     private static final String ISSUER = "scds-metrics-test";
+    /** 设备用途是**独立信任**（03b §3/§4）：独立 issuer、独立密钥对，门面按 aud 分派到设备 decoder。 */
+    private static final String DEVICE_ISSUER = "scds-metrics-device-test";
     private static final KeyPair KEY = newKeyPair();
+    private static final KeyPair DEVICE_KEY = newKeyPair();
     private static final KeyPair WRONG_KEY = newKeyPair();
 
     @Configuration(proxyBeanMethods = false)
@@ -111,6 +114,14 @@ abstract class SecurityMetricsAssertions {
         registry.add("scds.auth.jwt.account.private-key", () -> "");
         registry.add("scds.auth.jwt.account.private-key-file", () -> "");
         registry.add("scds.auth.jwt.account.jwks-uri", () -> "");
+        // 只验签不签发，但设备信任项必须显式配齐：未配时门面会拒收 aud=scds-device 的令牌（401），
+        // 本类那两条「其他用途令牌不能读 actuator → 403」的判据就退化成 401 了。
+        registry.add("scds.auth.jwt.device.issuer", () -> DEVICE_ISSUER);
+        registry.add("scds.auth.jwt.device.signing-enabled", () -> "false");
+        registry.add("scds.auth.jwt.device.public-key", () -> publicKeyPem(DEVICE_KEY));
+        registry.add("scds.auth.jwt.device.public-key-file", () -> "");
+        registry.add("scds.auth.jwt.device.private-key", () -> "");
+        registry.add("scds.auth.jwt.device.private-key-file", () -> "");
     }
 
     @Autowired MockMvc mvc;
@@ -174,8 +185,18 @@ abstract class SecurityMetricsAssertions {
     }
 
     void otherTokenPurposesAreForbidden(String audience, String path) throws Exception {
-        expectProblem(get(path).header("Authorization", "Bearer " + token(KEY, audience, List.of())),
+        // 各用途用各自的身份/密钥签：账号密钥签出的设备令牌会被门面送到设备 decoder 而验签失败，
+        // 那样得到的是 401「令牌不成立」，测不到本条要守的 403「已认证但无权」。
+        expectProblem(get(path).header("Authorization", "Bearer " + token(keyFor(audience), audience, List.of())),
                 path, 403, "AUTH_FORBIDDEN");
+    }
+
+    private static KeyPair keyFor(String audience) {
+        return "scds-device".equals(audience) ? DEVICE_KEY : KEY;
+    }
+
+    private static String issuerFor(String audience) {
+        return "scds-device".equals(audience) ? DEVICE_ISSUER : ISSUER;
     }
 
     void adminReadsRealMetricsIndex() throws Exception {
@@ -231,7 +252,7 @@ abstract class SecurityMetricsAssertions {
     private static String token(KeyPair key, String audience, List<String> roles) throws JOSEException {
         Instant now = Instant.now();
         JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
-                .issuer(ISSUER)
+                .issuer(issuerFor(audience))
                 .subject("scds-device".equals(audience) ? "7" : UUID.randomUUID().toString())
                 .audience(audience)
                 .issueTime(Date.from(now))

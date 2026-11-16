@@ -2,7 +2,6 @@ package com.dualx.api.security;
 
 import com.dualx.core.domain.Role;
 import com.dualx.core.port.AccessTokenClaims;
-import com.dualx.core.port.DeviceTokenClaims;
 import com.dualx.core.port.RefreshTokenClaims;
 import com.dualx.core.port.TokenSigner;
 import com.dualx.core.support.UuidV7;
@@ -51,9 +50,6 @@ public class RsaTokenSigner implements TokenSigner {
     /** 刷新令牌用途：只有 {@code /auth/refresh} 认它。 */
     private static final String AUD_REFRESH = "scds-refresh";
 
-    /** 设备令牌用途：只有设备自己的端点认它（+ {@code situation/vests/**}）。 */
-    private static final String AUD_DEVICE = "scds-device";
-
     private final AuthJwtProperties properties;
 
     /** 无签发能力时为 null；此时本类只作为「能力查询」存在。 */
@@ -64,9 +60,9 @@ public class RsaTokenSigner implements TokenSigner {
         if (properties.signingEnabled()) {
             RSAPrivateKey key = PemKeys.readPrivateKey(properties);
             this.jwsSigner = new RSASSASigner(key);
-            log.info("账号令牌签发已启用：iss={}，密钥 {} 位，access/refresh/device 有效期 {} / {} / {}",
+            log.info("账号令牌签发已启用：iss={}，密钥 {} 位，access/refresh 有效期 {} / {}",
                     properties.issuer(), key.getModulus().bitLength(),
-                    properties.accessTokenTtl(), properties.refreshTokenTtl(), properties.deviceTokenTtl());
+                    properties.accessTokenTtl(), properties.refreshTokenTtl());
         } else {
             this.jwsSigner = null;
             log.info("账号令牌签发已禁用（scds.auth.jwt.account.signing-enabled=false）：本进程只验签，"
@@ -90,11 +86,6 @@ public class RsaTokenSigner implements TokenSigner {
     }
 
     @Override
-    public Duration deviceTokenTtl() {
-        return properties.deviceTokenTtl();
-    }
-
-    @Override
     public String signAccessToken(AccessTokenClaims claims) {
         return sign(base(claims.accountId().toString(), AUD_ACCOUNT, accessTokenTtl())
                 // jti 只为日志串联：accessToken 不可撤销，没有库行需要它去对应。
@@ -111,16 +102,6 @@ public class RsaTokenSigner implements TokenSigner {
         // 令牌才允许离开本进程；否则会出现一段「已签发但查不到、因而无法撤销」的窗口。
         return sign(base(claims.accountId().toString(), AUD_REFRESH, refreshTokenTtl())
                 .jwtID(claims.tokenId().toString())
-                .build());
-    }
-
-    @Override
-    public String signDeviceToken(DeviceTokenClaims claims) {
-        return sign(base(String.valueOf(claims.vestNum()), AUD_DEVICE, deviceTokenTtl())
-                .jwtID(UuidV7.generate().toString())
-                // sid 是「单端在线」的全部依据：校验时拿它与 t_vest.device_session_sid 比对，
-                // 不等即判旧令牌（设计 03 §4.9）。
-                .claim("sid", claims.sessionId().toString())
                 .build());
     }
 

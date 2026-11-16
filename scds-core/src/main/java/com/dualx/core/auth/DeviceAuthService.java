@@ -4,7 +4,7 @@ import com.dualx.core.domain.Vest;
 import com.dualx.core.error.ApiErrorCode;
 import com.dualx.core.error.BusinessException;
 import com.dualx.core.port.DeviceTokenClaims;
-import com.dualx.core.port.TokenSigner;
+import com.dualx.core.port.DeviceTokenSigner;
 import com.dualx.core.repository.VestDeviceSessionRepository;
 import com.dualx.core.repository.VestRepository;
 import com.dualx.core.support.UuidV7;
@@ -42,13 +42,13 @@ public class DeviceAuthService {
     private final VestDeviceSessionRepository sessions;
     private final LoginThrottle throttle;
     private final PasswordEncoder passwordEncoder;
-    private final TokenSigner tokenSigner;
+    private final DeviceTokenSigner tokenSigner;
 
     public DeviceAuthService(VestRepository vests,
                              VestDeviceSessionRepository sessions,
                              LoginThrottle throttle,
                              PasswordEncoder passwordEncoder,
-                             TokenSigner tokenSigner) {
+                             DeviceTokenSigner tokenSigner) {
         this.vests = vests;
         this.sessions = sessions;
         this.throttle = throttle;

@@ -9,7 +9,8 @@ import java.time.Duration;
  *
  * <p>实现落在 {@code scds-api}（{@code RsaTokenSigner}）：签名依赖 Spring Security 与 nimbus，
  * 与「接口适配层的基础设施」同层。若日后拆出 {@code scds-infra}，把实现迁过去即可，
- * 本端口不动。</p>
+ * 本端口不动。设备用途的签发<b>刻意不在此端口</b>（独立 issuer / 密钥 / 开关），
+ * 见 {@link DeviceTokenSigner}。</p>
  *
  * <p><b>能力开关不是环境开关</b>：{@link #enabled()} 为 {@code false} 时，
  * {@code POST /api/v1/auth/login|refresh|logout} 一律不注册（404）。是否具备签发能力
@@ -32,9 +33,6 @@ public interface TokenSigner {
     /** 账号 refreshToken 有效期（14 天，覆盖一次集训周期）。 */
     Duration refreshTokenTtl();
 
-    /** 设备令牌有效期（12 小时，不跨天）。 */
-    Duration deviceTokenTtl();
-
     /**
      * 签发账号 accessToken（{@code aud = scds-edge}）。
      *
@@ -51,7 +49,4 @@ public interface TokenSigner {
      * 否则会出现「已签发但查不到」的窗口期，那段时间无法撤销。</p>
      */
     String signRefreshToken(RefreshTokenClaims claims);
-
-    /** 签发设备令牌（{@code aud = scds-device}）。 */
-    String signDeviceToken(DeviceTokenClaims claims);
 }
