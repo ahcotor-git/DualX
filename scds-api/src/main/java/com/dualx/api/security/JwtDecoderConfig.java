@@ -55,7 +55,7 @@ import java.util.stream.Collectors;
  * 设备令牌访问指挥台接口必须是 403（已认证但无权），而不是 401（令牌不成立）。</p>
  */
 @Configuration
-@EnableConfigurationProperties(AuthJwtProperties.class)
+@EnableConfigurationProperties({AuthJwtProperties.class, DeviceJwtProperties.class})
 public class JwtDecoderConfig {
 
     /**

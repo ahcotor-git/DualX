@@ -5392,4 +5392,67 @@ expected: {"t_account"=2L, …, "t_refresh_token"=2L}
 - 包 2b（`DeviceJwtProperties` ＋ `DeviceTokenSigner` 端口）与 2c（yml 设备段）**未开工**。
 - 旧键名 `scds.auth.jwt.*` 自此**不再生效**；升级须同步迁移配置（03b §3 已记）。
 
+## 82. 03b §10.1 工作包 2b / 2c：设备配置 + domain 签发端口 + yml 接线
+
+承段 92「03b 双能力分段实施白名单（§10.1）」。段 81 收口 2a 后，按**无人值守模式**开工 2b / 2c。
+本段**只新增**设备用途的配置类与 domain 端口并接入 yml；**不改** `TokenSigner` 设备方法、不改迁移、
+不生成密钥、不注册任何 signer —— 设备签发实现留 3a。
+
+### 82.1 落点
+
+- **新增（2b，主代码 2 文件）**
+  - `scds-domain/src/main/java/com/dualx/core/port/DeviceTokenSigner.java` —— 设备签发端口：
+    `boolean enabled()` / `Duration deviceTokenTtl()` / `String signDeviceToken(DeviceTokenClaims)`（§3 / §10.2）。
+  - `scds-api/src/main/java/com/dualx/api/security/DeviceJwtProperties.java` ——
+    `@ConfigurationProperties(prefix = "scds.auth.jwt.device")`：`issuer` / `signingEnabled`（**默认 false**）/
+    `publicKey` / `publicKeyFile` / `privateKey` / `privateKeyFile` / `deviceTokenTtl`（默认 `12h`）。
+- **新增（2b，测试 1 文件）**
+  - `scds-api/src/test/java/com/dualx/api/security/DeviceJwtPropertiesTest.java` —— 8 例：
+    整段缺席默认关闭＋TTL 12h；显式启用而缺 issuer / 缺公钥 / 缺私钥 → 抛（含一次经 `ApplicationContextRunner`
+    的绑定失败）；启用齐全可绑定；`signingEnabled=false` 允许缺键；显式非正 TTL → 抛。
+- **改（2c，接线 2 文件）**
+  - `scds-app/src/main/resources/application.yml` —— `scds.auth.jwt.device` 段（第 111~122 行）：
+    `signing-enabled: ${SCDS_DEVICE_JWT_SIGNING:false}` 等，**不写任何默认私钥**，键名与账号段同风格。
+  - `scds-api/src/main/java/com/dualx/api/security/JwtDecoderConfig.java` —— `@EnableConfigurationProperties`
+    加入 `DeviceJwtProperties.class`，使设备配置真正进入绑定（3a 的 `DeviceRsaTokenSigner` 将注入它）。
+
+文件合计 5（2b=3、2c=2），**各子包均在「≤3 文件」上限内**，无破限例外。
+
+### 82.2 设计裁定：2b 校验范围收窄（详 decision-register 段 92 条目）
+
+§10.1 原列 2b 紧凑构造器还需校验「公私钥不配对 / RSA 强度不足 → 失败」与「issuer / 公钥与账号相同 → 失败」。
+本段**未落在 2b**，改到 **3a** 的 `DeviceRsaTokenSigner` 装配期，理由：
+
+- 两项都**需要读取密钥材料**（配对 / RSA 位长 / 公钥指纹），而 `PemKeys` 现只接受 `AuthJwtProperties`；
+  参数化它是 §10.2 包 3a 的既定落点，提前会把 2b 顶到 4~5 文件。
+- 「与账号相同」是**跨配置不变量**，需同时看到 `AuthJwtProperties` 与 `DeviceJwtProperties`；
+  在单条 `@ConfigurationProperties` 记录的紧凑构造器里无法注入另一 bean。
+- 2b **不引入任何读取设备私钥的代码**（无 signer），故不存在「配错密钥却已能签发」的窗口；
+  真正读设备私钥的是 3a，校验放那里自然且无遗漏。
+
+2b 因此只做**不依赖密钥材料**的校验：开关默认 false、TTL 为正、启用时 issuer 与公私钥是否**给到**。
+
+### 82.3 门禁实测（2026-11-16，`scds-local-mysql` 13306 healthy，Java 21）
+
+命令：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS**。计数取自各模块 `surefire-reports/TEST-*.xml` 的 `<testcase>` 之和。
+
+| 模块 | 测试数 | 失败/错误/跳过 |
+|---|---:|---|
+| protocol | 19 | 0/0/0 |
+| solver | 18 | 0/0/0 |
+| gateway | 49 | 0/0/0 |
+| core | 630 | 0/0/0 |
+| api | **158** | 0/0/0 |
+| app | 333 | 0/0/0 |
+| 总计 | **1207** | **0/0/0** |
+
+**1199 → 1207（+8）**，增量恰为新增 `DeviceJwtPropertiesTest`；其余模块计数与段 81 一致 ⇒ 无回归。
+
+### 82.4 未验项 / 边界
+
+- 本段**不动** `TokenSigner` 的设备方法（删除在包 3b）；`DeviceTokenSigner` 端口**尚无实现**，3a 落 `DeviceRsaTokenSigner`。
+- 「公私钥配对 / RSA 强度 / 与账号 issuer·公钥不同」三项校验**未实现**，3a 补（§82.2）。
+- yml 设备段**默认全关**；`signing-enabled` 默认 false 时即使 `issuer` 为空也照常绑定（整段缺席合法）。
+- `SCDS_DEVICE_JWT_*` 环境变量名为**本段新增约定**，尚未写入 `.env` / `deploy.sh`（现场启用时再配，且私钥不入库）。
+
 

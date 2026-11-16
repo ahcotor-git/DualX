@@ -3537,3 +3537,24 @@ R27 原判「部分成立」，逐项拆开后**只有前两项能在本机闭�
 5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
 
 
+**段 92 工作包 2b / 2c 执行（2026-11-16）：设备配置 `DeviceJwtProperties` ＋ domain 端口 `DeviceTokenSigner` ＋ yml 接线**——
+按**无人值守模式**推进。§10.1 原列 2b＝3 文件、2c＝1 文件；实际 **2b＝3 文件**（`DeviceTokenSigner` 端口 ＋ `DeviceJwtProperties` ＋ `DeviceJwtPropertiesTest`）、
+**2c＝2 文件**（`application.yml` 设备段 ＋ `JwtDecoderConfig` 注册 `DeviceJwtProperties`），**各子包均在「≤3 文件」上限内，无破限例外**。
+
+**设计裁定（2b 校验范围收窄）**：§10.1 原列 2b 还需校验「公私钥不配对 / RSA 强度不足」与「issuer / 公钥与账号相同」。
+本段**未落在 2b**，改到 **3a** 的 `DeviceRsaTokenSigner` 装配期——两项均需读密钥材料（`PemKeys` 参数化是 3a 落点）、
+后者还是**跨配置不变量**（需同时看到 `AuthJwtProperties` 与 `DeviceJwtProperties`，单条 `@ConfigurationProperties` 无法注入另一 bean）；
+且 2b **不引入任何读设备私钥的代码**，无缝可漏。2b 因此只做**不依赖密钥材料**的校验（开关默认 false、TTL 为正、启用时 issuer 与公私钥是否给到）。
+
+**性质**：新增配置 / 端口，**默认全关**；不改 `TokenSigner` 设备方法、不改迁移、不生成密钥。
+仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS / 1207 项 / 0/0/0**（1199 → 1207，+8 恰为新增 `DeviceJwtPropertiesTest`；其余模块计数不变）。
+**落点 / 证据**：见 `docs/testing.md` §82。
+
+**下一段（候选）**：
+1. **工作包 3a**（新 `DeviceRsaTokenSigner`（implements `DeviceTokenSigner`）＋ `PemKeys` 键来源参数化 ＋ `DeviceRsaTokenSignerTest`；**在装配期补**「公私钥配对 / RSA 强度 / 与账号 issuer·公钥不同」三项校验）；
+2. **工作包 3b**（删 `TokenSigner.signDeviceToken`（及仅设备用的 `deviceTokenTtl`）＋ `RsaTokenSigner` 删实现 ＋ `DeviceAuthService` 迁 `DeviceTokenSigner` ＋ `DeviceAuthServiceIT`；**须同段一次迁净**，**破限例外**）；
+3. **全库行尾 renormalize**（承接段 87「未验项」，大范围 diff，**需显式评估与授权**）；
+4. **C 档**（本机不可闭环，仅登记）：真机 APK 运行态、Windows GUI 运行态、现场 `COM7` + UWB 12001、T-PROD 部署 / FRP / TLS / PEM 轮换；
+5. **R27 剩余项定型**（队列 / 客户端上限与 RPO / RTO，**需产品 / 运维口径**）。
+
+

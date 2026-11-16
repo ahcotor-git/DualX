@@ -108,6 +108,18 @@ scds:
         access-token-ttl: 30m
         refresh-token-ttl: 14d
         device-token-ttl: 12h
+      # 设备用途令牌（边缘本地签发/验签）；与账号用途完全独立，不回退账号配置（03b §3）。
+      # 默认关闭，必须显式启用，且不继承账号 signing-enabled。仅验签设备令牌的实例保持
+      # false 并显式配置 issuer/公钥；整段缺席即代表本机不参与设备用途。
+      device:
+        signing-enabled: ${SCDS_DEVICE_JWT_SIGNING:false}
+        issuer: ${SCDS_DEVICE_JWT_ISSUER:}
+        public-key: ${SCDS_DEVICE_JWT_PUBLIC_KEY:}
+        public-key-file: ${SCDS_DEVICE_JWT_PUBLIC_KEY_FILE:}
+        # **绝不内置默认私钥**——仅 signing-enabled=true 时需要（03b §3）。
+        private-key: ${SCDS_DEVICE_JWT_PRIVATE_KEY:}
+        private-key-file: ${SCDS_DEVICE_JWT_PRIVATE_KEY_FILE:}
+        device-token-ttl: 12h
 
   # ===== 初始管理员（仅首次启动建号）=====
   # 迁移文件刻意不种任何账号：写死口令等于所有客户共用一把钥匙，写死散列则无法换口令。
