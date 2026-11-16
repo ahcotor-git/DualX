@@ -198,7 +198,8 @@ displayName、roles、permissions和lastLoginAt。当前JWT只稳定提供sub/ro
 
 **（2026-11-15，段 92 裁定）** 身份策略取**第一行**：边缘**预置/同步相同 UUID 的最小账号身份与角色快照**，
 `/auth/me` **复用现有本地查库语义**。由此新增前置：相同 UUID 约定、初始化/同步工具、失效与陈旧容忍策略
-（均留待包 6 前的独立方案）。**不**采纳「令牌携带签名身份快照」路线。
+（独立方案**已出**：[03c-edge-identity-sync.md](03c-edge-identity-sync.md)，2026-11-16；其决策点待裁定）。
+**不**采纳「令牌携带签名身份快照」路线。
 
 两者都不能自动声称解决云端账号禁用的即时传播：accessToken仍按既有不可撤销语义，
 本地身份检查如何影响其他业务端点需和D04权限规则对齐。
@@ -349,7 +350,8 @@ displayName、roles、permissions和lastLoginAt。当前JWT只稳定提供sub/ro
 
 - **包 6（AUTH-HTTP）**：`scds-api/src/main/java/com/dualx/api/auth/AuthController.java`（`me` 映射）＋
   `scds-core/src/main/java/com/dualx/core/auth/AuthService.java`（如需）。**§7 已裁定取「边缘预置/同步最小身份快照、复用本地 `me`」**；
-  开工前须先出「相同 UUID 约定 / 初始化同步工具 / 陈旧容忍」独立方案。
+  开工前须先出「相同 UUID 约定 / 初始化同步工具 / 陈旧容忍」独立方案
+  （**已出**：[03c-edge-identity-sync.md](03c-edge-identity-sync.md)；决策点与推荐项见其 §0，待逐项裁定）。
   未知本地 `sub` 返回 401 是现有语义，**不得**据其宣称云边身份闭环完成（§7 末）。
 - **包 7（启动 IT 扩双密钥与全组合）**：`scds-app/src/test/java/com/dualx/ApplicationStartupIT.java` ＋
   `scds-app/src/test/java/com/dualx/security/SecurityMetricsIT.java`（＋内存双密钥夹具），
