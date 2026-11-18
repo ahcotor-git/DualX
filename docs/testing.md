@@ -5722,3 +5722,77 @@ issuer / 公钥**，设备令牌无路可验；反过来先做包 4 门面也会
   经提权启动后 `docker start scds-local-mysql` 并等 `healthy` 方可跑全量。
 
 
+## 86. 03c 边缘账号身份同步落地（包 6a/6b）＋ 工作包 6 / 7 收口
+
+承段 92「工作包 6 前置方案 03c」（`b03f1aa` / `6e5862d` / `ae1b068`）与用户裁定「**开工包 6a（推荐）**」。
+**包 6a / 6b 均为新增件、不动既有行为**；**工作包 6 / 7 经核实零代码变更**即可收口。
+
+### 86.1 包 6a —— 同步模型与配置属性（3 文件，笔 `3bcdf6f`）
+
+- `scds-core/src/main/java/com/dualx/core/auth/IdentitySyncProperties.java`（**新**）—— `@ConfigurationProperties("scds.identity")`，
+  `record(String importFile)`；紧凑构造器把空白串归一为 `null`（判据 =「trim 后非空才算已配置」）。
+- `scds-core/src/main/java/com/dualx/core/auth/AccountSnapshot.java`（**新**）—— 快照模型
+  `record(int schemaVersion, String source, String generatedAt, List<Entry> accounts)` ＋
+  `Entry(UUID id, String username, String displayName, List<Role> roles, boolean enabled)`；`source` / `generatedAt` **仅元数据**，不参与 `me` 判定。
+- `scds-core/src/test/java/com/dualx/core/auth/IdentitySyncPropertiesTest.java`（**新，3 例**）—— 绑定生效 / 缺席为 `null` / 空白串视为缺席；
+  `ApplicationContextRunner` ＋ `PropertiesOnly`，镜像 `AuthJwtPropertiesTest` 口径。
+
+### 86.2 包 6b —— 导入器实现（2 文件，笔 `b6979e5`）
+
+- `scds-core/src/main/java/com/dualx/core/auth/AccountSnapshotImporter.java`（**新**）—— `@Component` ＋ `ApplicationRunner` ＋
+  `@EnableConfigurationProperties(IdentitySyncProperties.class)` ＋ `@ConditionalOnProperty(prefix="scds.identity", name="import-file")`；
+  内部用 `TransactionTemplate` 实现**单事务全量**（任一条失败整体回滚）；按 UUID upsert（已存在则复用 `AccountRepository.update`，
+  **不改** `password_hash` / `username`，也不删除快照外的本地行）；占位散列 = 每次 `passwordEncoder.encode(一次性随机即弃明文)`
+  （**必不落可登录、每账号不同**）——**不**新建共享常量、**不**改 `AuthService`（03c §7.1）。
+  - **边界**：`scds-core` 无 `spring-web` ⇒ Jackson 自动配置**不**装配 `ObjectMapper` bean，导入器**自备**
+    `private static final ObjectMapper`（**不**建 bean，03c §7.2）。
+- `scds-core/src/test/java/com/dualx/core/auth/AccountSnapshotImporterIT.java`（**新，15 例**）—— `@SpringBootTest`（**不用 `@Transactional`**，为验真原子性）；
+  覆盖新增（含不可登录口令）/ 更新（不动 `password_hash` / `lastLoginAt`）/ 本地同 id 用户名不一致整体拒 / 用户名被另一 id 占用整体拒 /
+  快照内重复 id / 未知角色 / 畸形 UUID / 非 v7 UUID / 任一条冲突**整单回滚** / 空白路径 no-op / 缺文件 / 畸形 JSON / 不支持的 schema 版本 /
+  端到端 `me` 可见 / `enabled=false` 经 `me` 不可见（`BusinessException`）。
+
+### 86.3 门禁实测（2026-11-17，`scds-local-mysql` 13306 healthy，Java 21）
+
+- 包 6a 聚焦：`mvn -B -o -pl scds-core -am test "-Dtest=IdentitySyncPropertiesTest" "-Dsurefire.failIfNoSpecifiedTests=false"`
+  → **Tests run: 3, Failures: 0, Errors: 0, Skipped: 0**。
+- 包 6b 聚焦：同法 `-Dtest=AccountSnapshotImporterIT` → **Tests run: 15, Failures: 0, Errors: 0, Skipped: 0**
+  （**首跑 15 例全 ERROR**：`NoSuchBeanDefinitionException: ObjectMapper`；按 03c §7.2「不建 `ObjectMapper` bean」改为自备后转绿）。
+- 全量：仓库根 `mvn -B -o clean verify` → **BUILD SUCCESS**。计数取各模块 Maven `Results:` 行（§83.4 口径）。
+
+| 模块 | 测试数 | 失败/错误/跳过 |
+|---|---:|---|
+| protocol | 19 | 0/0/0 |
+| solver | 18 | 0/0/0 |
+| gateway | 49 | 0/0/0 |
+| core | **648** | 0/0/0 |
+| api | 167 | 0/0/0 |
+| app | 339 | 0/0/0 |
+| 总计 | **1240** | **0/0/0** |
+
+**1222 → 1240（+18）**，逐项对账：**core 630 → 648（+18）** = 包 6a 属性测试 **3** 例 ＋ 包 6b 导入器 IT **15** 例
+（包 6a 段末 `core` 为 633，包 6b 段末为 648）；其余模块计数**逐位一致** ⇒ 无回归。
+
+### 86.4 工作包 6 / 7 收口（**零代码变更**）
+
+- **工作包 6（AUTH-HTTP）**：`AuthController.getCurrentUser` = `toUser(authService.me(accountId(jwt)))`
+  （[AuthController.java](file:///e:/DualX/scds-next/scds-api/src/main/java/com/dualx/api/auth/AuthController.java) 第 58–61 行），
+  `accountId` 直取 JWT `sub` 当 `t_account.id`，`AuthService.me(UUID)` 查库并滤 `enabled`（未知 `sub` → 401）。
+  与 03c §6.1「`me` 现状已完整、`AuthService.me` 语义按 C1 / C2 不变」一致 ⇒ **无需改动**。
+  **红线**：未知本地 `sub` 返 401 是**现有语义**，**不得**据此宣称云边身份闭环完成（[03b](design/03b-token-capabilities.md) §7 末）。
+- **工作包 7（启动 IT 扩双密钥与全组合）**：已由既有两笔达成——`SecurityMetricsIT` 的**内存双密钥夹具**
+  （账号 / 设备各一套 issuer ＋ 内存密钥对，按 `aud` 分派；包 3b+4 `fc476b6`）＋ `ApplicationStartupIT` 的**四组合**
+  `@CsvSource{account×device}`（包 5 `1d6d415`，39 例）⇒ **无遗留代码**。
+- **本次复跑**（不依赖 DB 变更的安全 IT）：
+  `mvn -B -o -pl scds-app -am test "-Dtest=SecurityMetricsIT,SecurityMetricsReadOnlyIT,ApplicationStartupIT" "-Dsurefire.failIfNoSpecifiedTests=false"`
+  → **Tests run: 91, Failures: 0, Errors: 0, Skipped: 0**（`SecurityMetricsIT` 26 ＋ `SecurityMetricsReadOnlyIT` 26 ＋ `ApplicationStartupIT` 39）。
+
+### 86.5 未验项 / 边界
+
+- **端到端演练未做**：只验 HTTP 状态 / 错误码 / 签发-验证往返 / 导入器端到端 `me`，**未**做真机 / 现场链路。
+- **F1（删除标记字段）**：本轮**不实现**（03c §0 F1 待裁定）。
+- **C2-2（授权回查本地 `enabled`）**：本轮**不做**，须与 D04 权限规则对齐（03c §0）。
+- **CLOUD 形态「不生成 admin」的部署脚本改动**属部署侧，不在本仓代码范围；快照**导出**端在云管侧（**不在本仓**）。
+- **段 92 的可开工代码工作包（1–7）至此全部收口**；**包 8**（DEVICE-AUTH / SID / 断网）**待 D03 确认后**再推进。
+- 环境：门禁需 `scds-local-mysql`（127.0.0.1:13306，`mysql:8.4`）在跑；本窗复跑 Docker Desktop 已是**管理员**启动的实例（`Up 20 hours (healthy)`）。
+
+

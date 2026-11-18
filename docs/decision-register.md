@@ -3742,3 +3742,32 @@ C3 删号置 `enabled=false` **不**物理删除；C4 **单事务全量**；E1 �
   7. R27 剩余项定型（**需产品 / 运维口径**）；8. R20 遗留（登录密码长度约束未定义）。
 
 
+**段 92 工作包 6 前置方案（续，2026-11-17）：`03c` §7 同步工具落地（包 6a / 6b）＋ 工作包 6 / 7 收口**——
+按用户裁定「**开工包 6a（推荐）**」，包 6a / 6b **逐段落地并推送**（均**新增件、不动既有行为**）。
+
+- **落点（5 文件，均新增；破「每原子任务 ≤3 文件」由**拆两子包**规避 ⇒ 每子包 ≤3）**：
+  - **包 6a（3 文件，笔 `3bcdf6f`）**：`scds-core/.../auth/IdentitySyncProperties.java`（`@ConfigurationProperties("scds.identity")`，
+    `record(String importFile)`，空白串归一为 `null`）＋ `AccountSnapshot.java`（快照模型 record ＋ `Entry`）
+    ＋ `IdentitySyncPropertiesTest.java`（属性绑定 **3 例**）。
+  - **包 6b（2 文件，笔 `b6979e5`）**：`scds-core/.../auth/AccountSnapshotImporter.java`（`@Component` ＋ `ApplicationRunner` ＋
+    `@ConditionalOnProperty(prefix="scds.identity", name="import-file")`；`TransactionTemplate` **单事务全量**；按 UUID upsert，
+    **不改** `password_hash` / `username`；占位散列 = `passwordEncoder.encode(一次性随机即弃明文)`）
+    ＋ `AccountSnapshotImporterIT.java`（`@SpringBootTest`，**15 例**含**原子性真回滚**与**端到端 `me`**）。
+- **实现澄清**：`scds-core` 无 `spring-web` ⇒ **不建 `ObjectMapper` bean**，导入器**自备** `private static final ObjectMapper`
+  （首跑 15 例因缺 bean 全 ERROR，改后转绿）。
+- **门禁**：全量 `mvn -B -o clean verify` → **BUILD SUCCESS / 1240 项 / 0/0/0**
+  （protocol 19 ＋ solver 18 ＋ gateway 49 ＋ **core 648** ＋ api 167 ＋ app 339）；**1222 → 1240（+18）** = core +18
+  （包 6a **+3**、包 6b **+15**），其余模块**逐位一致** ⇒ 无回归。证据见 `docs/testing.md` §86.3。
+- **工作包 6（AUTH-HTTP）收口 —— 零代码变更**：`AuthController.getCurrentUser` = `toUser(authService.me(accountId(jwt)))`，
+  `accountId` 直取 JWT `sub` 当 `t_account.id`；与 `03c` §6.1 一致 ⇒ **无需改动**。未知本地 `sub` → 401 是**现有语义**，
+  **不得**据此宣称云边身份闭环完成。
+- **工作包 7（启动 IT 双密钥与全组合）收口 —— 零代码变更**：已由既有两笔达成——`SecurityMetricsIT` 的**内存双密钥夹具**
+  （包 3b+4 `fc476b6`）＋ `ApplicationStartupIT` 的**四组合** `@CsvSource`（包 5 `1d6d415`，39 例）。本次复跑
+  `SecurityMetricsIT` / `SecurityMetricsReadOnlyIT` / `ApplicationStartupIT` → **91 / 0/0/0**。
+- **未验项**：① **F1**（删除标记字段）本轮**不实现**；② **C2-2**（授权回查本地 `enabled`）本轮**不做**，须与 D04 对齐；
+  ③ CLOUD 形态「不生成 admin」的**部署脚本**改动属部署侧，快照**导出**端在云管侧（**均不在本仓**）；④ 端到端演练未做。
+- **下一段（候选）**：1. **包 8**（DEVICE-AUTH / SID / 断网，**待 D03 确认**）；2. 全库行尾 renormalize（**需显式授权**）；
+  3. C 档（真机 / GUI / 现场硬件 / T-PROD）；4. R27 剩余项定型（**需产品 / 运维口径**）；5. R20 遗留（登录密码长度约束未定义）。
+  ⇒ **段 92 可开工代码工作包（1–7）已全部收口**。
+
+

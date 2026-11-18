@@ -1,7 +1,18 @@
 # scds-next 交接快照
 
-> 更新：2026-11-16，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
-> 当前任务：**段 92 —— 工作包 6 前置方案（`03c` 边缘账号身份同步）产出 ＋ 决策点裁定 ＋ §7 同步工具包白名单**——**纯设计，不动代码 / 库 / 迁移 / `.env` / 密钥**。
+> 更新：2026-11-17，Asia/Shanghai。此快照用于新对话接续，不是生产验收证明。
+> 当前任务：**段 92 —— `03c` 同步工具落地（包 6a / 6b）＋ 工作包 6 / 7 收口**——包 6a / 6b **均新增件、不动既有行为**；工作包 6 / 7 经核实**零代码变更**收口。
+> **用户裁定「开工包 6a（推荐）」**，按无人值守模式逐段推进。
+> **产出**：**包 6a** 笔 `3bcdf6f`（3 文件，+117：`IdentitySyncProperties` ＋ `AccountSnapshot` ＋ `IdentitySyncPropertiesTest` 3 例）；**包 6b** 笔 `b6979e5`（2 文件，+518：`AccountSnapshotImporter` ＋ `AccountSnapshotImporterIT` 15 例）。均已推送 `3bcdf6f..b6979e5`。
+> **要点**：导入器 `TransactionTemplate` **单事务全量**（任一条失败整单回滚）；按 UUID upsert（**不改** `password_hash` / `username`，不删快照外本地行）；占位散列 = `passwordEncoder.encode(一次性随机即弃明文)`（**不**建共享常量、**不**改 `AuthService`）；`scds-core` 无 `spring-web` ⇒ **不建 `ObjectMapper` bean**，导入器自备 `private static final ObjectMapper`（首跑 15 例缺 bean 全 ERROR，改后转绿）。
+> **门禁**：`mvn -B -o clean verify` → **BUILD SUCCESS / 1240 项 / 0/0/0**（protocol 19 ＋ solver 18 ＋ gateway 49 ＋ **core 648** ＋ api 167 ＋ app 339）。**1222 → 1240（+18）** = core +18（包 6a +3、包 6b +15），其余模块逐位一致 ⇒ 无回归。证据见 testing.md §86.3。
+> **工作包 6（AUTH-HTTP）——零代码变更**：`AuthController.getCurrentUser` = `toUser(authService.me(accountId(jwt)))`，`accountId` 直取 JWT `sub` 当 `t_account.id`，`AuthService.me` 查库滤 `enabled`（未知 `sub` → 401）；与 03c §6.1 一致 ⇒ **无需改动**。未知本地 `sub` → 401 是**现有语义**，**不得**据此宣称云边身份闭环完成。
+> **工作包 7（启动 IT 双密钥与全组合）——零代码变更**：已由既有两笔达成——`SecurityMetricsIT` 内存双密钥夹具（包 3b+4 `fc476b6`）＋ `ApplicationStartupIT` 四组合 `@CsvSource`（包 5 `1d6d415`，39 例）；本次复跑 `SecurityMetricsIT` / `SecurityMetricsReadOnlyIT` / `ApplicationStartupIT` → **91 / 0/0/0**。
+> **未验项**：① **F1**（删除标记字段）本轮不实现；② **C2-2**（授权回查本地 `enabled`）本轮不做，须与 D04 对齐；③ CLOUD 形态「不生成 admin」部署脚本改动属部署侧、快照导出端在云管侧（**均不在本仓**）；④ 端到端演练未做。
+> **环境**：门禁需 `scds-local-mysql`（127.0.0.1:13306，`mysql:8.4`）在跑；本窗实例为管理员启动（`Up 20 hours (healthy)`）。
+> **口径**：每包开工**逐段授权**，提交 / 推送**逐次授权**。
+> 下一项**（候选，按推荐序）**：① **包 8**（DEVICE-AUTH / SID / 断网，**待 D03 确认**）；② 全库行尾 renormalize（**需显式授权**）；③ C 档（真机 / GUI / 现场硬件 / T-PROD）；④ R27 剩余项定型（**需产品 / 运维口径**）；⑤ R20 遗留（密码长度约束未定义）。⇒ **段 92 可开工代码工作包（1–7）已全部收口**。
+> 上一原子任务：**段 92 工作包 6 前置方案（`03c` 边缘账号身份同步）产出 ＋ 决策点裁定 ＋ §7 同步工具包白名单**——**纯设计，不动代码 / 库 / 迁移 / `.env` / 密钥**。
 > **用户裁定「出包 6 前置方案（推荐）」→「裁定 03c 决策点（推荐）」**（逐项采纳 03c §0 推荐）。
 > **产出**：**新增** `docs/design/03c-edge-identity-sync.md`（＋ `03b` §7 / §10.5 各加一行交叉引用）；文档笔 **`b03f1aa`**（2 文件，+233 / −2），已推送 `36e01ad..b03f1aa`。
 > **方案要点**：§2 相同 UUID 约定（边缘 `t_account.id` 必须**逐字等于**云端 `sub`；点明 `AdminAccountBootstrap` 本地 `UuidV7` 建号 ＋ `deploy.sh` 默认「本地影子 admin」的冲突）；§3 初始化同步工具（离线快照文件 ＋ 独立运维导入命令 ＋ 不可登录占位散列 ＋ 按 UUID upsert ＋ 不新增迁移）；§4 陈旧容忍（`me` 恒返本地库现态 / `enabled=false` 沿现有→401 / 删号置 `enabled=false` / 单事务全量）；§5 红线复述（未知 `sub`→401 是现有语义，**不得**据此声称云边身份闭环完成）。
